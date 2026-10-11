@@ -9,3 +9,5 @@ description = "Slider sets, slider data and presets, and building body and outfi
 [dependencies]
 apoc-nif = { path = "../nif" }
 thiserror = { workspace = true }
+# Reading only: slider sets, presets and groups are small XML documents.
+roxmltree = { workspace = true }
