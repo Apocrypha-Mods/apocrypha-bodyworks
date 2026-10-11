@@ -1,0 +1,10 @@
+[package]
+name = "apoc-nif"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Reads and writes NIF mesh files (Skyrim, Skyrim Special Edition, Fallout 4). A block this does not understand is kept as its bytes and written back untouched."
+
+[dependencies]
+thiserror = { workspace = true }

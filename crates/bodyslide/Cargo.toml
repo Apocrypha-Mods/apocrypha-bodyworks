@@ -1,0 +1,11 @@
+[package]
+name = "apoc-bodyslide"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Slider sets, slider data and presets, and building body and outfit meshes from them."
+
+[dependencies]
+apoc-nif = { path = "../nif" }
+thiserror = { workspace = true }
