@@ -20,6 +20,26 @@ written while looking at, the original program's source.
 
 No bodies, presets or meshes are distributed here. Those are yours.
 
+## How close it is
+
+Measured, not claimed. CBBE ships its slider sets and also the meshes and
+morph files the original program built from them, so the two can be compared
+(`crates/bodyslide/examples/corpus.rs`, `trifit.rs`; the data is the user's
+own and is not in this repository). Over CBBE's 479 sets for Skyrim Special
+Edition:
+
+- 468 of 478 build to the same shapes, vertices and triangles as the
+  original's file. The other 10 are sets that share an output file with
+  another set, or whose shipped mesh was built from slightly different data.
+- 684 of 933 built meshes are the original's file byte for byte. 84 of the
+  rest are the physics variant of a set whose plain variant wrote the shipped
+  file. What is left differs in the normals of a few vertices on seams.
+- 458 of 478 morph files (`.tri`) are the original's byte for byte; all 429
+  of the original's read and write back unchanged.
+
+Rules found this way are written where they are used, each with what it was
+found from.
+
 ## Layout
 
 | Path | What |

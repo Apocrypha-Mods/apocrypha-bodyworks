@@ -43,6 +43,9 @@ const SAME_POINT: f32 = 0.001;
 /// show as a line down it. Past that angle the cut is a hard edge its maker
 /// meant, and each side keeps its own normal.
 ///
+/// A vertex in no triangle with any area has no normal: all noughts, as the
+/// original leaves it.
+///
 /// Measured against 841 meshes the original program built: this gives the
 /// normal they store for 99.9% of vertices.
 pub fn smooth_normals(positions: &[[f32; 3]], triangles: &[[u16; 3]]) -> Vec<[f32; 3]> {
@@ -73,10 +76,7 @@ pub fn smooth_normals_within(
             }
         }
     }
-    let mut out: Vec<[f32; 3]> = own
-        .iter()
-        .map(|v| normalized(*v, [0.0, 0.0, 1.0]))
-        .collect();
+    let mut out: Vec<[f32; 3]> = own.iter().map(|v| normalized(*v, [0.0; 3])).collect();
     // Each vertex with the others at its point: in order along X, so only
     // near neighbours in that order have to be looked at.
     let mut order: Vec<usize> = (0..n).collect();
@@ -183,7 +183,7 @@ pub fn tangent_space(
     let mut tangents = Vec::with_capacity(n);
     let mut bitangents = Vec::with_capacity(n);
     for i in 0..n {
-        let normal = normals.get(i).copied().unwrap_or([0.0, 0.0, 1.0]);
+        let normal = normals.get(i).copied().unwrap_or([0.0; 3]);
         // Each sum brought to length one before anything is taken from
         // it: the order the original's numbers come out of, to the last bit.
         let v_dir = normalized(along_v[i], [0.0; 3]);
@@ -192,7 +192,14 @@ pub fn tangent_space(
         // round the vertex has one V), the original leaves the normal with
         // its numbers turned round as the tangent, and what is square to
         // the two as the bitangent, neither brought to length one.
-        let (tangent, bitangent) = if v_dir == [0.0; 3] {
+        // A normal of nothing read back from a file is not quite nothing:
+        // the middle of a byte's range is a shade off nought.
+        let none = normal.iter().all(|c| c.abs() < 0.005);
+        let (tangent, bitangent) = if none {
+            // No normal (a vertex of triangles with no area): nothing to
+            // be square to, and the original leaves both empty.
+            ([0.0; 3], [0.0; 3])
+        } else if v_dir == [0.0; 3] {
             let tangent = [normal[1], normal[2], normal[0]];
             (tangent, cross(normal, tangent))
         } else {
@@ -255,7 +262,7 @@ mod tests {
         let sharp = folded(5.0);
         assert_ne!(sharp[0], sharp[3]);
         assert_eq!(sharp[0], [0.0, 0.0, 1.0]);
-        // A vertex no triangle uses still has a normal.
-        assert_eq!(smooth_normals(&[[1.0, 2.0, 3.0]], &[]), [[0.0, 0.0, 1.0]]);
+        // A vertex no triangle uses has none, as the original leaves it.
+        assert_eq!(smooth_normals(&[[1.0, 2.0, 3.0]], &[]), [[0.0, 0.0, 0.0]]);
     }
 }

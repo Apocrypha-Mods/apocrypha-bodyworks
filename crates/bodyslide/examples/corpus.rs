@@ -256,6 +256,11 @@ fn main() {
                         } else {
                             d.join(" + ")
                         };
+                        if std::env::var("LIST").is_ok_and(|l| key.starts_with(&l))
+                            && !s.name.contains("(Physics)")
+                        {
+                            println!("    {key}: {}", s.name);
+                        }
                         let e = why_not.entry(key).or_insert((0, s.name.clone()));
                         e.0 += 1;
                     }
