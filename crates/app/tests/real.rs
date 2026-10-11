@@ -109,6 +109,20 @@ fn a_body_is_listed_previewed_and_built() {
     );
     let first = &bytes[..outputs[0]["length"].as_u64().unwrap() as usize];
     assert!(apoc_nif::Nif::read(first).is_ok());
+
+    // With morphs asked for, the morph file comes too, after the meshes.
+    let (built, bytes) = ask(
+        json!({ "op": "build", "set": "CBBE Body", "small": small, "big": big, "morphs": true }),
+        &[],
+    );
+    let outputs = built["outputs"].as_array().unwrap();
+    assert_eq!(outputs.len(), 3);
+    assert_eq!(
+        outputs[2]["path"],
+        "meshes/actors/character/character assets/femalebody.tri"
+    );
+    let at = outputs[2]["at"].as_u64().unwrap() as usize;
+    assert_eq!(&bytes[at..at + 4], b"PIRT");
 }
 
 #[test]

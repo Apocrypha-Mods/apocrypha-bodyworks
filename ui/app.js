@@ -61,6 +61,8 @@ const state = {
   shut: new Set(),
   shapes: [],
   built: null,
+  /** Whether a build also writes the morph file RaceMenu reads. */
+  morphs: remembered.get("morphs") === "1",
   busy: null,
   problem: null,
 };
@@ -116,10 +118,36 @@ function applied(slider, percent) {
   return slider.invert ? 1 - f : f;
 }
 
+/** The triangles of a shape that the sliders taking vertices out leave. */
+function remaining(s, values) {
+  const on = s.zaps.filter((z) => applied(state.set.sliders[z.slider], values[z.slider]) !== 0);
+  const key = on.map((z) => z.slider).join(",");
+  if (key === s.zapped) return null;
+  s.zapped = key;
+  if (!on.length) return s.triangles;
+  const gone = new Uint8Array(s.base.length / 3);
+  for (const z of on) for (const v of z.vertices) gone[v] = 1;
+  const kept = new Uint32Array(s.triangles.length);
+  let n = 0;
+  for (let t = 0; t < s.triangles.length; t += 3) {
+    const [a, b, c] = [s.triangles[t], s.triangles[t + 1], s.triangles[t + 2]];
+    if (gone[a] || gone[b] || gone[c]) continue;
+    kept[n++] = a;
+    kept[n++] = b;
+    kept[n++] = c;
+  }
+  return kept.subarray(0, n);
+}
+
 /** Move every shape to where the sliders put it, and show it. */
 function reshape() {
   const values = state.heavy ? state.big : state.small;
   state.shapes.forEach((s, i) => {
+    const left = remaining(s, values);
+    if (left) {
+      s.shown = left;
+      view.cut(i, left);
+    }
     s.now.set(s.base);
     for (const d of s.sliders) {
       const amount = applied(state.set.sliders[d.slider], values[d.slider]);
@@ -132,7 +160,7 @@ function reshape() {
         s.now[v + 2] += offsets[k * 3 + 2] * amount;
       }
     }
-    shade(s.now, s.triangles, s.weld, s.normals, s.sum);
+    shade(s.now, s.shown, s.weld, s.normals, s.sum);
     view.move(i, s.now, s.normals);
   });
 }
@@ -181,7 +209,7 @@ async function choose(set, presetName) {
     const u32 = new Uint32Array(numbers);
     state.shapes = preview.shapes.map((s) => {
       const base = f32.slice(s.positions[0], s.positions[0] + s.positions[1]);
-      return {
+      const made = {
         name: s.name,
         base,
         now: new Float32Array(base),
@@ -189,12 +217,20 @@ async function choose(set, presetName) {
         sum: new Float32Array(base.length),
         weld: welded(base),
         triangles: u32.slice(s.triangles[0], s.triangles[0] + s.triangles[1]),
+        shown: null,
+        zapped: "",
+        zaps: (s.zaps || []).map((z) => ({
+          slider: z.slider,
+          vertices: u32.subarray(z.vertices[0], z.vertices[0] + z.vertices[1]),
+        })),
         sliders: s.sliders.map((d) => ({
           slider: d.slider,
           vertices: u32.subarray(d.vertices[0], d.vertices[0] + d.vertices[1]),
           offsets: f32.subarray(d.offsets[0], d.offsets[0] + d.offsets[1]),
         })),
       };
+      made.shown = made.triangles;
+      return made;
     });
     if (!state.shapes.length) {
       state.problem = missing.length ? `${missing[0].split("/").pop()} is missing.` : "This set has no shapes to show.";
@@ -234,7 +270,7 @@ async function write(files) {
 async function build() {
   busy("Building");
   try {
-    const [built, bytes] = core.ask({ op: "build", set: state.set.name, small: state.small, big: state.big });
+    const [built, bytes] = core.ask({ op: "build", set: state.set.name, small: state.small, big: state.big, morphs: state.morphs });
     const files = filesOf(built, bytes);
     await write(files);
     state.built = files.length;
@@ -261,6 +297,7 @@ async function buildSeveral(sets, progress) {
         set: set.name,
         small: set.sliders.map((s) => small.get(s.name) ?? s.small),
         big: set.sliders.map((s) => big.get(s.name) ?? s.big),
+        morphs: state.morphs,
       });
       files.push(...filesOf(built, bytes));
     } catch {
@@ -546,6 +583,39 @@ function track(index, heavy) {
   return h("span.tr", null, input, out);
 }
 
+/** A slider that takes part of the outfit away: on or off, for both weights. */
+function toggle(index) {
+  const slider = state.set.sliders[index];
+  const on = state.big[index] !== 0 || state.small[index] !== 0;
+  return h(
+    "button.check" + (on ? ".on" : ""),
+    {
+      type: "button",
+      role: "checkbox",
+      "aria-checked": on ? "true" : "false",
+      onclick: () => {
+        const flip = (i) => {
+          const now = state.big[i] !== 0 || state.small[i] !== 0 ? 0 : 100;
+          state.small[i] = now;
+          state.big[i] = now;
+        };
+        flip(index);
+        // Some switch others with them: sleeves off shows the arms again.
+        for (const name of slider.toggles || []) {
+          const other = state.set.sliders.findIndex((s) => s.name === name);
+          if (other >= 0) flip(other);
+        }
+        state.built = null;
+        list();
+        foot();
+        reshape();
+      },
+    },
+    h("span.box"),
+    h("span.nm.cut", null, slider.shown),
+  );
+}
+
 function sliderRows() {
   const set = state.set;
   const two = set.weights;
@@ -553,7 +623,7 @@ function sliderRows() {
   const order = [...state.catalog.categories.map((c) => c.name), null];
   const by = new Map(order.map((c) => [c, []]));
   set.sliders.forEach((s, i) => {
-    if (s.hidden || s.zap || s.uv) return;
+    if (s.hidden) return;
     if (!words.every((w) => s.shown.toLowerCase().includes(w))) return;
     (by.get(s.category) || by.get(null)).push(i);
   });
@@ -581,7 +651,11 @@ function sliderRows() {
     if (name) out[out.length - 1].children[1].textContent = name;
     if (shut) continue;
     for (const i of rows)
-      out.push(h("div.sl" + (two ? "" : ".one"), null, h("span.cut", null, set.sliders[i].shown), two && track(i, false), track(i, true)));
+      out.push(
+        set.sliders[i].zap
+          ? toggle(i)
+          : h("div.sl" + (two ? "" : ".one"), null, h("span.cut", null, set.sliders[i].shown), two && track(i, false), track(i, true)),
+      );
   }
   return { rows: out, shown, two };
 }
@@ -622,6 +696,23 @@ function foot() {
         ? h("span.sub.cut", null, `${state.built} ${state.built === 1 ? "file" : "files"} built into ${OUTPUT}`)
         : h("span.sub.cut", { id: "status" }, state.busy || `Into ${OUTPUT}`),
     h("span.grow"),
+    h(
+      "button.check.inline" + (state.morphs ? ".on" : ""),
+      {
+        type: "button",
+        role: "checkbox",
+        "aria-checked": state.morphs ? "true" : "false",
+        title: "Also write the file RaceMenu needs to reshape this in the game",
+        onclick: () => {
+          state.morphs = !state.morphs;
+          remembered.set("morphs", state.morphs ? "1" : "0");
+          state.built = null;
+          foot();
+        },
+      },
+      h("span.box"),
+      h("span", null, "RaceMenu morphs"),
+    ),
     h("button.btn", { type: "button", disabled: !ready, onclick: several }, "Build several…"),
     state.built !== null && !state.problem
       ? h("button.btn.primary", { type: "button", onclick: () => host.request("apply.review").catch(() => {}) }, "Apply")

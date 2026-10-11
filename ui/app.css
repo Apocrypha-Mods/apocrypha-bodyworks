@@ -139,3 +139,9 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bo
   .view { order: -1; }
   .sl { gap: 10px; grid-template-columns: minmax(0, 1fr) minmax(90px, 130px) minmax(90px, 130px); }
 }
+
+/* A slider that is a switch, in the list of sliders. */
+.list .check { padding: 0 12px; min-height: 32px; }
+.check.inline { width: auto; min-height: 28px; padding: 0 10px; gap: 8px; border-radius: 999px; font-size: 13px; color: var(--text-secondary); }
+.check.on .box { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E"); }
+:root[data-theme="dark"] .check.on .box, :root:not([data-theme]) .check.on .box { filter: none; }

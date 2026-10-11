@@ -140,6 +140,19 @@ export class View {
     });
   }
 
+  /** Draw only these triangles of shape `i`. */
+  cut(i, triangles) {
+    const gl = this.gl;
+    const s = this.shapes[i];
+    if (!s) return;
+    gl.bindVertexArray(s.vao);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(null);
+    s.count = triangles.length;
+    this.draw();
+  }
+
   /** New positions and normals for shape `i`. */
   move(i, positions, normals) {
     const gl = this.gl;

@@ -67,6 +67,9 @@ enum Request {
         set: String,
         small: Vec<f32>,
         big: Vec<f32>,
+        /// Also the morph file RaceMenu reads, and the meshes' link to it.
+        #[serde(default)]
+        morphs: bool,
     },
     /// A presets file holding one preset, as text to save.
     PresetFile { preset: PresetIn },
@@ -103,6 +106,9 @@ struct SliderOut<'a> {
     uv: bool,
     clamp: bool,
     category: Option<&'a str>,
+    /// For a slider that takes vertices out: the others it switches when
+    /// it is switched.
+    toggles: &'a [String],
 }
 
 impl State {
@@ -183,6 +189,7 @@ impl State {
                             uv: sl.uv,
                             clamp: sl.clamp,
                             category,
+                            toggles: &sl.zap_toggles,
                         }
                     })
                     .collect();
@@ -292,8 +299,9 @@ impl State {
             );
             let uvs = put_f32(&mut bytes, &mut m.uvs.iter().flatten().copied());
             let mut sliders = Vec::new();
+            let mut zaps = Vec::new();
             for (index, slider) in set.sliders.iter().enumerate() {
-                if slider.zap || slider.uv {
+                if slider.uv {
                     continue;
                 }
                 for d in slider.data.iter().filter(|d| d.target == shape.target) {
@@ -310,6 +318,18 @@ impl State {
                     let Some(list) = data.as_ref().and_then(|x| x.list(&d.list)) else {
                         continue;
                     };
+                    if slider.zap {
+                        // Not a move: the vertices it marks are taken out.
+                        let marked = put_u32(
+                            &mut bytes,
+                            &mut list
+                                .iter()
+                                .filter(|x| apoc_bodyslide::morph::marks(x))
+                                .map(|x| x.vertex as u32),
+                        );
+                        zaps.push(json!({ "slider": index, "vertices": marked }));
+                        continue;
+                    }
                     let vertices = put_u32(&mut bytes, &mut list.iter().map(|x| x.vertex as u32));
                     let offsets = put_f32(&mut bytes, &mut list.iter().flat_map(|x| x.offset));
                     sliders
@@ -323,19 +343,28 @@ impl State {
                 "uvs": uvs,
                 "textures": m.textures,
                 "sliders": sliders,
+                "zaps": zaps,
             }));
         }
         Ok(Answer::with(json!({ "shapes": shapes }), bytes))
     }
 
-    fn build(&self, name: &str, small: &[f32], big: &[f32]) -> Result<Answer, String> {
+    fn build(
+        &self,
+        name: &str,
+        small: &[f32],
+        big: &[f32],
+        morphs: bool,
+    ) -> Result<Answer, String> {
         let set = self.set(name)?;
         let files = |path: &str| self.file(path);
-        let built = build::build_at(set, small, big, &files).map_err(|e| e.to_string())?;
+        let built =
+            build::build_with(set, small, big, &files, morphs).map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
         let outputs: Vec<Value> = built
             .outputs
             .iter()
+            .chain(&built.morphs)
             .map(|o| {
                 let at = bytes.len();
                 bytes.extend(&o.bytes);
@@ -380,8 +409,13 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
             Err(e) => Answer::failed(e),
         },
         Request::Preview { set } => state.preview(&set).unwrap_or_else(Answer::failed),
-        Request::Build { set, small, big } => state
-            .build(&set, &small, &big)
+        Request::Build {
+            set,
+            small,
+            big,
+            morphs,
+        } => state
+            .build(&set, &small, &big, morphs)
             .unwrap_or_else(Answer::failed),
         Request::PresetFile { preset: p } => {
             let values = p
