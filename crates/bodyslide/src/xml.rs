@@ -13,7 +13,32 @@ pub fn text_of(bytes: &[u8]) -> String {
         Ok(s) => s.to_string(),
         Err(_) => bytes.iter().map(|b| *b as char).collect(),
     };
-    without_comments(&text)
+    spaced(&without_comments(&text))
+}
+
+/// Files written by hand also run one attribute into the next
+/// (`name="a"displayname="b"`), which the original program reads and a strict
+/// reader refuses. A space is put back between them.
+fn spaced(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 16);
+    let (mut in_tag, mut quote) = (false, None::<char>);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        match (in_tag, quote) {
+            (false, _) if c == '<' => in_tag = true,
+            (true, None) if c == '>' => in_tag = false,
+            (true, None) if c == '"' || c == '\'' => quote = Some(c),
+            (true, Some(q)) if c == q => {
+                quote = None;
+                if chars.peek().is_some_and(|n| n.is_alphabetic()) {
+                    out.push(' ');
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The text with its comments taken out. Files written by hand have comments
@@ -69,8 +94,23 @@ mod tests {
     }
 
     #[test]
+    fn attributes_run_together_are_parted() {
+        let text = text_of(b"<a><b name=\"x\"shown=\"y\" /><c>\"quoted\"text</c></a>");
+        assert_eq!(
+            text,
+            "<a><b name=\"x\" shown=\"y\" /><c>\"quoted\"text</c></a>"
+        );
+        let doc = parse(&text).unwrap();
+        let b = doc.root_element().first_element_child().unwrap();
+        assert_eq!(b.attribute("shown"), Some("y"));
+    }
+
+    #[test]
     fn text_is_escaped_for_tags_and_attributes() {
-        assert_eq!(escape("Tom & \"Jerry\" <3>"), "Tom &amp; &quot;Jerry&quot; &lt;3&gt;");
+        assert_eq!(
+            escape("Tom & \"Jerry\" <3>"),
+            "Tom &amp; &quot;Jerry&quot; &lt;3&gt;"
+        );
         assert!(flag(Some("TRUE")) && !flag(Some("no")) && !flag(None));
     }
 }

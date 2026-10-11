@@ -50,7 +50,9 @@ impl SliderData {
             let data = bytes.get(at..at + n * 14).ok_or(Error::Truncated)?;
             at += n * 14;
             let diffs = data
-                .chunks_exact(14)
+                .as_chunks::<14>()
+                .0
+                .iter()
                 .map(|d| Diff {
                     vertex: u16::from_le_bytes([d[0], d[1]]),
                     offset: [

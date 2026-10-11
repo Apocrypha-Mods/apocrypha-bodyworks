@@ -7,6 +7,7 @@
 //! in a list of its own. This is the one place that knows.
 
 use crate::geometry::{self, attr, Layout, TriShape};
+use crate::geometry_le::{NiTriShape, TriShapeData};
 use crate::shader::{LightingShader, TextureSet};
 use crate::skin::{SkinInstance, SkinPartition};
 use crate::{Nif, NifError};
@@ -30,8 +31,42 @@ pub struct Mesh {
 /// The blocks of a file that are shapes this can read.
 pub fn shapes(nif: &Nif) -> Vec<usize> {
     (0..nif.blocks.len())
-        .filter(|i| geometry::is_tri_shape(nif.kind_of(*i)))
+        .filter(|i| {
+            let kind = nif.kind_of(*i);
+            geometry::is_tri_shape(kind) || kind == "NiTriShape"
+        })
         .collect()
+}
+
+fn textures_of(nif: &Nif, shader: i32) -> Vec<String> {
+    let stream = nif.header.stream.version;
+    block_of(nif, shader, &["BSLightingShaderProperty"])
+        .and_then(|at| LightingShader::read(&nif.blocks[at].data, stream).ok())
+        .and_then(|s| block_of(nif, s.texture_set, &["BSShaderTextureSet"]))
+        .and_then(|at| TextureSet::read(&nif.blocks[at].data).ok())
+        .map(|set| {
+            set.textures
+                .iter()
+                .map(|t| String::from_utf8_lossy(t).into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn name_of(nif: &Nif, index: i32) -> String {
+    nif.string(index)
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .unwrap_or_default()
+}
+
+/// A shape of the original Skyrim's kind, with its data block.
+fn le_shape(nif: &Nif, block: usize) -> Result<(NiTriShape, usize, TriShapeData), NifError> {
+    let stream = nif.header.stream.version;
+    let shape = NiTriShape::read(&nif.blocks[block].data, stream)?;
+    let at = block_of(nif, shape.data, &["NiTriShapeData"])
+        .ok_or_else(|| NifError::Unsupported("a shape without triangle data".into()))?;
+    let data = TriShapeData::read(&nif.blocks[at].data, stream)?;
+    Ok((shape, at, data))
 }
 
 fn block_of(nif: &Nif, link: i32, kinds: &[&str]) -> Option<usize> {
@@ -77,6 +112,29 @@ fn dynamic_positions(shape: &TriShape) -> Option<Vec<[f32; 3]>> {
 pub fn read(nif: &Nif, block: usize) -> Result<Mesh, NifError> {
     let stream = nif.header.stream.version;
     let kind = nif.kind_of(block).to_string();
+    if kind == "NiTriShape" {
+        let (shape, _, data) = le_shape(nif, block)?;
+        if data
+            .triangles
+            .iter()
+            .flatten()
+            .any(|i| *i as usize >= data.positions.len())
+        {
+            return Err(NifError::Corrupt(
+                "a triangle names a vertex past the last".into(),
+            ));
+        }
+        return Ok(Mesh {
+            block,
+            name: name_of(nif, shape.av.name),
+            positions: data.positions,
+            uvs: data.uvs,
+            normals: data.normals,
+            triangles: data.triangles,
+            textures: textures_of(nif, shape.shader.unwrap_or(-1)),
+            skinned: shape.skin >= 0,
+        });
+    }
     if !geometry::is_tri_shape(&kind) {
         return Err(NifError::Unsupported(format!("a {kind} is not a shape")));
     }
@@ -133,24 +191,11 @@ pub fn read(nif: &Nif, block: usize) -> Result<Mesh, NifError> {
         ));
     }
 
-    let textures = block_of(nif, shape.shader, &["BSLightingShaderProperty"])
-        .and_then(|at| LightingShader::read(&nif.blocks[at].data, stream).ok())
-        .and_then(|s| block_of(nif, s.texture_set, &["BSShaderTextureSet"]))
-        .and_then(|at| TextureSet::read(&nif.blocks[at].data).ok())
-        .map(|set| {
-            set.textures
-                .iter()
-                .map(|t| String::from_utf8_lossy(t).into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
+    let textures = textures_of(nif, shape.shader);
 
     Ok(Mesh {
         block,
-        name: nif
-            .string(shape.av.name)
-            .map(|s| String::from_utf8_lossy(s).into_owned())
-            .unwrap_or_default(),
+        name: name_of(nif, shape.av.name),
         positions,
         uvs,
         normals,
@@ -166,6 +211,22 @@ pub fn read(nif: &Nif, block: usize) -> Result<Mesh, NifError> {
 pub fn set_positions(nif: &mut Nif, block: usize, positions: &[[f32; 3]]) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
     let kind = nif.kind_of(block).to_string();
+    if kind == "NiTriShape" {
+        let (_, at, mut data) = le_shape(nif, block)?;
+        if positions.len() != data.positions.len() {
+            return Err(NifError::Corrupt(format!(
+                "{} positions for a shape of {} vertices",
+                positions.len(),
+                data.positions.len()
+            )));
+        }
+        data.positions = positions.to_vec();
+        let (center, radius) = bounding_sphere(positions);
+        data.bound_center = center;
+        data.bound_radius = radius;
+        nif.blocks[at].data = data.write();
+        return Ok(());
+    }
     let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
     let layout = Layout::of(shape.vertex_desc, stream)
         .ok_or_else(|| NifError::Unsupported(format!("vertex layout {:#x}", shape.vertex_desc)))?;

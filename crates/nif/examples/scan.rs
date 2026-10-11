@@ -124,6 +124,16 @@ fn main() {
                             )
                         } else if kind == "BSShaderTextureSet" {
                             Some(apoc_nif::shader::TextureSet::read(data).map(|x| x.write()))
+                        } else if kind == "NiTriShape" {
+                            Some(
+                                apoc_nif::geometry_le::NiTriShape::read(data, stream)
+                                    .map(|x| x.write(stream)),
+                            )
+                        } else if kind == "NiTriShapeData" {
+                            Some(
+                                apoc_nif::geometry_le::TriShapeData::read(data, stream)
+                                    .map(|x| x.write()),
+                            )
                         } else if kind == "NiSkinData" {
                             Some(apoc_nif::skin::SkinData::read(data).map(|x| x.write()))
                         } else if kind == "NiSkinPartition" {

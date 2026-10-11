@@ -40,8 +40,8 @@ pub fn add(positions: &mut [[f32; 3]], diffs: &[Diff], amount: f32) {
     }
     for d in diffs {
         if let Some(p) = positions.get_mut(d.vertex as usize) {
-            for i in 0..3 {
-                p[i] += d.offset[i] * amount;
+            for (c, o) in p.iter_mut().zip(d.offset) {
+                *c += o * amount;
             }
         }
     }

@@ -9,6 +9,8 @@
 //! Written from real projects' files and from published descriptions of the
 //! formats. Not derived from any other program's source.
 
+pub mod build;
+pub mod category;
 pub mod group;
 pub mod morph;
 pub mod osd;

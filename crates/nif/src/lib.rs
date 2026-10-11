@@ -11,6 +11,7 @@
 //! format. Not derived from any other program's source.
 
 pub mod geometry;
+pub mod geometry_le;
 pub mod io;
 pub mod mesh;
 pub mod node;

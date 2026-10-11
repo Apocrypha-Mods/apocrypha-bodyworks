@@ -62,8 +62,15 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Preset>, Error> {
                 .filter_map(|s| {
                     Some(SliderValue {
                         name: s.attribute("name")?.to_string(),
-                        big: s.attribute("size").is_none_or(|v| v.eq_ignore_ascii_case("big")),
-                        value: s.attribute("value")?.trim().parse::<f32>().ok().filter(|v| v.is_finite())?,
+                        big: s
+                            .attribute("size")
+                            .is_none_or(|v| v.eq_ignore_ascii_case("big")),
+                        value: s
+                            .attribute("value")?
+                            .trim()
+                            .parse::<f32>()
+                            .ok()
+                            .filter(|v| v.is_finite())?,
                     })
                 })
                 .collect(),

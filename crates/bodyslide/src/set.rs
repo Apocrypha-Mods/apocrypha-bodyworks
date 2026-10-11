@@ -22,6 +22,8 @@ pub struct DataRef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Slider {
     pub name: String,
+    /// The name to show, when the set gives one of its own.
+    pub display_name: Option<String>,
     /// The list moves the mesh as the slider goes down, not up.
     pub invert: bool,
     /// Where the slider stands on the lightest and the heaviest body when a
@@ -133,6 +135,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<SliderSet>, Error> {
                     .collect();
                 Slider {
                     name: s.attribute("name").unwrap_or_default().to_string(),
+                    display_name: s.attribute("displayname").map(str::to_string),
                     invert: flag(s.attribute("invert")),
                     small: number(s.attribute("small").or(default), 0.0),
                     big: number(s.attribute("big").or(default), 0.0),
@@ -162,7 +165,8 @@ pub fn read(bytes: &[u8]) -> Result<Vec<SliderSet>, Error> {
                 .unwrap_or_default()
                 .trim()
                 .to_string(),
-            gen_weights: output.is_none_or(|o| o.attribute("GenWeights").is_none_or(|v| flag(Some(v)))),
+            gen_weights: output
+                .is_none_or(|o| o.attribute("GenWeights").is_none_or(|v| flag(Some(v)))),
             shapes,
             sliders,
         });
@@ -180,12 +184,22 @@ fn percent(v: f32) -> String {
 
 /// A project file holding `sets`.
 pub fn write(sets: &[SliderSet]) -> String {
-    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<SliderSetInfo version=\"1\">\n");
+    let mut out =
+        String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<SliderSetInfo version=\"1\">\n");
     for set in sets {
         out.push_str(&format!("    <SliderSet name=\"{}\">\n", escape(&set.name)));
-        out.push_str(&format!("        <DataFolder>{}</DataFolder>\n", escape(&set.data_folder)));
-        out.push_str(&format!("        <SourceFile>{}</SourceFile>\n", escape(&set.source_file)));
-        out.push_str(&format!("        <OutputPath>{}</OutputPath>\n", escape(&set.output_path)));
+        out.push_str(&format!(
+            "        <DataFolder>{}</DataFolder>\n",
+            escape(&set.data_folder)
+        ));
+        out.push_str(&format!(
+            "        <SourceFile>{}</SourceFile>\n",
+            escape(&set.source_file)
+        ));
+        out.push_str(&format!(
+            "        <OutputPath>{}</OutputPath>\n",
+            escape(&set.output_path)
+        ));
         out.push_str(&format!(
             "        <OutputFile GenWeights=\"{}\">{}</OutputFile>\n",
             set.gen_weights,
@@ -211,13 +225,24 @@ pub fn write(sets: &[SliderSet]) -> String {
                 percent(s.small),
                 percent(s.big)
             );
-            for (name, on) in [("hidden", s.hidden), ("zap", s.zap), ("uv", s.uv), ("clamp", s.clamp)] {
+            if let Some(shown) = &s.display_name {
+                attrs.push_str(&format!(" displayname=\"{}\"", escape(shown)));
+            }
+            for (name, on) in [
+                ("hidden", s.hidden),
+                ("zap", s.zap),
+                ("uv", s.uv),
+                ("clamp", s.clamp),
+            ] {
                 if on {
                     attrs.push_str(&format!(" {name}=\"true\""));
                 }
             }
             if !s.zap_toggles.is_empty() {
-                attrs.push_str(&format!(" zaptoggles=\"{};\"", escape(&s.zap_toggles.join(";"))));
+                attrs.push_str(&format!(
+                    " zaptoggles=\"{};\"",
+                    escape(&s.zap_toggles.join(";"))
+                ));
             }
             out.push_str(&format!("        <Slider {attrs}>\n"));
             for d in &s.data {
