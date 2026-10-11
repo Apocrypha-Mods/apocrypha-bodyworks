@@ -89,7 +89,11 @@ impl AvObject {
         let name = r.i32()?;
         let extra_data = read_refs(r)?;
         let controller = r.i32()?;
-        let flags = if stream > 26 { r.u32()? } else { r.u16()? as u32 };
+        let flags = if stream > 26 {
+            r.u32()?
+        } else {
+            r.u16()? as u32
+        };
         let transform = Transform::read(r)?;
         let properties = if stream <= 34 {
             Some(read_refs(r)?)

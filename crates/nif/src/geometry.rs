@@ -204,7 +204,10 @@ impl TriShape {
         let (vertex_data, triangles) = if data_size > 0 {
             let vertex_data = r.take(vertex_count as usize * stride)?.to_vec();
             let mut triangles = Vec::with_capacity(stated_triangles as usize);
-            if (stated_triangles as usize).checked_mul(6).is_none_or(|n| n > r.left()) {
+            if (stated_triangles as usize)
+                .checked_mul(6)
+                .is_none_or(|n| n > r.left())
+            {
                 return Err(NifError::Truncated);
             }
             for _ in 0..stated_triangles {
@@ -299,7 +302,13 @@ impl TriShape {
         !self.vertex_data.is_empty()
     }
 
-    fn at(&self, layout: &Layout, vertex: usize, offset: Option<usize>, size: usize) -> Option<usize> {
+    fn at(
+        &self,
+        layout: &Layout,
+        vertex: usize,
+        offset: Option<usize>,
+        size: usize,
+    ) -> Option<usize> {
         let at = vertex.checked_mul(layout.stride)?.checked_add(offset?)?;
         (at + size <= self.vertex_data.len()).then_some(at)
     }
@@ -331,7 +340,11 @@ impl TriShape {
     pub fn normal(&self, layout: &Layout, vertex: usize) -> Option<[f32; 3]> {
         let at = self.at(layout, vertex, layout.normal, 4)?;
         let d = &self.vertex_data;
-        Some([unpack_dir(d[at]), unpack_dir(d[at + 1]), unpack_dir(d[at + 2])])
+        Some([
+            unpack_dir(d[at]),
+            unpack_dir(d[at + 1]),
+            unpack_dir(d[at + 2]),
+        ])
     }
 
     pub fn set_normal(&mut self, layout: &Layout, vertex: usize, n: [f32; 3]) {
@@ -347,7 +360,12 @@ impl TriShape {
     pub fn tangent_space(&self, layout: &Layout, vertex: usize) -> Option<([f32; 3], [f32; 3])> {
         let t = self.at(layout, vertex, layout.tangent, 4)?;
         let n = self.at(layout, vertex, layout.normal, 4)?;
-        let p = self.at(layout, vertex, layout.position, if layout.full_precision { 16 } else { 8 })?;
+        let p = self.at(
+            layout,
+            vertex,
+            layout.position,
+            if layout.full_precision { 16 } else { 8 },
+        )?;
         let d = &self.vertex_data;
         let bx = if layout.full_precision {
             f32::from_le_bytes([d[p + 12], d[p + 13], d[p + 14], d[p + 15]])
@@ -360,11 +378,22 @@ impl TriShape {
         ))
     }
 
-    pub fn set_tangent_space(&mut self, layout: &Layout, vertex: usize, tangent: [f32; 3], bitangent: [f32; 3]) {
+    pub fn set_tangent_space(
+        &mut self,
+        layout: &Layout,
+        vertex: usize,
+        tangent: [f32; 3],
+        bitangent: [f32; 3],
+    ) {
         let (Some(t), Some(n), Some(p)) = (
             self.at(layout, vertex, layout.tangent, 4),
             self.at(layout, vertex, layout.normal, 4),
-            self.at(layout, vertex, layout.position, if layout.full_precision { 16 } else { 8 }),
+            self.at(
+                layout,
+                vertex,
+                layout.position,
+                if layout.full_precision { 16 } else { 8 },
+            ),
         ) else {
             return;
         };
@@ -398,7 +427,13 @@ impl TriShape {
         Some((weights, [d[at + 8], d[at + 9], d[at + 10], d[at + 11]]))
     }
 
-    pub fn set_skin_weights(&mut self, layout: &Layout, vertex: usize, weights: [f32; 4], bones: [u8; 4]) {
+    pub fn set_skin_weights(
+        &mut self,
+        layout: &Layout,
+        vertex: usize,
+        weights: [f32; 4],
+        bones: [u8; 4],
+    ) {
         if let Some(at) = self.at(layout, vertex, layout.skin, 12) {
             for (i, w) in weights.iter().enumerate() {
                 self.vertex_data[at + i * 2..at + i * 2 + 2]
@@ -411,7 +446,9 @@ impl TriShape {
 
 /// A vertex's position in packed vertex bytes of `layout`.
 pub fn position_in(data: &[u8], layout: &Layout, vertex: usize) -> Option<[f32; 3]> {
-    let at = vertex.checked_mul(layout.stride)?.checked_add(layout.position?)?;
+    let at = vertex
+        .checked_mul(layout.stride)?
+        .checked_add(layout.position?)?;
     if layout.full_precision {
         let d = data.get(at..at + 12)?;
         Some([

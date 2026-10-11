@@ -62,7 +62,9 @@ impl<'a> Reader<'a> {
     /// could not possibly hold that many items of `each` bytes.
     pub fn count(&mut self, each: usize) -> Result<usize, NifError> {
         let n = self.u32()? as usize;
-        if n.checked_mul(each.max(1)).is_none_or(|need| need > self.left()) {
+        if n.checked_mul(each.max(1))
+            .is_none_or(|need| need > self.left())
+        {
             return Err(NifError::Truncated);
         }
         Ok(n)

@@ -323,7 +323,10 @@ impl SkinPartition {
             let lod_level = if stream > 34 { Some(r.u16()?) } else { None };
             let (vertex_desc, true_triangles) = if sse {
                 let desc = r.u64()?;
-                (Some(desc), Some(read_triangles(&mut r, triangle_count as usize)?))
+                (
+                    Some(desc),
+                    Some(read_triangles(&mut r, triangle_count as usize)?),
+                )
             } else {
                 (None, None)
             };

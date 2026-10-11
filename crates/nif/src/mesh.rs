@@ -1,0 +1,246 @@
+//! A shape as something to draw and to move: its vertices and triangles,
+//! wherever in the file they are kept, and writing moved vertices back to
+//! every place that keeps them.
+//!
+//! A Special Edition shape's vertices can be in the shape, in its skin
+//! partition, or both; a face part (`BSDynamicTriShape`) keeps its positions
+//! in a list of its own. This is the one place that knows.
+
+use crate::geometry::{self, attr, Layout, TriShape};
+use crate::shader::{LightingShader, TextureSet};
+use crate::skin::{SkinInstance, SkinPartition};
+use crate::{Nif, NifError};
+
+/// A shape read out of a file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mesh {
+    /// The block the shape is.
+    pub block: usize,
+    pub name: String,
+    pub positions: Vec<[f32; 3]>,
+    /// Empty when the shape carries none.
+    pub uvs: Vec<[f32; 2]>,
+    pub normals: Vec<[f32; 3]>,
+    pub triangles: Vec<[u16; 3]>,
+    /// Texture files by slot (colour, normal map, …), as the file names them.
+    pub textures: Vec<String>,
+    pub skinned: bool,
+}
+
+/// The blocks of a file that are shapes this can read.
+pub fn shapes(nif: &Nif) -> Vec<usize> {
+    (0..nif.blocks.len())
+        .filter(|i| geometry::is_tri_shape(nif.kind_of(*i)))
+        .collect()
+}
+
+fn block_of(nif: &Nif, link: i32, kinds: &[&str]) -> Option<usize> {
+    usize::try_from(link)
+        .ok()
+        .filter(|i| kinds.contains(&nif.kind_of(*i)))
+}
+
+fn partition_of(nif: &Nif, shape: &TriShape) -> Option<(usize, SkinPartition)> {
+    let stream = nif.header.stream.version;
+    let at = block_of(
+        nif,
+        shape.skin,
+        &["NiSkinInstance", "BSDismemberSkinInstance"],
+    )?;
+    let instance =
+        SkinInstance::read(&nif.blocks[at].data, nif.kind_of(at) != "NiSkinInstance").ok()?;
+    let at = block_of(nif, instance.partition, &["NiSkinPartition"])?;
+    Some((at, SkinPartition::read(&nif.blocks[at].data, stream).ok()?))
+}
+
+/// A face part keeps its positions after the shape, four floats a vertex.
+fn dynamic_positions(shape: &TriShape) -> Option<Vec<[f32; 3]>> {
+    let n = shape.vertex_count as usize;
+    let size = u32::from_le_bytes(shape.rest.get(..4)?.try_into().ok()?) as usize;
+    let data = shape.rest.get(4..4 + size)?;
+    (size == n * 16).then(|| {
+        data.as_chunks::<16>()
+            .0
+            .iter()
+            .map(|c| {
+                [
+                    f32::from_le_bytes([c[0], c[1], c[2], c[3]]),
+                    f32::from_le_bytes([c[4], c[5], c[6], c[7]]),
+                    f32::from_le_bytes([c[8], c[9], c[10], c[11]]),
+                ]
+            })
+            .collect()
+    })
+}
+
+/// Read the shape at `block`.
+pub fn read(nif: &Nif, block: usize) -> Result<Mesh, NifError> {
+    let stream = nif.header.stream.version;
+    let kind = nif.kind_of(block).to_string();
+    if !geometry::is_tri_shape(&kind) {
+        return Err(NifError::Unsupported(format!("a {kind} is not a shape")));
+    }
+    let shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let layout = Layout::of(shape.vertex_desc, stream)
+        .ok_or_else(|| NifError::Unsupported(format!("vertex layout {:#x}", shape.vertex_desc)))?;
+    let partition = partition_of(nif, &shape);
+    // A shape whose vertices are only in its skin partition often states
+    // none of its own: the partition's bytes say how many there are.
+    let n = match &partition {
+        Some((_, p)) if !shape.has_vertices() && layout.stride > 0 && !p.vertex_data.is_empty() => {
+            p.vertex_data.len() / layout.stride
+        }
+        _ => shape.vertex_count as usize,
+    };
+
+    // The shape's own copy when it has one, else the skin partition's.
+    let (data, triangles): (&[u8], Vec<[u16; 3]>) = if shape.has_vertices() {
+        (&shape.vertex_data, shape.triangles.clone())
+    } else if let Some((_, p)) = &partition {
+        (
+            &p.vertex_data,
+            p.partitions
+                .iter()
+                .flat_map(|part| part.true_triangles.iter().flatten().copied())
+                .collect(),
+        )
+    } else {
+        (&[], Vec::new())
+    };
+    if data.len() != n * layout.stride {
+        return Err(NifError::Corrupt(format!(
+            "{} bytes of vertices for {n} of {} each",
+            data.len(),
+            layout.stride
+        )));
+    }
+    // Read through the shape's own accessors, over whichever copy it is.
+    let mut view = shape.clone();
+    view.vertex_data = data.to_vec();
+    let positions = if kind == "BSDynamicTriShape" {
+        dynamic_positions(&shape)
+            .ok_or_else(|| NifError::Corrupt("a face part without its positions".into()))?
+    } else if layout.has(attr::POSITION) {
+        (0..n).filter_map(|v| view.position(&layout, v)).collect()
+    } else {
+        return Err(NifError::Unsupported("a shape with no positions".into()));
+    };
+    let uvs = (0..n).filter_map(|v| view.uv(&layout, v)).collect();
+    let normals = (0..n).filter_map(|v| view.normal(&layout, v)).collect();
+    if triangles.iter().flatten().any(|i| *i as usize >= n) {
+        return Err(NifError::Corrupt(
+            "a triangle names a vertex past the last".into(),
+        ));
+    }
+
+    let textures = block_of(nif, shape.shader, &["BSLightingShaderProperty"])
+        .and_then(|at| LightingShader::read(&nif.blocks[at].data, stream).ok())
+        .and_then(|s| block_of(nif, s.texture_set, &["BSShaderTextureSet"]))
+        .and_then(|at| TextureSet::read(&nif.blocks[at].data).ok())
+        .map(|set| {
+            set.textures
+                .iter()
+                .map(|t| String::from_utf8_lossy(t).into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(Mesh {
+        block,
+        name: nif
+            .string(shape.av.name)
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .unwrap_or_default(),
+        positions,
+        uvs,
+        normals,
+        triangles,
+        textures,
+        skinned: shape.skin >= 0,
+    })
+}
+
+/// Move a shape's vertices: `positions` in every place the file keeps them,
+/// and the shape's bounding sphere around where they now are. Nothing else
+/// in the file changes.
+pub fn set_positions(nif: &mut Nif, block: usize, positions: &[[f32; 3]]) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    let kind = nif.kind_of(block).to_string();
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let layout = Layout::of(shape.vertex_desc, stream)
+        .ok_or_else(|| NifError::Unsupported(format!("vertex layout {:#x}", shape.vertex_desc)))?;
+    let partition = partition_of(nif, &shape);
+    let count = match &partition {
+        Some((_, p)) if !shape.has_vertices() && layout.stride > 0 && !p.vertex_data.is_empty() => {
+            p.vertex_data.len() / layout.stride
+        }
+        _ => shape.vertex_count as usize,
+    };
+    if positions.len() != count {
+        return Err(NifError::Corrupt(format!(
+            "{} positions for a shape of {count} vertices",
+            positions.len()
+        )));
+    }
+    if kind == "BSDynamicTriShape" {
+        let size = positions.len() * 16;
+        if shape.rest.len() < 4 + size {
+            return Err(NifError::Corrupt(
+                "a face part without its positions".into(),
+            ));
+        }
+        for (v, p) in positions.iter().enumerate() {
+            for (i, c) in p.iter().enumerate() {
+                let at = 4 + v * 16 + i * 4;
+                shape.rest[at..at + 4].copy_from_slice(&c.to_le_bytes());
+            }
+        }
+    } else if shape.has_vertices() {
+        for (v, p) in positions.iter().enumerate() {
+            shape.set_position(&layout, v, *p);
+        }
+    }
+    if let Some((at, mut partition)) = partition {
+        if partition.vertex_data.len() == positions.len() * layout.stride
+            && layout.has(attr::POSITION)
+            && kind != "BSDynamicTriShape"
+        {
+            for (v, p) in positions.iter().enumerate() {
+                geometry::set_position_in(&mut partition.vertex_data, &layout, v, *p);
+            }
+            nif.blocks[at].data = partition.write(stream);
+        }
+    }
+    let (center, radius) = bounding_sphere(positions);
+    shape.bound_center = center;
+    shape.bound_radius = radius;
+    nif.blocks[block].data = shape.write(stream);
+    Ok(())
+}
+
+/// A sphere that holds every point: centred on the middle of their box.
+pub fn bounding_sphere(points: &[[f32; 3]]) -> ([f32; 3], f32) {
+    let Some(first) = points.first() else {
+        return ([0.0; 3], 0.0);
+    };
+    let (mut lo, mut hi) = (*first, *first);
+    for p in points {
+        for i in 0..3 {
+            lo[i] = lo[i].min(p[i]);
+            hi[i] = hi[i].max(p[i]);
+        }
+    }
+    let center = [
+        (lo[0] + hi[0]) / 2.0,
+        (lo[1] + hi[1]) / 2.0,
+        (lo[2] + hi[2]) / 2.0,
+    ];
+    let radius = points
+        .iter()
+        .map(|p| {
+            ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2) + (p[2] - center[2]).powi(2))
+                .sqrt()
+        })
+        .fold(0.0f32, f32::max);
+    (center, radius)
+}

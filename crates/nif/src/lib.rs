@@ -12,7 +12,9 @@
 
 pub mod geometry;
 pub mod io;
+pub mod mesh;
 pub mod node;
+pub mod shader;
 pub mod skin;
 
 use io::{Reader, Writer};
@@ -119,7 +121,9 @@ impl Nif {
             .position(|b| *b == b'\n')
             .ok_or(NifError::NotNif)?;
         let line = &bytes[..newline];
-        if !line.starts_with(b"Gamebryo File Format") && !line.starts_with(b"NetImmerse File Format") {
+        if !line.starts_with(b"Gamebryo File Format")
+            && !line.starts_with(b"NetImmerse File Format")
+        {
             return Err(NifError::NotNif);
         }
         let mut r = Reader::new(&bytes[newline + 1..]);
@@ -141,7 +145,11 @@ impl Nif {
         let block_count = r.count(6)?;
         let stream_version = r.u32()?;
         let author = r.short_string()?;
-        let unknown = if stream_version > 130 { Some(r.u32()?) } else { None };
+        let unknown = if stream_version > 130 {
+            Some(r.u32()?)
+        } else {
+            None
+        };
         let process_script = if stream_version < 131 {
             Some(r.short_string()?)
         } else {
@@ -165,7 +173,9 @@ impl Nif {
             // The top bit marks a block built for PhysX; none of these games
             // set it, and an index past the table is a broken file.
             if kind as usize >= block_types.len() {
-                return Err(NifError::Corrupt(format!("block kind {kind} of {type_count}")));
+                return Err(NifError::Corrupt(format!(
+                    "block kind {kind} of {type_count}"
+                )));
             }
             kinds.push(kind);
         }
@@ -198,7 +208,10 @@ impl Nif {
             roots.push(r.i32()?);
         }
         if r.left() != 0 {
-            return Err(NifError::Corrupt(format!("{} bytes after the end", r.left())));
+            return Err(NifError::Corrupt(format!(
+                "{} bytes after the end",
+                r.left()
+            )));
         }
 
         Ok(Nif {

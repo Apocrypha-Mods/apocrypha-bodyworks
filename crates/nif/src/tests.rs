@@ -115,7 +115,9 @@ mod geometry {
 
     #[test]
     fn a_half_float_and_back_is_the_same_half() {
-        for h in [0u16, 0x3c00, 0xbc00, 0x3555, 0x7bff, 0x0001, 0x03ff, 0x0400, 0x8000, 0x4248] {
+        for h in [
+            0u16, 0x3c00, 0xbc00, 0x3555, 0x7bff, 0x0001, 0x03ff, 0x0400, 0x8000, 0x4248,
+        ] {
             assert_eq!(f32_to_half(half_to_f32(h)), h, "{h:#06x}");
         }
         assert_eq!(half_to_f32(0x3c00), 1.0);
@@ -140,11 +142,18 @@ mod geometry {
         let l = Layout::of(desc(skinned, 10), 100).unwrap();
         assert_eq!((l.stride, l.full_precision), (40, true));
         // With colours it is four bytes more.
-        assert_eq!(Layout::of(desc(skinned | COLOR, 11), 100).unwrap().stride, 44);
+        assert_eq!(
+            Layout::of(desc(skinned | COLOR, 11), 100).unwrap().stride,
+            44
+        );
         // Fallout 4 packs positions as halves unless told otherwise.
         let fo4 = Layout::of(desc(POSITION | UV | NORMAL | TANGENT, 5), 130).unwrap();
         assert_eq!((fo4.stride, fo4.full_precision), (20, false));
-        assert!(Layout::of(desc(POSITION | UV | NORMAL | TANGENT | FULL_PRECISION, 7), 130).is_some());
+        assert!(Layout::of(
+            desc(POSITION | UV | NORMAL | TANGENT | FULL_PRECISION, 7),
+            130
+        )
+        .is_some());
         // A size that does not match what is listed is not guessed at.
         assert_eq!(Layout::of(desc(skinned, 9), 100), None);
     }
@@ -161,5 +170,50 @@ mod geometry {
         assert!(bytes[..40].iter().all(|b| *b == 0xEE));
         assert!(bytes[52..].iter().all(|b| *b == 0xEE));
         assert_eq!(position_in(&bytes, &layout, 2), None);
+    }
+}
+
+/// Real meshes, when there are any in `scratch/` (not tracked; skipped when
+/// empty): every one reads, writes back byte for byte, and every shape in it
+/// reads as a mesh whose vertices can be written back where they were.
+#[test]
+fn real_meshes_survive_being_read_and_written() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("nif"))
+            {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scratch/corpus");
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    files.sort();
+    // A sample: the whole corpus is the `scan` example's job.
+    let (mut shapes, mut unread) = (0usize, 0usize);
+    for path in files.iter().step_by(25) {
+        let bytes = std::fs::read(path).unwrap();
+        let nif = Nif::read(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert_eq!(nif.write(), bytes, "{}", path.display());
+        for at in mesh::shapes(&nif) {
+            let Ok(m) = mesh::read(&nif, at) else {
+                unread += 1;
+                continue;
+            };
+            shapes += 1;
+            let mut moved = nif.clone();
+            mesh::set_positions(&mut moved, at, &m.positions).unwrap();
+            assert_eq!(moved.write().len(), bytes.len(), "{}", path.display());
+        }
+    }
+    if !files.is_empty() {
+        assert!(shapes > 0, "no shape read from {} files", files.len());
+        assert!(unread * 100 <= shapes, "{unread} shapes unread of {shapes}");
     }
 }
