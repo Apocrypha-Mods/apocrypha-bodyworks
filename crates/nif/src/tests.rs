@@ -109,3 +109,57 @@ fn a_broken_file_is_refused_not_read_past() {
     old[v..v + 4].copy_from_slice(&0x1400_0005u32.to_le_bytes());
     assert!(matches!(Nif::read(&old), Err(NifError::Unsupported(_))));
 }
+
+mod geometry {
+    use crate::geometry::*;
+
+    #[test]
+    fn a_half_float_and_back_is_the_same_half() {
+        for h in [0u16, 0x3c00, 0xbc00, 0x3555, 0x7bff, 0x0001, 0x03ff, 0x0400, 0x8000, 0x4248] {
+            assert_eq!(f32_to_half(half_to_f32(h)), h, "{h:#06x}");
+        }
+        assert_eq!(half_to_f32(0x3c00), 1.0);
+        assert_eq!(half_to_f32(0xc000), -2.0);
+        assert_eq!(f32_to_half(0.5), 0x3800);
+        // Too large for a half is the largest there is, not a wrapped one.
+        assert_eq!(f32_to_half(1.0e9), 0x7c00);
+        assert!(half_to_f32(0x7c00).is_infinite());
+    }
+
+    /// Bits 44 and up say what a vertex carries; the low four, its size in
+    /// units of four bytes.
+    fn desc(attributes: u16, quads: u64) -> u64 {
+        (u64::from(attributes) << 44) | quads
+    }
+
+    #[test]
+    fn a_layout_is_what_the_description_adds_up_to() {
+        use attr::*;
+        // A Special Edition body: position, UV, normal, tangent, skin.
+        let skinned = POSITION | UV | NORMAL | TANGENT | SKINNED;
+        let l = Layout::of(desc(skinned, 10), 100).unwrap();
+        assert_eq!((l.stride, l.full_precision), (40, true));
+        // With colours it is four bytes more.
+        assert_eq!(Layout::of(desc(skinned | COLOR, 11), 100).unwrap().stride, 44);
+        // Fallout 4 packs positions as halves unless told otherwise.
+        let fo4 = Layout::of(desc(POSITION | UV | NORMAL | TANGENT, 5), 130).unwrap();
+        assert_eq!((fo4.stride, fo4.full_precision), (20, false));
+        assert!(Layout::of(desc(POSITION | UV | NORMAL | TANGENT | FULL_PRECISION, 7), 130).is_some());
+        // A size that does not match what is listed is not guessed at.
+        assert_eq!(Layout::of(desc(skinned, 9), 100), None);
+    }
+
+    #[test]
+    fn a_vertex_is_read_and_changed_in_place() {
+        use attr::*;
+        let attributes = POSITION | UV | NORMAL | TANGENT | SKINNED;
+        let layout = Layout::of(desc(attributes, 10), 100).unwrap();
+        let mut bytes = vec![0xEEu8; 80];
+        set_position_in(&mut bytes, &layout, 1, [1.5, -2.0, 3.25]);
+        assert_eq!(position_in(&bytes, &layout, 1), Some([1.5, -2.0, 3.25]));
+        // The other vertex, and everything else of this one, is untouched.
+        assert!(bytes[..40].iter().all(|b| *b == 0xEE));
+        assert!(bytes[52..].iter().all(|b| *b == 0xEE));
+        assert_eq!(position_in(&bytes, &layout, 2), None);
+    }
+}

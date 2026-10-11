@@ -10,7 +10,10 @@
 //! Written from the files themselves and from published descriptions of the
 //! format. Not derived from any other program's source.
 
+pub mod geometry;
 pub mod io;
+pub mod node;
+pub mod skin;
 
 use io::{Reader, Writer};
 

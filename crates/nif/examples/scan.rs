@@ -32,6 +32,8 @@ fn main() {
     let mut failed: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
     let mut games: BTreeMap<String, usize> = BTreeMap::new();
+    let mut read: BTreeMap<String, usize> = BTreeMap::new();
+    let mut odd: BTreeMap<String, usize> = BTreeMap::new();
     for path in &files {
         let Ok(bytes) = std::fs::read(path) else {
             continue;
@@ -45,8 +47,41 @@ fn main() {
                     println!("DIFFERS {}", path.display());
                 }
                 *games.entry(format!("{:?}", nif.game())).or_default() += 1;
+                let stream = nif.header.stream.version;
                 for i in 0..nif.blocks.len() {
-                    *kinds.entry(nif.kind_of(i).to_string()).or_default() += 1;
+                    let kind = nif.kind_of(i).to_string();
+                    let data = &nif.blocks[i].data;
+                    // A kind this reads into a structure must write back the
+                    // bytes it read.
+                    let typed: Option<Result<Vec<u8>, apoc_nif::NifError>> =
+                        if apoc_nif::node::is_node(&kind) {
+                            Some(apoc_nif::node::Node::read(data, stream).map(|n| n.write(stream)))
+                        } else if apoc_nif::geometry::is_tri_shape(&kind) {
+                            Some(apoc_nif::geometry::TriShape::read(data, stream).map(|t| {
+                                if t.has_vertices() && t.layout(stream).is_none() {
+                                    *odd.entry(format!("{kind} layout {:#x}", t.vertex_desc)).or_default() += 1;
+                                }
+                                t.write(stream)
+                            }))
+                        } else if kind == "NiSkinInstance" || kind == "BSDismemberSkinInstance" {
+                            Some(
+                                apoc_nif::skin::SkinInstance::read(data, kind != "NiSkinInstance")
+                                    .map(|x| x.write()),
+                            )
+                        } else if kind == "NiSkinData" {
+                            Some(apoc_nif::skin::SkinData::read(data).map(|x| x.write()))
+                        } else if kind == "NiSkinPartition" {
+                            Some(apoc_nif::skin::SkinPartition::read(data, stream).map(|x| x.write(stream)))
+                        } else {
+                            None
+                        };
+                    match typed {
+                        Some(Ok(bytes)) if bytes == *data => *read.entry(kind.clone()).or_default() += 1,
+                        Some(Ok(_)) => *odd.entry(format!("{kind} written differently")).or_default() += 1,
+                        Some(Err(e)) => *odd.entry(format!("{kind}: {e}")).or_default() += 1,
+                        None => {}
+                    }
+                    *kinds.entry(kind).or_default() += 1;
                 }
             }
             Err(e) => failed.entry(e.to_string()).or_default().push(path.clone()),
@@ -57,6 +92,8 @@ fn main() {
         println!("{} could not be read: {why} (e.g. {})", paths.len(), paths[0].display());
     }
     println!("games: {games:?}");
+    println!("read into structures and written back the same: {read:?}");
+    println!("not as expected: {odd:?}");
     let mut by_count: Vec<_> = kinds.into_iter().collect();
     by_count.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
     for (kind, n) in by_count {
