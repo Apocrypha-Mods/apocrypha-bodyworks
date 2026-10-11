@@ -54,6 +54,8 @@ enum Request {
     Put { path: String },
     /// Forget everything.
     Clear,
+    /// Forget the held files under a folder; what was read from them stays.
+    Drop { under: String },
     /// Read the sets, presets, groups and categories among the held files.
     Load,
     /// The files a set needs that are not held yet.
@@ -359,6 +361,11 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
         }
         Request::Clear => {
             *state = State::default();
+            Answer::ok(json!(null))
+        }
+        Request::Drop { under } => {
+            let under = format!("{}/", key(&under));
+            state.files.retain(|path, _| !path.starts_with(&under));
             Answer::ok(json!(null))
         }
         Request::Load => Answer::ok(state.load()),

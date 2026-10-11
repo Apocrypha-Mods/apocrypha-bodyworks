@@ -26,6 +26,21 @@ No bodies, presets or meshes are distributed here. Those are yours.
 | --- | --- |
 | `crates/nif` | Reading and writing NIF mesh files |
 | `crates/bodyslide` | Slider sets, slider data, presets, and building meshes from them |
+| `crates/app` | The WebAssembly module: what the interface asks of the crates, over one call |
+| `ui` | The interface shown in the mod manager's frame, and `addon.json`, which describes the add-on to it |
+| `tools` | `dev.cjs` runs the add-on outside the mod manager; `pack.sh` builds the file it installs |
+
+## Working on it
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo build --release -p apoc-bodyslide-app --target wasm32-unknown-unknown
+node tools/dev.cjs /path/to/a/folder/laid/out/like/the/game   # then open the address it prints
+tools/pack.sh                                                 # dist/bodyslide-<version>.apocaddon
+```
+
+The interface is plain script with no build step and no dependencies. What it
+may ask of the mod manager is listed at the top of `ui/host.js`.
 
 ## Checks
 
