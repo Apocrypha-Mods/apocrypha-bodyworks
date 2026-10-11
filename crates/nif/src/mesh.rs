@@ -209,6 +209,17 @@ pub fn read(nif: &Nif, block: usize) -> Result<Mesh, NifError> {
 /// and the shape's bounding sphere around where they now are. Nothing else
 /// in the file changes.
 pub fn set_positions(nif: &mut Nif, block: usize, positions: &[[f32; 3]]) -> Result<(), NifError> {
+    move_vertices(nif, block, positions, true)
+}
+
+/// [`set_positions`], with the bounding sphere left as the file states it
+/// when `rebound` is false.
+pub fn move_vertices(
+    nif: &mut Nif,
+    block: usize,
+    positions: &[[f32; 3]],
+    rebound: bool,
+) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
     let kind = nif.kind_of(block).to_string();
     if kind == "NiTriShape" {
@@ -221,9 +232,11 @@ pub fn set_positions(nif: &mut Nif, block: usize, positions: &[[f32; 3]]) -> Res
             )));
         }
         data.positions = positions.to_vec();
-        let (center, radius) = bounding_sphere(positions);
-        data.bound_center = center;
-        data.bound_radius = radius;
+        if rebound {
+            let (center, radius) = bounding_sphere(positions);
+            data.bound_center = center;
+            data.bound_radius = radius;
+        }
         nif.blocks[at].data = data.write();
         return Ok(());
     }
@@ -272,9 +285,11 @@ pub fn set_positions(nif: &mut Nif, block: usize, positions: &[[f32; 3]]) -> Res
             nif.blocks[at].data = partition.write(stream);
         }
     }
-    let (center, radius) = bounding_sphere(positions);
-    shape.bound_center = center;
-    shape.bound_radius = radius;
+    if rebound {
+        let (center, radius) = bounding_sphere(positions);
+        shape.bound_center = center;
+        shape.bound_radius = radius;
+    }
     nif.blocks[block].data = shape.write(stream);
     Ok(())
 }

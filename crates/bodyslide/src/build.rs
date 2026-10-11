@@ -5,6 +5,7 @@ use crate::morph;
 use crate::osd::SliderData;
 use crate::preset::Preset;
 use crate::set::{Shape, SliderSet};
+use crate::tri;
 use crate::Error;
 use apoc_nif::{edit, mesh, Nif};
 use std::collections::HashMap;
@@ -34,6 +35,8 @@ pub struct Output {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Built {
     pub outputs: Vec<Output>,
+    /// The morph file that goes with them, when one was asked for.
+    pub morphs: Option<Output>,
     /// Each a sentence: a slider that was left out and why.
     pub notes: Vec<String>,
 }
@@ -72,6 +75,18 @@ pub fn build_at(
     small: &[f32],
     big: &[f32],
     files: &dyn Files,
+) -> Result<Built, Error> {
+    build_with(set, small, big, files, false)
+}
+
+/// [`build_at`], and with `morphs` the morph file RaceMenu reads beside the
+/// meshes, so the built shape can still be changed in the game.
+pub fn build_with(
+    set: &SliderSet,
+    small: &[f32],
+    big: &[f32],
+    files: &dyn Files,
+    morphs: bool,
 ) -> Result<Built, Error> {
     if small.len() != set.sliders.len() || big.len() != set.sliders.len() {
         return Err(Error::Invalid(format!(
@@ -118,11 +133,14 @@ pub fn build_at(
     } else {
         &[(true, "")]
     };
+    // For each shape, in order, the vertices the last mesh built took out.
+    let mut taken: Vec<Vec<bool>> = Vec::new();
     for (heavy, suffix) in weights {
         let values = if *heavy { big } else { small };
         let mut nif = base.clone();
         // Shapes left with nothing to draw, to take out once the rest is done.
         let mut emptied = Vec::new();
+        taken.clear();
         for (shape, m) in &shapes {
             let mut positions = m.positions.clone();
             let mut uvs = m.uvs.clone();
@@ -163,8 +181,8 @@ pub fn build_at(
                     }
                 }
             }
+            taken.push(gone.clone());
             let fail = |e: apoc_nif::NifError| Error::Invalid(format!("{}: {e}", shape.name));
-            let moved = positions != m.positions;
             let zapped = gone.contains(&true);
             if uvs != m.uvs && uvs.len() == positions.len() {
                 mesh::set_uvs(&mut nif, m.block, &uvs).map_err(fail)?;
@@ -181,20 +199,30 @@ pub fn build_at(
                     continue;
                 }
             }
-            mesh::set_positions(&mut nif, m.block, &positions).map_err(fail)?;
-            // Moved, it has to be lit as the shape it now is. A shape that
-            // stores no normals (a body, lit from a normal map) has none to
-            // work out.
-            if (moved || zapped) && m.normals.len() == m.positions.len() {
+            // The sphere round the shape stays the source mesh's, as the
+            // original program leaves it.
+            mesh::move_vertices(&mut nif, m.block, &positions, false).map_err(fail)?;
+            // It is lit as the shape it now is, moved or not: the original
+            // works the normals out afresh for every shape it builds. A
+            // shape that stores none (a body, lit from a normal map) has
+            // none to work out.
+            if m.normals.len() == m.positions.len() {
                 let now = mesh::read(&nif, m.block).map_err(fail)?;
-                let normals = apoc_nif::shading::smooth_normals(&now.positions, &now.triangles);
+                // From the positions as worked out, not as the file rounds
+                // them to store.
+                let normals = apoc_nif::shading::smooth_normals(&positions, &now.triangles);
+                mesh::set_shading(&mut nif, m.block, &normals, &[], &[]).map_err(fail)?;
+                // Tangents are squared to the normals as the file holds
+                // them, which is how the original's come out: a normal is
+                // stored in less detail than it is worked out in.
+                let stored = mesh::read(&nif, m.block).map_err(fail)?;
                 let (tangents, bitangents) = apoc_nif::shading::tangent_space(
-                    &now.positions,
+                    &positions,
                     &now.uvs,
-                    &normals,
+                    &stored.normals,
                     &now.triangles,
                 );
-                mesh::set_shading(&mut nif, m.block, &normals, &tangents, &bitangents)
+                mesh::set_shading(&mut nif, m.block, &stored.normals, &tangents, &bitangents)
                     .map_err(fail)?;
             }
         }
@@ -204,12 +232,83 @@ pub fn build_at(
                 .notes
                 .push(format!("A shape with nothing left was kept: {e}."));
         }
+        if morphs {
+            // The game finds the morph file through the first of the set's
+            // shapes that is still there: its path under `meshes`.
+            let left = mesh::shapes(&nif);
+            let first = set.shapes.iter().find_map(|shape| {
+                left.iter()
+                    .copied()
+                    .find(|at| mesh::read(&nif, *at).is_ok_and(|m| m.name == shape.name))
+            });
+            if let Some(at) = first {
+                let folder = join(&[&set.output_path]);
+                let under = folder
+                    .strip_prefix("meshes/")
+                    .or_else(|| folder.strip_prefix("Meshes/"))
+                    .unwrap_or(&folder);
+                let path = format!("{under}/{}.tri", set.output_file).replace('/', "\\");
+                edit::add_text(&mut nif, at, "BODYTRI", &path)
+                    .map_err(|e| Error::Invalid(e.to_string()))?;
+            }
+        }
         built.outputs.push(Output {
             path: format!(
                 "{}{suffix}.nif",
                 join(&[&set.output_path, &set.output_file])
             ),
             bytes: nif.write(),
+        });
+    }
+    if morphs {
+        let mut out = tri::Morphs::default();
+        for ((shape, _), gone) in shapes.iter().zip(&taken) {
+            let mut next = 0u16;
+            let now: Vec<Option<u16>> = gone
+                .iter()
+                .map(|g| {
+                    (!g).then(|| {
+                        next += 1;
+                        next - 1
+                    })
+                })
+                .collect();
+            let mut made = Vec::new();
+            let mut made_uv = Vec::new();
+            for slider in set.sliders.iter().filter(|s| !s.zap) {
+                let mut offsets: Vec<(u16, [f32; 3])> = Vec::new();
+                for d in slider.data.iter().filter(|d| d.target == shape.target) {
+                    let folder = if d.local {
+                        set.data_folder.as_str()
+                    } else {
+                        data_folder(set, shape)
+                    };
+                    for diff in list(folder, &d.file, &d.list).unwrap_or_default() {
+                        if let Some(Some(v)) = now.get(diff.vertex as usize) {
+                            offsets.push((*v, diff.offset));
+                        }
+                    }
+                }
+                if let Some(m) = tri::Morph::of(&slider.name, &offsets) {
+                    if slider.uv {
+                        made_uv.push(m);
+                    } else {
+                        made.push(m);
+                    }
+                }
+            }
+            for (list, morphs) in [(&mut out.shapes, made), (&mut out.uv, made_uv)] {
+                if !morphs.is_empty() {
+                    list.push(tri::ShapeMorphs {
+                        name: shape.name.clone(),
+                        morphs,
+                    });
+                }
+            }
+        }
+        built.morphs = Some(Output {
+            path: format!("{}.tri", join(&[&set.output_path, &set.output_file])),
+            bytes: tri::write(&out),
         });
     }
     Ok(built)

@@ -241,6 +241,57 @@ pub fn remove_blocks(nif: &mut Nif, gone: &BTreeSet<usize>) -> Result<(), NifErr
     Ok(())
 }
 
+/// Put a new block in the file at `at`, moving the blocks from there on up
+/// by one and every link to them with them. When some block's links are not
+/// known the new block goes at the end instead, where nothing has to move.
+/// Returns where it went.
+pub fn insert_block(nif: &mut Nif, at: usize, kind: &str, data: Vec<u8>) -> usize {
+    let stream = nif.header.stream.version;
+    let kind = nif.kind_index(kind);
+    let at = at.min(nif.blocks.len());
+    let mut map = |l: i32| Some(if l as usize >= at { l + 1 } else { l });
+    let moved: Result<Vec<Vec<u8>>, NifError> = (0..nif.blocks.len())
+        .map(|i| relinked(nif.kind_of(i), &nif.blocks[i].data, stream, &mut map))
+        .collect();
+    match moved {
+        Ok(moved) => {
+            for (block, data) in nif.blocks.iter_mut().zip(moved) {
+                block.data = data;
+            }
+            many(&mut nif.roots, &mut map);
+            nif.blocks.insert(at, crate::Block { kind, data });
+            at
+        }
+        Err(_) => {
+            nif.blocks.push(crate::Block { kind, data });
+            nif.blocks.len() - 1
+        }
+    }
+}
+
+/// Give the shape at `block` a named piece of text (a `NiStringExtraData`),
+/// in a new block placed after it.
+pub fn add_text(nif: &mut Nif, block: usize, name: &str, value: &str) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    let kind = nif.kind_of(block).to_string();
+    let mut w = Writer::default();
+    w.i32(nif.intern(name.as_bytes()));
+    w.i32(nif.intern(value.as_bytes()));
+    let at = insert_block(nif, block + 1, "NiStringExtraData", w.out) as i32;
+    if kind == "NiTriShape" {
+        let mut shape = NiTriShape::read(&nif.blocks[block].data, stream)?;
+        shape.av.extra_data.push(at);
+        nif.blocks[block].data = shape.write(stream);
+    } else if is_tri_shape(&kind) {
+        let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+        shape.av.extra_data.push(at);
+        nif.blocks[block].data = shape.write(stream);
+    } else {
+        return Err(NifError::Unsupported(format!("a {kind} is not a shape")));
+    }
+    Ok(())
+}
+
 /// Take shapes out of the file, each with everything that was only its
 /// own: its skin, what it is drawn with, its extra data. Something another
 /// block still uses stays.
@@ -506,6 +557,32 @@ mod tests {
         assert_eq!(nif.roots, vec![0]);
         // The whole file still reads.
         assert_eq!(Nif::read(&nif.write()).unwrap(), nif);
+    }
+
+    #[test]
+    fn a_new_block_moves_the_links_past_it_and_not_the_others() {
+        let mut nif = scene();
+        let at = insert_block(&mut nif, 1, "NiStringExtraData", vec![0; 8]);
+        assert_eq!(at, 1);
+        let root = Node::read(&nif.blocks[0].data, 100).unwrap();
+        assert_eq!(root.children, vec![2, -1, 4]);
+        assert_eq!(root.av.extra_data, vec![3]);
+        assert_eq!(Nif::read(&nif.write()).unwrap(), nif);
+        // With a block whose links are not known, nothing moves: it goes last.
+        let mut nif = scene();
+        let odd = nif.kind_index("bhkCollisionObject");
+        nif.blocks.push(crate::Block {
+            kind: odd,
+            data: vec![0; 12],
+        });
+        assert_eq!(
+            insert_block(&mut nif, 1, "NiStringExtraData", vec![0; 8]),
+            5
+        );
+        assert_eq!(
+            Node::read(&nif.blocks[0].data, 100).unwrap().children,
+            vec![1, -1, 3]
+        );
     }
 
     #[test]

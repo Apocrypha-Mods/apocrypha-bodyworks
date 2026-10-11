@@ -117,6 +117,10 @@ fn main() {
     let mut far: Vec<(f32, String)> = Vec::new();
     let mut unlike: Vec<String> = Vec::new();
     let mut zaps = 0;
+    let with_morphs = std::env::var("MORPHS").is_ok();
+    let (mut files_same, mut files_all) = (0, 0);
+    let mut why_not: BTreeMap<String, (usize, String)> = BTreeMap::new();
+    let mut kinds: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for s in &sets {
         if s.sliders.iter().any(|x| x.zap) {
             zaps += 1;
@@ -142,6 +146,7 @@ fn main() {
             })
             .collect();
         let mut best: Option<(f32, f32, String)> = None;
+        let mut best_bytes: Vec<(bool, Vec<(String, bool)>)> = Vec::new();
         let mut why = None;
         let mut any = false;
         for p in std::iter::once(None).chain(
@@ -150,7 +155,13 @@ fn main() {
                 .filter(|p| p.groups.iter().any(|g| mine.contains(&g.as_str())))
                 .map(Some),
         ) {
-            let built = match build::build(s, p, &files) {
+            let built = match build::build_with(
+                s,
+                &apoc_bodyslide::morph::values(s, p, false),
+                &apoc_bodyslide::morph::values(s, p, true),
+                &files,
+                with_morphs,
+            ) {
                 Ok(b) => b,
                 Err(e) => {
                     why = Some(e.to_string());
@@ -158,6 +169,34 @@ fn main() {
                 }
             };
             any = true;
+            let mut bytes_same = Vec::new();
+            for (o, suffix) in built.outputs.iter().zip(suffixes) {
+                let path = format!(
+                    "data/{}/{}{suffix}.nif",
+                    s.output_path.replace('\\', "/"),
+                    s.output_file
+                )
+                .to_lowercase();
+                let theirs = all
+                    .get(&path)
+                    .and_then(|p| std::fs::read(p).ok())
+                    .unwrap_or_default();
+                let mut per: Vec<(String, bool)> = Vec::new();
+                if let (Ok(a), Ok(b)) =
+                    (apoc_nif::Nif::read(&o.bytes), apoc_nif::Nif::read(&theirs))
+                {
+                    if a.blocks.len() == b.blocks.len() {
+                        for i in 0..a.blocks.len() {
+                            per.push((
+                                a.kind_of(i).to_string(),
+                                a.kind_of(i) == b.kind_of(i)
+                                    && a.blocks[i].data == b.blocks[i].data,
+                            ));
+                        }
+                    }
+                }
+                bytes_same.push((o.bytes == theirs, per));
+            }
             let (mut worst, mut mean, mut ok) = (0.0f32, 0.0f32, true);
             for (o, r) in built.outputs.iter().zip(&reference) {
                 let (Some(r), Some(ours)) = (r, shapes(&o.bytes)) else {
@@ -177,6 +216,7 @@ fn main() {
                 }
             }
             if ok && best.as_ref().is_none_or(|b| worst < b.0) {
+                best_bytes = bytes_same;
                 best = Some((
                     worst,
                     mean,
@@ -198,6 +238,33 @@ fn main() {
         match best {
             Some((worst, _mean, preset)) => {
                 near += 1;
+                for (same, per) in &best_bytes {
+                    files_all += 1;
+                    files_same += *same as usize;
+                    if !*same {
+                        let mut d: Vec<&str> = per
+                            .iter()
+                            .filter(|(_, eq)| !eq)
+                            .map(|(k, _)| k.as_str())
+                            .collect();
+                        d.sort();
+                        d.dedup();
+                        let key = if per.is_empty() {
+                            "a different number of blocks".to_string()
+                        } else if d.is_empty() {
+                            "header or footer only".to_string()
+                        } else {
+                            d.join(" + ")
+                        };
+                        let e = why_not.entry(key).or_insert((0, s.name.clone()));
+                        e.0 += 1;
+                    }
+                    for (kind, eq) in per {
+                        let e = kinds.entry(kind.clone()).or_default();
+                        e.0 += *eq as usize;
+                        e.1 += 1;
+                    }
+                }
                 worst_overall = worst_overall.max(worst);
                 *by_preset.entry(preset.clone()).or_default() += 1;
                 if worst > 0.05 {
@@ -215,6 +282,15 @@ fn main() {
     println!("{near} are the same shapes, vertices and triangles; {differs} are not");
     println!("largest distance of any vertex, at each set's best preset: {worst_overall}");
     println!("best preset: {by_preset:?}");
+    for (why, (n, eg)) in &why_not {
+        println!("  not the same, {n:4}: {why}   e.g. {eg}");
+    }
+    println!(
+        "{files_same} of {files_all} files are theirs byte for byte; blocks the same, by kind:"
+    );
+    for (kind, (same, of)) in &kinds {
+        println!("  {kind}: {same} of {of}");
+    }
     far.sort_by(|a, b| b.0.total_cmp(&a.0));
     println!("{} sets with a vertex further than 0.05:", far.len());
     for (d, name) in far.iter().take(15) {

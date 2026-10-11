@@ -16,6 +16,7 @@ pub mod morph;
 pub mod osd;
 pub mod preset;
 pub mod set;
+pub mod tri;
 pub mod xml;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
