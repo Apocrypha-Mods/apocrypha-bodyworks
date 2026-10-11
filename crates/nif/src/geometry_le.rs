@@ -209,6 +209,45 @@ impl TriShapeData {
         })
     }
 
+    /// Keep only some vertices: `now[v]` is where vertex `v` is now, or
+    /// `None` when it is removed. A triangle goes when any of its vertices
+    /// does.
+    pub fn retain(&mut self, now: &[Option<u16>]) {
+        fn keep<T: Copy>(values: &mut Vec<T>, now: &[Option<u16>]) {
+            if values.len() == now.len() {
+                *values = values
+                    .iter()
+                    .zip(now)
+                    .filter(|(_, n)| n.is_some())
+                    .map(|(v, _)| *v)
+                    .collect();
+            }
+        }
+        keep(&mut self.positions, now);
+        keep(&mut self.normals, now);
+        keep(&mut self.tangents, now);
+        keep(&mut self.bitangents, now);
+        keep(&mut self.colors, now);
+        // One list of coordinates after another when there are several.
+        if !now.is_empty() && self.uvs.len().is_multiple_of(now.len()) {
+            self.uvs = self
+                .uvs
+                .chunks(now.len())
+                .flat_map(|set| set.iter().zip(now).filter(|(_, n)| n.is_some()))
+                .map(|(uv, _)| *uv)
+                .collect();
+        }
+        let at = |v: u16| now.get(v as usize).copied().flatten();
+        self.triangles = self
+            .triangles
+            .iter()
+            .filter_map(|t| Some([at(t[0])?, at(t[1])?, at(t[2])?]))
+            .collect();
+        // Which vertices share a place is only a hint to the game, and is
+        // no longer true.
+        self.match_groups.clear();
+    }
+
     pub fn write(&self) -> Vec<u8> {
         let mut w = Writer::default();
         w.i32(self.group_id);

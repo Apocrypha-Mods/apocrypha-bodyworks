@@ -173,3 +173,98 @@ fn a_build_matches_the_bodies_cbbe_was_shipped_with() {
         }
     }
 }
+
+/// A game-like folder made of several, a later one's file replacing an
+/// earlier one's, for the CBBE sample's option folders.
+fn layered(roots: &[&str]) -> Option<std::collections::BTreeMap<String, PathBuf>> {
+    fn walk(dir: &Path, rel: &str, into: &mut std::collections::BTreeMap<String, PathBuf>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let rel = if rel.is_empty() {
+                name
+            } else {
+                format!("{rel}/{name}")
+            };
+            if e.path().is_dir() {
+                walk(&e.path(), &rel, into);
+            } else {
+                into.insert(rel.to_lowercase(), e.path());
+            }
+        }
+    }
+    let mut all = std::collections::BTreeMap::new();
+    for root in roots {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scratch/samples/cbbe")
+            .join(root);
+        if !dir.is_dir() {
+            return None;
+        }
+        walk(&dir, "", &mut all);
+    }
+    Some(all)
+}
+
+#[test]
+fn vertices_a_set_takes_out_are_the_ones_the_original_took_out() {
+    use apoc_bodyslide::build;
+    use apoc_nif::skin::{SkinInstance, SkinPartition};
+    let Some(all) = layered(&["@required", "@conditional-3"]) else {
+        return;
+    };
+    let tools = "data/calientetools/bodyslide/";
+    let files = |path: &str| {
+        all.get(&format!("{tools}{}", path.to_lowercase()))
+            .and_then(|p| std::fs::read(p).ok())
+    };
+    let sets: Vec<set::SliderSet> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with(&format!("{tools}slidersets/")) && k.ends_with(".osp"))
+        .flat_map(|(_, p)| set::read(&std::fs::read(p).unwrap()).unwrap_or_default())
+        .collect();
+    let shapes = |bytes: &[u8]| {
+        let nif = apoc_nif::Nif::read(bytes).unwrap();
+        apoc_nif::mesh::shapes(&nif)
+            .into_iter()
+            .map(|at| apoc_nif::mesh::read(&nif, at).unwrap())
+            .map(|m| (m.name, m.positions.len(), m.triangles.len()))
+            .collect::<Vec<_>>()
+    };
+    // Gauntlets over hands: the list names every vertex of the hands and
+    // marks 1,136 of them. A robe over a body: most of the body goes, and
+    // two of its three parts with it.
+    for (name, theirs) in [
+        (
+            "CBBE Vanilla - Hands - Steel",
+            "data/meshes/armor/steel/f/gauntlets_1.nif",
+        ),
+        (
+            "CBBE Dawnguard - Body - Blind Moth Priest",
+            "data/meshes/dlc01/clothes/blindmothpriest/blindmothpriestrobesf_1.nif",
+        ),
+    ] {
+        let s = sets.iter().find(|s| s.name == name).unwrap();
+        let built = build::build(s, None, &files).unwrap();
+        let ours = &built.outputs[1].bytes;
+        assert_eq!(
+            shapes(ours),
+            shapes(&std::fs::read(&all[theirs]).unwrap()),
+            "{name}"
+        );
+    }
+    let s = sets
+        .iter()
+        .find(|s| s.name == "CBBE Dawnguard - Body - Blind Moth Priest")
+        .unwrap();
+    let built = build::build(s, None, &files).unwrap();
+    let nif = apoc_nif::Nif::read(&built.outputs[1].bytes).unwrap();
+    let body = apoc_nif::mesh::shapes(&nif)[0];
+    let shape = apoc_nif::geometry::TriShape::read(&nif.blocks[body].data, 100).unwrap();
+    let instance = SkinInstance::read(&nif.blocks[shape.skin as usize].data, true).unwrap();
+    assert_eq!(instance.body_parts, Some(vec![(257, 32)]));
+    let partition =
+        SkinPartition::read(&nif.blocks[instance.partition as usize].data, 100).unwrap();
+    assert_eq!(partition.partitions.len(), 1);
+    assert_eq!(partition.partitions[0].vertex_count(), 321);
+    assert_eq!(partition.vertex_data.len(), 321 * 32);
+}

@@ -293,6 +293,57 @@ impl TriShape {
         w.out
     }
 
+    /// Keep only some vertices: `now[v]` is where vertex `v` is now, or
+    /// `None` when it is removed. A triangle goes when any of its vertices
+    /// does. For a shape whose vertices are elsewhere this changes nothing
+    /// here; its skin partition holds them.
+    pub fn retain(&mut self, now: &[Option<u16>], dynamic: bool) {
+        let stride = (self.vertex_desc & 0xf) as usize * 4;
+        let kept = now.iter().filter(|n| n.is_some()).count();
+        if dynamic {
+            // A face part's positions follow the shape, 16 bytes a vertex.
+            if let Some(size) = self.rest.get(..4) {
+                let size = u32::from_le_bytes([size[0], size[1], size[2], size[3]]) as usize;
+                if size == now.len() * 16 && self.rest.len() >= 4 + size {
+                    let rows: Vec<u8> = self.rest[4..4 + size]
+                        .chunks(16)
+                        .zip(now)
+                        .filter(|(_, n)| n.is_some())
+                        .flat_map(|(row, _)| row.iter().copied())
+                        .collect();
+                    let mut rest = (rows.len() as u32).to_le_bytes().to_vec();
+                    rest.extend(rows);
+                    rest.extend_from_slice(&self.rest[4 + size..]);
+                    self.rest = rest;
+                }
+            }
+        }
+        if stride == 0 || self.vertex_data.len() != now.len() * stride {
+            return;
+        }
+        self.vertex_data = self
+            .vertex_data
+            .chunks(stride)
+            .zip(now)
+            .filter(|(_, n)| n.is_some())
+            .flat_map(|(row, _)| row.iter().copied())
+            .collect();
+        let at = |v: u16| now.get(v as usize).copied().flatten();
+        self.triangles = self
+            .triangles
+            .iter()
+            .filter_map(|t| Some([at(t[0])?, at(t[1])?, at(t[2])?]))
+            .collect();
+        self.vertex_count = kept as u16;
+        self.stated_size = None;
+        self.stated_triangles = self.triangles.len() as u32;
+        // What the editor keeps for particles is positions and triangles
+        // again; it is dropped, not kept wrong.
+        if let Some(p) = &mut self.particle {
+            *p = 0u32.to_le_bytes().to_vec();
+        }
+    }
+
     pub fn layout(&self, stream: u32) -> Option<Layout> {
         Layout::of(self.vertex_desc, stream)
     }

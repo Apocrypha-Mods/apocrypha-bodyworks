@@ -329,6 +329,47 @@ pub fn stored_tangents(nif: &Nif, block: usize) -> Option<TangentSpace> {
     (both.len() == n && n > 0).then(|| both.into_iter().unzip())
 }
 
+/// Give a shape new texture coordinates, in every place the file keeps
+/// them. A shape that has none is left as it is.
+pub fn set_uvs(nif: &mut Nif, block: usize, uvs: &[[f32; 2]]) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    if nif.kind_of(block) == "NiTriShape" {
+        let (_, at, mut data) = le_shape(nif, block)?;
+        // The first list of coordinates is the one a slider moves.
+        if data.uvs.len() >= uvs.len() && !uvs.is_empty() {
+            data.uvs[..uvs.len()].copy_from_slice(uvs);
+            nif.blocks[at].data = data.write();
+        }
+        return Ok(());
+    }
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let layout = Layout::of(shape.vertex_desc, stream)
+        .ok_or_else(|| NifError::Unsupported(format!("vertex layout {:#x}", shape.vertex_desc)))?;
+    if !layout.has(attr::UV) {
+        return Ok(());
+    }
+    let apply = |target: &mut TriShape| {
+        let n = target.vertex_data.len() / layout.stride.max(1);
+        for (v, uv) in uvs.iter().enumerate().take(n) {
+            target.set_uv(&layout, v, *uv);
+        }
+    };
+    if let Some((at, mut p)) = partition_of(nif, &shape) {
+        if !p.vertex_data.is_empty() {
+            let mut view = shape.clone();
+            view.vertex_data = std::mem::take(&mut p.vertex_data);
+            apply(&mut view);
+            p.vertex_data = view.vertex_data;
+            nif.blocks[at].data = p.write(stream);
+        }
+    }
+    if shape.has_vertices() {
+        apply(&mut shape);
+        nif.blocks[block].data = shape.write(stream);
+    }
+    Ok(())
+}
+
 /// Give a shape new normals, and with them new tangents and bitangents
 /// where it stores those, in every place the file keeps them. A shape that
 /// stores no normals (a body lit from a normal map) is left as it is.

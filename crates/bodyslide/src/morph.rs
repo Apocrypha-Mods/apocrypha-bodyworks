@@ -46,3 +46,23 @@ pub fn add(positions: &mut [[f32; 3]], diffs: &[Diff], amount: f32) {
         }
     }
 }
+
+/// Add one list to a shape's texture coordinates, `amount` of the way. A
+/// list for coordinates uses the first two of each offset's three numbers.
+pub fn add_uv(uvs: &mut [[f32; 2]], diffs: &[Diff], amount: f32) {
+    if amount == 0.0 {
+        return;
+    }
+    for d in diffs {
+        if let Some(uv) = uvs.get_mut(d.vertex as usize) {
+            uv[0] += d.offset[0] * amount;
+            uv[1] += d.offset[1] * amount;
+        }
+    }
+}
+
+/// Whether a list used to take vertices out marks this one: any offset at
+/// all does. Such a list can name every vertex and mark only some.
+pub fn marks(diff: &Diff) -> bool {
+    diff.offset != [0.0; 3]
+}

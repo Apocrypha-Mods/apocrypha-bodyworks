@@ -10,6 +10,7 @@
 //! Written from the files themselves and from published descriptions of the
 //! format. Not derived from any other program's source.
 
+pub mod edit;
 pub mod geometry;
 pub mod geometry_le;
 pub mod io;

@@ -214,6 +214,102 @@ impl Partition {
     }
 }
 
+/// The rows of `values`, `per` to a vertex, for the vertices kept.
+fn kept_rows<T: Copy>(values: &[T], per: usize, kept: &[bool]) -> Vec<T> {
+    if per == 0 {
+        return Vec::new();
+    }
+    values
+        .chunks(per)
+        .zip(kept)
+        .filter(|(_, k)| **k)
+        .flat_map(|(row, _)| row.iter().copied())
+        .collect()
+}
+
+impl Partition {
+    /// Keep only the vertices still in the shape: `now[v]` is where the
+    /// shape's vertex `v` is now, or `None` when it was removed. A triangle
+    /// goes when any of its vertices did. Says whether a triangle is left.
+    pub fn retain(&mut self, now: &[Option<u16>]) -> Result<bool, NifError> {
+        if self.strips.iter().any(|s| !s.is_empty()) {
+            return Err(NifError::Unsupported(
+                "removing vertices from a partition kept as strips".into(),
+            ));
+        }
+        let at = |v: u16| now.get(v as usize).copied().flatten();
+        // Each of this partition's own vertices: whether it stays, and
+        // where among its own it then is.
+        let kept: Vec<bool> = match &self.vertex_map {
+            Some(map) => map.iter().map(|v| at(*v).is_some()).collect(),
+            None => (0..self.vertex_count).map(|v| at(v).is_some()).collect(),
+        };
+        let mut next = 0u16;
+        let own: Vec<Option<u16>> = kept
+            .iter()
+            .map(|k| {
+                k.then(|| {
+                    next += 1;
+                    next - 1
+                })
+            })
+            .collect();
+        let per = self.weights_per_vertex as usize;
+        if let Some(w) = &mut self.vertex_weights {
+            *w = kept_rows(w, per, &kept);
+        }
+        if let Some(b) = &mut self.bone_indices {
+            *b = kept_rows(b, per, &kept);
+        }
+        // Some files state the triangles over the shape's vertices in both
+        // places, some over the partition's own in the first.
+        let same = self.triangles.is_some() && self.triangles == self.true_triangles;
+        if let Some(t) = &mut self.true_triangles {
+            *t = t
+                .iter()
+                .filter_map(|t| Some([at(t[0])?, at(t[1])?, at(t[2])?]))
+                .collect();
+        }
+        if same {
+            self.triangles = self.true_triangles.clone();
+        } else if let Some(t) = &mut self.triangles {
+            let own = |v: u16| own.get(v as usize).copied().flatten();
+            *t = t
+                .iter()
+                .filter_map(|t| Some([own(t[0])?, own(t[1])?, own(t[2])?]))
+                .collect();
+        }
+        if let Some(map) = &mut self.vertex_map {
+            *map = map.iter().filter_map(|v| at(*v)).collect();
+        }
+        self.vertex_count = next;
+        self.triangle_count = self
+            .true_triangles
+            .as_ref()
+            .or(self.triangles.as_ref())
+            .map_or(0, Vec::len) as u16;
+        Ok(self.triangle_count > 0)
+    }
+
+    pub fn triangle_count(&self) -> usize {
+        self.triangle_count as usize
+    }
+}
+
+impl SkinData {
+    /// Keep only the weights of vertices still in the shape (see
+    /// [`Partition::retain`]).
+    pub fn retain(&mut self, now: &[Option<u16>]) {
+        for bone in &mut self.bones {
+            bone.weights = bone
+                .weights
+                .iter()
+                .filter_map(|(v, w)| Some((now.get(*v as usize).copied().flatten()?, *w)))
+                .collect();
+        }
+    }
+}
+
 /// `NiSkinPartition`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinPartition {
@@ -241,6 +337,35 @@ fn write_triangles(w: &mut Writer, triangles: &[[u16; 3]]) {
 }
 
 impl SkinPartition {
+    /// Keep only the vertices still in the shape (see [`Partition::retain`]),
+    /// and only the partitions that still have a triangle. Says which of the
+    /// partitions were kept, in their old order.
+    pub fn retain(&mut self, now: &[Option<u16>]) -> Result<Vec<bool>, NifError> {
+        if let Some(size) = self.vertex_size.map(|s| s as usize).filter(|s| *s > 0) {
+            if !self.vertex_data.is_empty() {
+                if self.vertex_data.len() != now.len() * size {
+                    return Err(NifError::Corrupt(
+                        "a skin partition whose vertices are not the shape's".into(),
+                    ));
+                }
+                self.vertex_data = self
+                    .vertex_data
+                    .chunks(size)
+                    .zip(now)
+                    .filter(|(_, n)| n.is_some())
+                    .flat_map(|(row, _)| row.iter().copied())
+                    .collect();
+            }
+        }
+        let mut kept = Vec::with_capacity(self.partitions.len());
+        for p in &mut self.partitions {
+            kept.push(p.retain(now)?);
+        }
+        let mut flags = kept.iter();
+        self.partitions.retain(|_| *flags.next().unwrap_or(&true));
+        Ok(kept)
+    }
+
     pub fn read(data: &[u8], stream: u32) -> Result<Self, NifError> {
         let mut r = Reader::new(data);
         let count = r.count(1)?;

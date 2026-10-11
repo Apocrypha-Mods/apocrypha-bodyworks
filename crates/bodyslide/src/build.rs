@@ -6,7 +6,7 @@ use crate::osd::SliderData;
 use crate::preset::Preset;
 use crate::set::{Shape, SliderSet};
 use crate::Error;
-use apoc_nif::{mesh, Nif};
+use apoc_nif::{edit, mesh, Nif};
 use std::collections::HashMap;
 
 /// Where a build reads its files from: the BodySlide folder, by a path under
@@ -121,8 +121,12 @@ pub fn build_at(
     for (heavy, suffix) in weights {
         let values = if *heavy { big } else { small };
         let mut nif = base.clone();
+        // Shapes left with nothing to draw, to take out once the rest is done.
+        let mut emptied = Vec::new();
         for (shape, m) in &shapes {
             let mut positions = m.positions.clone();
+            let mut uvs = m.uvs.clone();
+            let mut gone = vec![false; positions.len()];
             for (slider, value) in set.sliders.iter().zip(values) {
                 let amount = morph::applied(slider, *value);
                 if amount == 0.0 {
@@ -130,47 +134,75 @@ pub fn build_at(
                 }
                 let mine = slider.data.iter().filter(|d| d.target == shape.target);
                 for d in mine {
-                    if slider.zap || slider.uv {
-                        let what = if slider.zap {
-                            "removes vertices"
-                        } else {
-                            "moves the texture"
-                        };
-                        let note = format!("{} {what}, which is not built yet.", slider.name);
-                        if !built.notes.contains(&note) {
-                            built.notes.push(note);
-                        }
-                        continue;
-                    }
                     let folder = if d.local {
                         set.data_folder.as_str()
                     } else {
                         data_folder(set, shape)
                     };
-                    match list(folder, &d.file, &d.list) {
-                        Some(diffs) => morph::add(&mut positions, &diffs, amount),
-                        None => {
-                            let note =
-                                format!("{}: its data for {} is missing.", slider.name, shape.name);
-                            if !built.notes.contains(&note) {
-                                built.notes.push(note);
+                    let Some(diffs) = list(folder, &d.file, &d.list) else {
+                        let note =
+                            format!("{}: its data for {} is missing.", slider.name, shape.name);
+                        if !built.notes.contains(&note) {
+                            built.notes.push(note);
+                        }
+                        continue;
+                    };
+                    if slider.zap {
+                        // Not a move: the vertices it marks are taken out. A
+                        // list can name every vertex and mark only some, the
+                        // rest with an offset of nothing.
+                        for diff in diffs.iter().filter(|d| morph::marks(d)) {
+                            if let Some(g) = gone.get_mut(diff.vertex as usize) {
+                                *g = true;
                             }
                         }
+                    } else if slider.uv {
+                        morph::add_uv(&mut uvs, &diffs, amount);
+                    } else {
+                        morph::add(&mut positions, &diffs, amount);
                     }
                 }
             }
-            mesh::set_positions(&mut nif, m.block, &positions)
-                .map_err(|e| Error::Invalid(format!("{}: {e}", shape.name)))?;
+            let fail = |e: apoc_nif::NifError| Error::Invalid(format!("{}: {e}", shape.name));
+            let moved = positions != m.positions;
+            let zapped = gone.contains(&true);
+            if uvs != m.uvs && uvs.len() == positions.len() {
+                mesh::set_uvs(&mut nif, m.block, &uvs).map_err(fail)?;
+            }
+            if zapped {
+                let left = edit::remove_vertices(&mut nif, m.block, &gone).map_err(fail)?;
+                let keep = |i: &usize| !gone[*i];
+                positions = (0..positions.len())
+                    .filter(keep)
+                    .map(|i| positions[i])
+                    .collect();
+                if left == 0 {
+                    emptied.push(m.block);
+                    continue;
+                }
+            }
+            mesh::set_positions(&mut nif, m.block, &positions).map_err(fail)?;
             // Moved, it has to be lit as the shape it now is. A shape that
             // stores no normals (a body, lit from a normal map) has none to
             // work out.
-            if m.normals.len() == positions.len() && positions != m.positions {
-                let normals = apoc_nif::shading::smooth_normals(&positions, &m.triangles);
-                let (tangents, bitangents) =
-                    apoc_nif::shading::tangent_space(&positions, &m.uvs, &normals, &m.triangles);
+            if (moved || zapped) && m.normals.len() == m.positions.len() {
+                let now = mesh::read(&nif, m.block).map_err(fail)?;
+                let normals = apoc_nif::shading::smooth_normals(&now.positions, &now.triangles);
+                let (tangents, bitangents) = apoc_nif::shading::tangent_space(
+                    &now.positions,
+                    &now.uvs,
+                    &normals,
+                    &now.triangles,
+                );
                 mesh::set_shading(&mut nif, m.block, &normals, &tangents, &bitangents)
-                    .map_err(|e| Error::Invalid(format!("{}: {e}", shape.name)))?;
+                    .map_err(fail)?;
             }
+        }
+        if let Err(e) = edit::remove_shapes(&mut nif, &emptied) {
+            // Left in, with nothing in it: drawn as nothing.
+            built
+                .notes
+                .push(format!("A shape with nothing left was kept: {e}."));
         }
         built.outputs.push(Output {
             path: format!(
