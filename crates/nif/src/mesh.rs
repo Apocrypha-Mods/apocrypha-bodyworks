@@ -305,3 +305,82 @@ pub fn bounding_sphere(points: &[[f32; 3]]) -> ([f32; 3], f32) {
         .fold(0.0f32, f32::max);
     (center, radius)
 }
+
+/// A tangent and a bitangent for every vertex.
+pub type TangentSpace = (Vec<[f32; 3]>, Vec<[f32; 3]>);
+
+/// The tangent and bitangent each vertex of a shape stores, when it stores
+/// them.
+pub fn stored_tangents(nif: &Nif, block: usize) -> Option<TangentSpace> {
+    let stream = nif.header.stream.version;
+    if nif.kind_of(block) == "NiTriShape" {
+        let (_, _, data) = le_shape(nif, block).ok()?;
+        return (!data.tangents.is_empty()).then_some((data.tangents, data.bitangents));
+    }
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream).ok()?;
+    let layout = Layout::of(shape.vertex_desc, stream)?;
+    if !shape.has_vertices() {
+        shape.vertex_data = partition_of(nif, &shape)?.1.vertex_data;
+    }
+    let n = shape.vertex_data.len() / layout.stride.max(1);
+    let both: Vec<_> = (0..n)
+        .filter_map(|v| shape.tangent_space(&layout, v))
+        .collect();
+    (both.len() == n && n > 0).then(|| both.into_iter().unzip())
+}
+
+/// Give a shape new normals, and with them new tangents and bitangents
+/// where it stores those, in every place the file keeps them. A shape that
+/// stores no normals (a body lit from a normal map) is left as it is.
+pub fn set_shading(
+    nif: &mut Nif,
+    block: usize,
+    normals: &[[f32; 3]],
+    tangents: &[[f32; 3]],
+    bitangents: &[[f32; 3]],
+) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    if nif.kind_of(block) == "NiTriShape" {
+        let (_, at, mut data) = le_shape(nif, block)?;
+        if data.normals.len() == normals.len() {
+            data.normals = normals.to_vec();
+        }
+        if data.tangents.len() == tangents.len() && data.bitangents.len() == bitangents.len() {
+            data.tangents = tangents.to_vec();
+            data.bitangents = bitangents.to_vec();
+        }
+        nif.blocks[at].data = data.write();
+        return Ok(());
+    }
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let layout = Layout::of(shape.vertex_desc, stream)
+        .ok_or_else(|| NifError::Unsupported(format!("vertex layout {:#x}", shape.vertex_desc)))?;
+    if !layout.has(attr::NORMAL) {
+        return Ok(());
+    }
+    let with_tangents = layout.has(attr::TANGENT) && tangents.len() == normals.len();
+    let partition = partition_of(nif, &shape);
+    let apply = |target: &mut TriShape| {
+        let n = target.vertex_data.len() / layout.stride.max(1);
+        for v in 0..n.min(normals.len()) {
+            target.set_normal(&layout, v, normals[v]);
+            if with_tangents {
+                target.set_tangent_space(&layout, v, tangents[v], bitangents[v]);
+            }
+        }
+    };
+    if let Some((at, mut p)) = partition {
+        if !p.vertex_data.is_empty() {
+            let mut view = shape.clone();
+            view.vertex_data = std::mem::take(&mut p.vertex_data);
+            apply(&mut view);
+            p.vertex_data = view.vertex_data;
+            nif.blocks[at].data = p.write(stream);
+        }
+    }
+    if shape.has_vertices() {
+        apply(&mut shape);
+        nif.blocks[block].data = shape.write(stream);
+    }
+    Ok(())
+}

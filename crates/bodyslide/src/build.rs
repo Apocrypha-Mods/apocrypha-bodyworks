@@ -136,6 +136,16 @@ pub fn build(set: &SliderSet, preset: Option<&Preset>, files: &dyn Files) -> Res
             }
             mesh::set_positions(&mut nif, m.block, &positions)
                 .map_err(|e| Error::Invalid(format!("{}: {e}", shape.name)))?;
+            // Moved, it has to be lit as the shape it now is. A shape that
+            // stores no normals (a body, lit from a normal map) has none to
+            // work out.
+            if m.normals.len() == positions.len() && positions != m.positions {
+                let normals = apoc_nif::shading::smooth_normals(&positions, &m.triangles);
+                let (tangents, bitangents) =
+                    apoc_nif::shading::tangent_space(&positions, &m.uvs, &normals, &m.triangles);
+                mesh::set_shading(&mut nif, m.block, &normals, &tangents, &bitangents)
+                    .map_err(|e| Error::Invalid(format!("{}: {e}", shape.name)))?;
+            }
         }
         built.outputs.push(Output {
             path: format!(
