@@ -56,6 +56,31 @@ fn data_folder<'a>(set: &'a SliderSet, shape: &'a Shape) -> &'a str {
 /// Build `set` at `preset`'s values (the set's own defaults where the preset
 /// says nothing, or throughout with no preset).
 pub fn build(set: &SliderSet, preset: Option<&Preset>, files: &dyn Files) -> Result<Built, Error> {
+    build_at(
+        set,
+        &morph::values(set, preset, false),
+        &morph::values(set, preset, true),
+        files,
+    )
+}
+
+/// Build `set` with each slider at the given value, in percent, on the
+/// lightest (`small`) and the heaviest (`big`) body: one value a slider, in
+/// the set's order.
+pub fn build_at(
+    set: &SliderSet,
+    small: &[f32],
+    big: &[f32],
+    files: &dyn Files,
+) -> Result<Built, Error> {
+    if small.len() != set.sliders.len() || big.len() != set.sliders.len() {
+        return Err(Error::Invalid(format!(
+            "{} sliders, and {} and {} values",
+            set.sliders.len(),
+            small.len(),
+            big.len()
+        )));
+    }
     let source_path = join(&["ShapeData", &set.data_folder, &set.source_file]);
     let source = files
         .read(&source_path)
@@ -93,12 +118,12 @@ pub fn build(set: &SliderSet, preset: Option<&Preset>, files: &dyn Files) -> Res
     } else {
         &[(true, "")]
     };
-    for (big, suffix) in weights {
-        let values = morph::values(set, preset, *big);
+    for (heavy, suffix) in weights {
+        let values = if *heavy { big } else { small };
         let mut nif = base.clone();
         for (shape, m) in &shapes {
             let mut positions = m.positions.clone();
-            for (slider, value) in set.sliders.iter().zip(&values) {
+            for (slider, value) in set.sliders.iter().zip(values) {
                 let amount = morph::applied(slider, *value);
                 if amount == 0.0 {
                     continue;

@@ -1,0 +1,16 @@
+[package]
+name = "apoc-bodyslide-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The add-on's WebAssembly module: what the interface asks of the format and build crates, over one call."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+apoc-bodyslide = { path = "../bodyslide" }
+apoc-nif = { path = "../nif" }
+serde = { workspace = true }
+serde_json = { workspace = true }
