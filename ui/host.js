@@ -5,6 +5,7 @@
 //   hello                          { api, game: { id, name }, theme }
 //   files.list  { folder }         [{ path, size }]   files the enabled mods put under it
 //   files.read  { path }           ArrayBuffer
+//   files.picture { path, longest } ArrayBuffer       a texture, as a PNG no longer than `longest` a side
 //   output.write { name, files }   { files }          files: [{ path, bytes }], into the mod `name`
 //   apply.review                   opens the mod manager's own review of what Apply will do
 //

@@ -217,6 +217,8 @@ async function choose(set, presetName) {
         sum: new Float32Array(base.length),
         weld: welded(base),
         triangles: u32.slice(s.triangles[0], s.triangles[0] + s.triangles[1]),
+        uvs: f32.slice(s.uvs[0], s.uvs[0] + s.uvs[1]),
+        texture: (s.textures || [])[0] || null,
         shown: null,
         zapped: "",
         zaps: (s.zaps || []).map((z) => ({
@@ -244,10 +246,35 @@ async function choose(set, presetName) {
   state.busy = null;
   render();
   if (state.shapes.length) {
-    view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles })));
+    view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs })));
     reshape();
+    paint(set);
     view.frame(state.shapes.map((s) => s.base));
   } else view.show([]);
+}
+
+/** Pictures already fetched, by the path a shape names. */
+const pictures = new Map();
+
+/** Paint each shape with its texture, where the mods have it. */
+function paint(set) {
+  state.shapes.forEach((s, i) => {
+    if (!s.texture) return;
+    const path = `Data/${s.texture.replace(/\\/g, "/").replace(/^\/+/, "")}`;
+    if (!pictures.has(path)) {
+      pictures.set(
+        path,
+        host
+          .request("files.picture", { path, longest: 2048 })
+          .then((png) => createImageBitmap(new Blob([png], { type: "image/png" })))
+          .catch(() => null),
+      );
+    }
+    pictures.get(path).then((picture) => {
+      // Another set may have been opened while this was on its way.
+      if (picture && state.set === set && state.shapes[i] === s) view.paint_with(i, picture);
+    });
+  });
 }
 
 // ── Building ───────────────────────────────────────────────────────────────

@@ -2,21 +2,25 @@
 // when something changed.
 
 const VS = `#version 300 es
-in vec3 p; in vec3 n;
+in vec3 p; in vec3 n; in vec2 t;
 uniform mat4 mvp; uniform mat3 nm;
-out vec3 vn;
-void main() { vn = nm * n; gl_Position = mvp * vec4(p, 1.0); }`;
+out vec3 vn; out vec2 vt;
+void main() { vn = nm * n; vt = t; gl_Position = mvp * vec4(p, 1.0); }`;
 
 const FS = `#version 300 es
 precision highp float;
-in vec3 vn; out vec4 o;
-uniform vec3 tint;
+in vec3 vn; in vec2 vt; out vec4 o;
+uniform vec3 tint; uniform sampler2D skin; uniform float painted;
 void main() {
   vec3 n = normalize(vn);
+  // The texture where the shape has one, the plain tint where it has not.
+  vec3 base = mix(tint, pow(texture(skin, vt).rgb, vec3(2.2)), painted);
   float key = max(dot(n, normalize(vec3(0.35, 0.55, 0.75))), 0.0);
   float fill = max(dot(n, normalize(vec3(-0.6, 0.1, 0.4))), 0.0);
   float rim = pow(1.0 - max(n.z, 0.0), 3.0);
-  vec3 c = tint * (0.22 + 0.72 * key + 0.2 * fill) + vec3(0.12) * rim;
+  // A painted shape is lit harder: a skin texture is darker than the tint.
+  float light = (0.22 + 0.72 * key + 0.2 * fill) * mix(1.0, 1.9, painted);
+  vec3 c = base * light + vec3(0.12) * rim * mix(1.0, 0.35, painted);
   o = vec4(pow(c, vec3(1.0 / 2.2)), 1.0);
 }`;
 
@@ -52,10 +56,12 @@ export class View {
     gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FS));
     gl.bindAttribLocation(prog, 0, "p");
     gl.bindAttribLocation(prog, 1, "n");
+    gl.bindAttribLocation(prog, 2, "t");
     gl.linkProgram(prog);
     this.uMvp = gl.getUniformLocation(prog, "mvp");
     this.uNm = gl.getUniformLocation(prog, "nm");
     this.uTint = gl.getUniformLocation(prog, "tint");
+    this.uPainted = gl.getUniformLocation(prog, "painted");
     this.shapes = [];
     this.turn = FRONT;
     this.tilt = 0.08;
@@ -110,10 +116,12 @@ export class View {
     c.addEventListener("dblclick", () => this.frame());
   }
 
-  /** Replace what is shown. Each shape: `{ positions, triangles }`. */
+  /** Replace what is shown. Each shape: `{ positions, triangles, uvs }`. */
   show(shapes) {
     const gl = this.gl;
     for (const s of this.shapes) {
+      gl.deleteBuffer(s.tb);
+      if (s.skin) gl.deleteTexture(s.skin);
       gl.deleteBuffer(s.pb);
       gl.deleteBuffer(s.nb);
       gl.deleteBuffer(s.ib);
@@ -132,12 +140,35 @@ export class View {
       gl.bufferData(gl.ARRAY_BUFFER, s.positions.byteLength, gl.DYNAMIC_DRAW);
       gl.enableVertexAttribArray(1);
       gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+      const tb = gl.createBuffer();
+      if (s.uvs && s.uvs.length === (s.positions.length / 3) * 2) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, tb);
+        gl.bufferData(gl.ARRAY_BUFFER, s.uvs, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(2);
+        gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 0, 0);
+      }
       const ib = gl.createBuffer();
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, s.triangles, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
-      return { vao, pb, nb, ib, count: s.triangles.length, shown: true };
+      return { vao, pb, nb, tb, ib, count: s.triangles.length, shown: true, skin: null };
     });
+  }
+
+  /** Paint shape `i` with a picture (an ImageBitmap), laid by its texture coordinates. */
+  paint_with(i, picture) {
+    const gl = this.gl;
+    const s = this.shapes[i];
+    if (!s) return;
+    if (s.skin) gl.deleteTexture(s.skin);
+    s.skin = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, s.skin);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    this.draw();
   }
 
   /** Draw only these triangles of shape `i`. */
@@ -251,6 +282,8 @@ export class View {
     for (const s of this.shapes) {
       if (!s.shown) continue;
       gl.bindVertexArray(s.vao);
+      gl.uniform1f(this.uPainted, s.skin ? 1 : 0);
+      if (s.skin) gl.bindTexture(gl.TEXTURE_2D, s.skin);
       gl.drawElements(gl.TRIANGLES, s.count, gl.UNSIGNED_INT, 0);
     }
     gl.bindVertexArray(null);

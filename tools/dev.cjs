@@ -52,6 +52,7 @@ const answers = {
   hello: async () => ({ api: 1, game: { id: "skyrim-se", name: "Skyrim Special Edition" }, theme: { dark: true, vars: {} } }),
   fonts: async () => [],
   "files.list": async (a) => (await fetch("/list?folder=" + encodeURIComponent(a.folder))).json(),
+  "files.picture": async (a) => { const r = await fetch("/picture?longest=" + (a.longest || 2048) + "&path=" + encodeURIComponent(a.path)); if (!r.ok) throw new Error("No such texture."); return r.arrayBuffer(); },
   "files.read": async (a) => { const r = await fetch("/read?path=" + encodeURIComponent(a.path)); if (!r.ok) throw new Error("No such file."); return r.arrayBuffer(); },
   "output.write": async (a) => { for (const f of a.files) await fetch("/write?path=" + encodeURIComponent(f.path), { method: "POST", body: f.bytes }); window.written = (window.written || []).concat(a.files.map((f) => f.path)); return { files: a.files.length }; },
   "apply.review": async () => { window.reviewed = true; },
@@ -86,6 +87,16 @@ http
     if (url.pathname === "/read") {
       const file = find(url.searchParams.get("path"));
       return file ? send(200, fs.readFileSync(file), "application/octet-stream") : send(404, "missing");
+    }
+    if (url.pathname === "/picture") {
+      // The mod manager decodes textures itself; here ImageMagick stands in.
+      const file = find(url.searchParams.get("path"));
+      if (!file) return send(404, "missing");
+      const longest = Number(url.searchParams.get("longest")) || 2048;
+      require("child_process").execFile("magick", [`dds:${file}[0]`, "-alpha", "off", "-resize", `${longest}x${longest}>`, "png:-"], { encoding: "buffer", maxBuffer: 1 << 28 }, (err, out) =>
+        err ? send(404, "not readable") : send(200, out, "image/png"),
+      );
+      return;
     }
     if (url.pathname === "/write") {
       const rel = path.normalize(url.searchParams.get("path"));
