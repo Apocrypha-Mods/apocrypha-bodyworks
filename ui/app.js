@@ -63,6 +63,13 @@ const state = {
   built: null,
   /** Whether a build also writes the morph file RaceMenu reads. */
   morphs: remembered.get("morphs") === "1",
+  /** Which of the two tools is showing: "bodyslide" or "studio". */
+  mode: remembered.get("mode") === "studio" ? "studio" : "bodyslide",
+  /** Outfit Studio: where each slider stands while the outfit is looked at. */
+  at: [],
+  /** Outfit Studio: the shape picked in the list, and which list is showing. */
+  picked: 0,
+  side: "shapes",
   busy: null,
   problem: null,
 };
@@ -141,7 +148,7 @@ function remaining(s, values) {
 
 /** Move every shape to where the sliders put it, and show it. */
 function reshape() {
-  const values = state.heavy ? state.big : state.small;
+  const values = state.mode === "studio" ? state.at : state.heavy ? state.big : state.small;
   state.shapes.forEach((s, i) => {
     const left = remaining(s, values);
     if (left) {
@@ -217,6 +224,9 @@ async function choose(set, presetName) {
         sum: new Float32Array(base.length),
         weld: welded(base),
         triangles: u32.slice(s.triangles[0], s.triangles[0] + s.triangles[1]),
+        bones: s.bones || [],
+        reference: Boolean(s.reference),
+        hidden: false,
         uvs: f32.slice(s.uvs[0], s.uvs[0] + s.uvs[1]),
         texture: (s.textures || [])[0] || null,
         shown: null,
@@ -240,6 +250,10 @@ async function choose(set, presetName) {
     const fits = presetsFor(set);
     state.preset = fits.find((p) => p.name === presetName) || fits.find((p) => p.name === state.preset?.name) || fits[0] || null;
     Object.assign(state, presetValues(set, state.preset));
+    // In Outfit Studio the outfit starts as it was made: nothing moved, and
+    // only what a set takes out by default taken out.
+    state.at = set.sliders.map((sl) => (sl.zap ? sl.big : 0));
+    state.picked = Math.max(0, state.shapes.findIndex((sh) => !sh.reference));
   } catch (e) {
     state.problem = e.message;
   }
@@ -247,6 +261,7 @@ async function choose(set, presetName) {
   render();
   if (state.shapes.length) {
     view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs })));
+    view.look({ picked: state.mode === "studio" ? state.picked : -1 });
     reshape();
     paint(set);
     view.frame(state.shapes.map((s) => s.base));
@@ -749,6 +764,210 @@ function foot() {
 
 let canvas = null;
 
+/** The switch between the two tools, at the start of either's top row. */
+function modes() {
+  const go = (mode) => () => {
+    if (state.mode === mode) return;
+    state.mode = mode;
+    remembered.set("mode", mode);
+    // Each tool draws every shape in its own way to begin with.
+    state.shapes.forEach((sh, i) => {
+      sh.hidden = false;
+      sh.zapped = null;
+      view?.hide(i, false);
+    });
+    view?.look({ wire: false, painted: true, picked: mode === "studio" ? state.picked : -1 });
+    render();
+    reshape();
+  };
+  return h(
+    "div.seg",
+    { role: "group", "aria-label": "Tool" },
+    h("button" + (state.mode === "bodyslide" ? ".on" : ""), { type: "button", onclick: go("bodyslide") }, "BodySlide"),
+    h("button" + (state.mode === "studio" ? ".on" : ""), { type: "button", onclick: go("studio") }, "Outfit Studio"),
+  );
+}
+
+function outfitPick(label) {
+  return pickButton(label, state.set?.name || "", (b) =>
+    menu(
+      b,
+      state.catalog.sets.map((s) => ({ name: s.name, note: s.groups[0], value: s, on: s === state.set })),
+      (s) => choose(s),
+      label === "Project" ? "Search projects" : "Search outfits",
+    ),
+  );
+}
+
+const EYE =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.6 10.6 0 0 1 12 5c6.500 0 10 7 10 7a17 17 0 0 1-3.200 4"/><path d="M6.200 6.200A17 17 0 0 0 2 12s3.500 7 10 7c1.600 0 3-.4 4.300-1"/></svg>';
+
+/** Outfit Studio's left list: the shapes, or the picked shape's bones. */
+function studioSide() {
+  const el = document.getElementById("side");
+  if (!el) return;
+  const picked = state.shapes[state.picked];
+  const tab = (id, label) =>
+    h("button" + (state.side === id ? ".on" : ""), { type: "button", onclick: () => ((state.side = id), studioSide()) }, label);
+  const hide = (i, hidden) => {
+    state.shapes[i].hidden = hidden;
+    view.hide(i, hidden);
+  };
+  const rows =
+    state.side === "bones"
+      ? (picked?.bones || []).map((b) => h("div.shape", null, h("span.nm.cut", null, b || "Unnamed")))
+      : state.shapes.map((sh, i) =>
+          h(
+            "div.shape" + (i === state.picked ? ".on" : "") + (sh.hidden ? ".off" : ""),
+            {
+              role: "option",
+              "aria-selected": i === state.picked ? "true" : "false",
+              tabIndex: 0,
+              onclick: () => {
+                state.picked = i;
+                view.look({ picked: i });
+                studioSide();
+              },
+              oncontextmenu: (e) => {
+                e.preventDefault();
+                const others = state.shapes.some((o, j) => j !== i && !o.hidden);
+                menu(
+                  e.currentTarget,
+                  [
+                    { name: others ? "Show only this" : "Show all", value: "only" },
+                    { name: sh.hidden ? "Show" : "Hide", value: "hide" },
+                  ],
+                  (what) => {
+                    if (what === "hide") hide(i, !sh.hidden);
+                    else state.shapes.forEach((_, j) => hide(j, others ? j !== i : false));
+                    studioSide();
+                  },
+                );
+              },
+            },
+            h("button.eye", {
+              type: "button",
+              "aria-label": sh.hidden ? `Show ${sh.name}` : `Hide ${sh.name}`,
+              html: sh.hidden ? EYE_OFF : EYE,
+              onclick: (e) => {
+                e.stopPropagation();
+                hide(i, !sh.hidden);
+                studioSide();
+              },
+            }),
+            h("span.nm.cut", null, sh.name),
+            sh.reference && h("span.tag", null, "Reference"),
+            h("span.sub.quiet", null, (sh.base.length / 3).toLocaleString()),
+          ),
+        );
+  el.replaceChildren(
+    h("div.side-head", null, h("div.seg.plain", { role: "group", "aria-label": "List" }, tab("shapes", "Shapes"), tab("bones", "Bones"))),
+    h("div.rows", { role: state.side === "shapes" ? "listbox" : null }, rows.length ? rows : h("div.sub.quiet", { style: "padding: 8px 12px" }, "No bones")),
+    picked &&
+      h(
+        "div.sub.quiet.side-foot",
+        null,
+        `${picked.name} · ${(picked.base.length / 3).toLocaleString()} points · ${(picked.shown.length / 3).toLocaleString()} triangles · ${picked.bones.length} bones`,
+      ),
+  );
+}
+
+/** Outfit Studio's sliders: one value each, to see what a slider does to the outfit. */
+function studioSliders() {
+  const el = document.getElementById("list");
+  if (!el || !state.set) return;
+  const words = state.search.toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = [];
+  state.set.sliders.forEach((sl, i) => {
+    if (sl.uv || !words.every((w) => sl.name.toLowerCase().includes(w))) return;
+    if (sl.zap) {
+      const on = state.at[i] !== 0;
+      rows.push(
+        h(
+          "button.check" + (on ? ".on" : ""),
+          {
+            type: "button",
+            role: "checkbox",
+            "aria-checked": on ? "true" : "false",
+            onclick: () => {
+              state.at[i] = on ? 0 : 100;
+              studioSliders();
+              reshape();
+              studioSide();
+            },
+          },
+          h("span.box"),
+          h("span.nm.cut", null, sl.name),
+        ),
+      );
+      return;
+    }
+    const out = h("output", null, String(Math.round(state.at[i])));
+    const input = h("input", { type: "range", min: 0, max: 100, step: 1, value: state.at[i], "aria-label": sl.name });
+    const fill = () => input.style.setProperty("--at", `${input.value}%`);
+    fill();
+    input.addEventListener("input", () => {
+      state.at[i] = Number(input.value);
+      out.textContent = input.value;
+      fill();
+      reshape();
+    });
+    input.addEventListener("dblclick", () => {
+      input.value = 0;
+      input.dispatchEvent(new Event("input"));
+    });
+    rows.push(h("div.sl.one", null, h("span.cut", null, sl.name), h("span.tr", null, input, out)));
+  });
+  const top = el.querySelector(".rows")?.scrollTop || 0;
+  el.replaceChildren(
+    h("div.sl.one.head", null, h("span", null, `${rows.length} ${rows.length === 1 ? "slider" : "sliders"}`), h("span", null, "Shown at")),
+    h("div.rows", null, rows.length ? rows : h("div.sub.quiet", { style: "padding: 8px 12px" }, "Nothing found")),
+  );
+  el.querySelector(".rows").scrollTop = top;
+}
+
+function renderStudio() {
+  const flag = (label, key) => {
+    const b = h(
+      "button" + (view.looks[key] ? ".on" : ""),
+      {
+        type: "button",
+        "aria-pressed": view.looks[key] ? "true" : "false",
+        onclick: () => {
+          view.look({ [key]: !view.looks[key] });
+          b.classList.toggle("on", view.looks[key]);
+          b.setAttribute("aria-pressed", view.looks[key] ? "true" : "false");
+        },
+      },
+      label,
+    );
+    return b;
+  };
+  const search = h("input", {
+    type: "text",
+    placeholder: "Search sliders",
+    "aria-label": "Search sliders",
+    value: state.search,
+    oninput: () => ((state.search = search.value), studioSliders()),
+  });
+  view.look({ picked: state.picked });
+  root.replaceChildren(
+    h("div.bar", null, modes(), outfitPick("Project"), h("span.grow"), h("label.search", { style: "flex: 0 1 220px", html: GLASS }, search)),
+    h(
+      "div.main.studio",
+      null,
+      h("div.card.list", { id: "side" }),
+      h("div.view", null, canvas, h("div.looks", null, h("div.seg", { role: "group", "aria-label": "How it is drawn" }, flag("Textures", "painted"), flag("Wireframe", "wire")))),
+      h("div.card.list", { id: "list" }),
+    ),
+    ...(state.problem ? [h("div.bar", null, h("span.sub.warn.cut", null, state.problem))] : []),
+  );
+  studioSide();
+  studioSliders();
+}
+
 function render() {
   if (!state.catalog.sets.length) {
     root.replaceChildren(
@@ -766,6 +985,7 @@ function render() {
     canvas = h("canvas", { "aria-label": "Preview" });
     view = new View(canvas);
   }
+  if (state.mode === "studio") return renderStudio();
   const set = state.set;
   const fits = set ? presetsFor(set) : [];
   const points = state.shapes.reduce((n, s) => n + s.base.length / 3, 0);
@@ -780,14 +1000,8 @@ function render() {
     h(
       "div.bar",
       null,
-      pickButton("Outfit", set?.name || "", (b) =>
-        menu(
-          b,
-          state.catalog.sets.map((s) => ({ name: s.name, note: s.groups[0], value: s, on: s === set })),
-          (s) => choose(s),
-          "Search outfits",
-        ),
-      ),
+      modes(),
+      outfitPick("Outfit"),
       fits.length > 0 &&
         pickButton("Preset", state.preset?.name || "None", (b) =>
           menu(

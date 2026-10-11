@@ -344,6 +344,8 @@ impl State {
                 "textures": m.textures,
                 "sliders": sliders,
                 "zaps": zaps,
+                "bones": mesh::bone_names(&nif, m.block),
+                "reference": shape.data_folder.is_some(),
             }));
         }
         Ok(Answer::with(json!({ "shapes": shapes }), bytes))

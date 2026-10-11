@@ -108,6 +108,40 @@ fn dynamic_positions(shape: &TriShape) -> Option<Vec<[f32; 3]>> {
     })
 }
 
+/// The names of the bones a shape is skinned to, in the order its skin
+/// lists them. Empty for a shape that is not skinned.
+pub fn bone_names(nif: &Nif, block: usize) -> Vec<String> {
+    let stream = nif.header.stream.version;
+    let skin = if nif.kind_of(block) == "NiTriShape" {
+        NiTriShape::read(&nif.blocks[block].data, stream).map(|s| s.skin)
+    } else {
+        TriShape::read(&nif.blocks[block].data, stream).map(|s| s.skin)
+    };
+    let Some(at) = skin
+        .ok()
+        .and_then(|l| block_of(nif, l, &["NiSkinInstance", "BSDismemberSkinInstance"]))
+    else {
+        return Vec::new();
+    };
+    let Ok(instance) =
+        SkinInstance::read(&nif.blocks[at].data, nif.kind_of(at) != "NiSkinInstance")
+    else {
+        return Vec::new();
+    };
+    instance
+        .bones
+        .iter()
+        .map(|bone| {
+            usize::try_from(*bone)
+                .ok()
+                .filter(|i| crate::node::is_node(nif.kind_of(*i)))
+                .and_then(|i| crate::node::Node::read(&nif.blocks[i].data, stream).ok())
+                .map(|n| name_of(nif, n.av.name))
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
 /// Read the shape at `block`.
 pub fn read(nif: &Nif, block: usize) -> Result<Mesh, NifError> {
     let stream = nif.header.stream.version;

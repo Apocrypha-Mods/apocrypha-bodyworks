@@ -10,8 +10,10 @@ void main() { vn = nm * n; vt = t; gl_Position = mvp * vec4(p, 1.0); }`;
 const FS = `#version 300 es
 precision highp float;
 in vec3 vn; in vec2 vt; out vec4 o;
-uniform vec3 tint; uniform sampler2D skin; uniform float painted;
+uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line;
 void main() {
+  // The lines of a wireframe are one flat colour.
+  if (line.a > 0.0) { o = line; return; }
   vec3 n = normalize(vn);
   // The texture where the shape has one, the plain tint where it has not.
   vec3 base = mix(tint, pow(texture(skin, vt).rgb, vec3(2.2)), painted);
@@ -62,6 +64,9 @@ export class View {
     this.uNm = gl.getUniformLocation(prog, "nm");
     this.uTint = gl.getUniformLocation(prog, "tint");
     this.uPainted = gl.getUniformLocation(prog, "painted");
+    this.uLine = gl.getUniformLocation(prog, "line");
+    /** How shapes are drawn: with their textures, with their edges, and which one is picked out. */
+    this.looks = { painted: true, wire: false, picked: -1 };
     this.shapes = [];
     this.turn = FRONT;
     this.tilt = 0.08;
@@ -121,6 +126,7 @@ export class View {
     const gl = this.gl;
     for (const s of this.shapes) {
       gl.deleteBuffer(s.tb);
+      if (s.eb) gl.deleteBuffer(s.eb);
       if (s.skin) gl.deleteTexture(s.skin);
       gl.deleteBuffer(s.pb);
       gl.deleteBuffer(s.nb);
@@ -151,8 +157,20 @@ export class View {
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, s.triangles, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
-      return { vao, pb, nb, tb, ib, count: s.triangles.length, shown: true, skin: null };
+      return { vao, pb, nb, tb, ib, count: s.triangles.length, shown: true, skin: null, kept: s.triangles, edges: 0, eb: null };
     });
+  }
+
+  /** Change how shapes are drawn (see `looks`). */
+  look(changes) {
+    Object.assign(this.looks, changes);
+    this.draw();
+  }
+
+  /** Leave shape `i` out, or put it back. */
+  hide(i, hidden) {
+    if (this.shapes[i]) this.shapes[i].shown = !hidden;
+    this.draw();
   }
 
   /** Paint shape `i` with a picture (an ImageBitmap), laid by its texture coordinates. */
@@ -181,7 +199,26 @@ export class View {
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.DYNAMIC_DRAW);
     gl.bindVertexArray(null);
     s.count = triangles.length;
+    s.kept = triangles;
+    s.edges = 0;
     this.draw();
+  }
+
+  /** The edges of shape `s`'s triangles, as pairs of vertices, made when first drawn. */
+  edges(s) {
+    const gl = this.gl;
+    if (!s.eb) s.eb = gl.createBuffer();
+    if (!s.edges) {
+      const t = s.kept;
+      const lines = new Uint32Array(t.length * 2);
+      for (let i = 0; i < t.length; i += 3) {
+        lines.set([t[i], t[i + 1], t[i + 1], t[i + 2], t[i + 2], t[i]], i * 2);
+      }
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.eb);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, lines, gl.DYNAMIC_DRAW);
+      s.edges = lines.length;
+    }
+    return s.eb;
   }
 
   /** New positions and normals for shape `i`. */
@@ -278,13 +315,38 @@ export class View {
       right[1], up[1], back[1],
       right[2], up[2], back[2],
     ]));
-    gl.uniform3fv(this.uTint, this.tint);
-    for (const s of this.shapes) {
-      if (!s.shown) continue;
+    const { painted, wire, picked } = this.looks;
+    // Faces sit a little back, so the edges drawn over them are not buried.
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1, 1);
+    gl.uniform4f(this.uLine, 0, 0, 0, 0);
+    this.shapes.forEach((s, i) => {
+      if (!s.shown) return;
       gl.bindVertexArray(s.vao);
-      gl.uniform1f(this.uPainted, s.skin ? 1 : 0);
-      if (s.skin) gl.bindTexture(gl.TEXTURE_2D, s.skin);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.ib);
+      const skinned = painted && s.skin;
+      gl.uniform1f(this.uPainted, skinned ? 1 : 0);
+      // The picked shape keeps the tint; the others step back from it.
+      const dim = picked >= 0 && picked !== i ? 0.62 : 1;
+      gl.uniform3f(this.uTint, this.tint[0] * dim, this.tint[1] * dim, this.tint[2] * dim);
+      if (skinned) gl.bindTexture(gl.TEXTURE_2D, s.skin);
       gl.drawElements(gl.TRIANGLES, s.count, gl.UNSIGNED_INT, 0);
+    });
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    if (wire) {
+      this.shapes.forEach((s, i) => {
+        if (!s.shown) return;
+        gl.bindVertexArray(s.vao);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.edges(s));
+        const a = picked < 0 || picked === i ? 0.55 : 0.22;
+        gl.uniform4f(this.uLine, 0.04, 0.05, 0.07, a);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.drawElements(gl.LINES, s.edges, gl.UNSIGNED_INT, 0);
+        gl.disable(gl.BLEND);
+        // The vertex array remembers its index buffer: give it back its faces.
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.ib);
+      });
     }
     gl.bindVertexArray(null);
   }
