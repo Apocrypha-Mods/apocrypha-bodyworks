@@ -104,6 +104,25 @@ pub struct BoneData {
     stated_vertices: u16,
 }
 
+impl BoneData {
+    /// A bone at `transform` (from the skin's space into its own), with the
+    /// sphere round what it moves and each vertex it moves.
+    pub fn new(
+        transform: Transform,
+        bound_center: [f32; 3],
+        bound_radius: f32,
+        weights: Vec<(u16, f32)>,
+    ) -> BoneData {
+        BoneData {
+            transform,
+            bound_center,
+            bound_radius,
+            stated_vertices: weights.len() as u16,
+            weights,
+        }
+    }
+}
+
 /// `NiSkinData`: where each bone is, and the weights by bone.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinData {

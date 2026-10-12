@@ -903,7 +903,8 @@ function studioSide() {
                   [
                     state.work && { name: "Rename…", value: "rename" },
                     state.work && { name: "Duplicate…", value: "duplicate" },
-                    ...(state.work ? bodies.map((o) => ({ name: `Conform to ${o.name}`, value: o })) : []),
+                    ...(state.work ? bodies.map((o) => ({ name: `Conform to ${o.name}`, value: ["conform", o.name] })) : []),
+                    ...(state.work ? bodies.map((o) => ({ name: `Copy weights from ${o.name}`, value: ["weights", o.name] })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
                     { name: sh.hidden ? "Show" : "Hide", value: "hide" },
                     state.work && state.shapes.length > 1 && { name: "Delete", value: "delete", danger: true, rule: true },
@@ -916,7 +917,7 @@ function studioSide() {
                       return rename("Duplicate shape", `${sh.name} copy`, (to) => change({ do: "duplicate", name: sh.name, to }), "Duplicate");
                     }
                     if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
-                    if (typeof what === "object") return attempt({ do: "conform", shape: sh.name, body: what.name });
+                    if (Array.isArray(what)) return attempt({ do: what[0], shape: sh.name, body: what[1] });
                     if (what === "hide") hide(i, !sh.hidden);
                     else state.shapes.forEach((_, j) => hide(j, others ? j !== i : false));
                     studioSide();

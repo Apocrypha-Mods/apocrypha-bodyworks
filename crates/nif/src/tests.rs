@@ -217,3 +217,67 @@ fn real_meshes_survive_being_read_and_written() {
         assert!(unread * 100 <= shapes, "{unread} shapes unread of {shapes}");
     }
 }
+
+/// Real skinned shapes, when there are any: a skin read and written back is
+/// read as the same skin, the file is still a file, and nothing else in it
+/// has changed size.
+#[test]
+fn a_real_skin_written_back_reads_as_it_was() {
+    use crate::weights;
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("nif"))
+            {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scratch/samples/cbbe");
+    let mut files = Vec::new();
+    walk(&root.join("@required"), &mut files);
+    walk(&root.join("@conditional-3"), &mut files);
+    files.sort();
+    let (mut skins, mut same_bytes) = (0usize, 0usize);
+    for path in files.iter().step_by(9) {
+        let bytes = std::fs::read(path).unwrap();
+        let Ok(nif) = Nif::read(&bytes) else {
+            continue;
+        };
+        for at in mesh::shapes(&nif) {
+            let Ok(skin) = weights::read(&nif, at) else {
+                continue;
+            };
+            let mut again = nif.clone();
+            weights::write(&mut again, at, &skin, None)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let written = again.write();
+            let again = Nif::read(&written).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let now = weights::read(&again, at).unwrap();
+            assert_eq!(now.bones, skin.bones, "{}", path.display());
+            // The file's own weights need not add up to one, or be four a
+            // half-size float holds; ours do, and are near them.
+            for (a, b) in skin.vertices.iter().zip(&now.vertices) {
+                let sum: f32 = a.iter().map(|x| x.1).sum();
+                // Slot for slot where no two weigh the same; by bone anyway.
+                for (bone, weight) in a.iter().filter(|x| x.1 > 0.0) {
+                    let ours = b
+                        .iter()
+                        .find(|y| y.0 == *bone && y.1 > 0.0)
+                        .map_or(0.0, |y| y.1);
+                    assert!((weight / sum - ours).abs() < 0.002, "{}", path.display());
+                }
+                assert!(b.windows(2).all(|x| x[0].1 >= x[1].1), "{}", path.display());
+            }
+            let m = mesh::read(&again, at).unwrap();
+            assert_eq!(m.positions, mesh::read(&nif, at).unwrap().positions);
+            skins += 1;
+            same_bytes += (written == bytes) as usize;
+        }
+    }
+    eprintln!("{skins} skins written back, {same_bytes} to the same bytes");
+}

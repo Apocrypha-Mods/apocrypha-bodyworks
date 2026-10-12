@@ -20,6 +20,7 @@ pub mod node;
 pub mod shader;
 pub mod shading;
 pub mod skin;
+pub mod weights;
 
 use io::{Reader, Writer};
 

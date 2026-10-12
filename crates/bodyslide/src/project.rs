@@ -6,7 +6,7 @@ use crate::conform;
 use crate::osd::{Diff, SliderData};
 use crate::set::{DataRef, Shape, Slider, SliderSet};
 use crate::Error;
-use apoc_nif::{copy, edit, mesh, Nif};
+use apoc_nif::{copy, edit, mesh, weights, Nif};
 use std::collections::HashMap;
 
 /// What one slider does to one of the project's own shapes.
@@ -607,6 +607,82 @@ impl Project {
             }
         }
         Ok(moving)
+    }
+
+    /// Give `shape` the bones of `body`, so that it bends as the body does:
+    /// each of its vertices follows the bones the body's vertices nearest
+    /// it follow, the nearer the more, and the heaviest four of them. The
+    /// shape's own weights are replaced. Returns how many bones it now
+    /// follows.
+    pub fn copy_weights(
+        &mut self,
+        shape: &str,
+        body: &str,
+        options: conform::Options,
+    ) -> Result<usize, Error> {
+        if shape == body {
+            return invalid("A shape takes its weights from another shape.");
+        }
+        self.shape(shape)?;
+        self.shape(body)?;
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let block = |name: &str| {
+            self.block(name)
+                .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {name}.")))
+        };
+        let (to, from) = (block(shape)?, block(body)?);
+        let theirs = weights::read(&self.nif, from).map_err(fail)?;
+        let ours = mesh::read(&self.nif, to).map_err(fail)?.positions;
+        let on = mesh::read(&self.nif, from).map_err(fail)?.positions;
+        if on.len() != theirs.vertices.len() {
+            return invalid(format!(
+                "{body} has weights for another number of vertices."
+            ));
+        }
+        let ties = conform::tie(&on, &ours, options);
+        // The body's bones the shape ends up following, in the body's order.
+        let mut place: Vec<Option<u16>> = vec![None; theirs.bones.len()];
+        let mut mixed: Vec<[(u16, f32); weights::MOST]> = Vec::with_capacity(ours.len());
+        let mut all: Vec<(u16, f32)> = Vec::new();
+        for v in 0..ours.len() {
+            all.clear();
+            for (near, share) in ties.of(v) {
+                for (bone, weight) in theirs.vertices[near as usize] {
+                    if weight > 0.0 {
+                        all.push((bone, weight * share));
+                    }
+                }
+            }
+            let kept = weights::settled(&all);
+            for (bone, weight) in kept {
+                if weight > 0.0 {
+                    if let Some(p) = place.get_mut(bone as usize) {
+                        *p = Some(0);
+                    }
+                }
+            }
+            mixed.push(kept);
+        }
+        let mut bones = Vec::new();
+        for (i, p) in place.iter_mut().enumerate() {
+            if p.is_some() {
+                *p = Some(bones.len() as u16);
+                bones.push(theirs.bones[i].clone());
+            }
+        }
+        for slots in &mut mixed {
+            for (bone, weight) in slots.iter_mut() {
+                if *weight > 0.0 {
+                    *bone = place[*bone as usize].unwrap_or(0);
+                }
+            }
+        }
+        let skin = weights::Skin {
+            bones,
+            vertices: mixed,
+        };
+        weights::write(&mut self.nif, to, &skin, Some(from)).map_err(fail)?;
+        Ok(skin.bones.len())
     }
 
     /// Where a build of the project goes, and whether as two meshes.

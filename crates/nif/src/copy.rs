@@ -85,7 +85,8 @@ fn restrung(
     }
 }
 
-fn node_names(nif: &Nif) -> HashMap<Vec<u8>, usize> {
+/// Every node of a file by its name: the first, where two share one.
+pub(crate) fn node_names(nif: &Nif) -> HashMap<Vec<u8>, usize> {
     let stream = nif.header.stream.version;
     let mut names = HashMap::new();
     for i in 0..nif.blocks.len() {

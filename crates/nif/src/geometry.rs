@@ -537,3 +537,40 @@ pub fn set_position_in(data: &mut [u8], layout: &Layout, vertex: usize, p: [f32;
         }
     }
 }
+
+/// The four bones a vertex follows and how much it follows each, in packed
+/// vertex bytes of `layout`.
+pub fn skin_weights_in(data: &[u8], layout: &Layout, vertex: usize) -> Option<([f32; 4], [u8; 4])> {
+    let at = vertex
+        .checked_mul(layout.stride)?
+        .checked_add(layout.skin?)?;
+    let d = data.get(at..at + 12)?;
+    let mut weights = [0.0; 4];
+    for (i, w) in weights.iter_mut().enumerate() {
+        *w = half_to_f32(u16::from_le_bytes([d[i * 2], d[i * 2 + 1]]));
+    }
+    Some((weights, [d[8], d[9], d[10], d[11]]))
+}
+
+/// Set the four bones a vertex follows in packed vertex bytes of `layout`.
+/// Says whether there was room for them.
+pub fn set_skin_weights_in(
+    data: &mut [u8],
+    layout: &Layout,
+    vertex: usize,
+    weights: [f32; 4],
+    bones: [u8; 4],
+) -> bool {
+    let Some(d) = vertex
+        .checked_mul(layout.stride)
+        .and_then(|v| v.checked_add(layout.skin?))
+        .and_then(|at| data.get_mut(at..at + 12))
+    else {
+        return false;
+    };
+    for (i, w) in weights.iter().enumerate() {
+        d[i * 2..i * 2 + 2].copy_from_slice(&f32_to_half(*w).to_le_bytes());
+    }
+    d[8..12].copy_from_slice(&bones);
+    true
+}

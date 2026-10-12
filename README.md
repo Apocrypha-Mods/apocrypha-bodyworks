@@ -44,6 +44,10 @@ Edition:
   gives is off the slider data they shipped with by about 10% of how far
   that data moves, 4% for the middle shape (`conformfit.rs`). The shipped
   data was also touched up by hand, so some of that is not the method's.
+- Copying a body's bone weights to an outfit is likewise this project's
+  own method. Given to CBBE's own underwear in place of the weights it was
+  made with, 1,159 of its 1,164 vertices still follow, most of all, the bone
+  they did. Nothing skinned this way has been seen moving in the game yet.
 
 Rules found this way are written where they are used, each with what it was
 found from.

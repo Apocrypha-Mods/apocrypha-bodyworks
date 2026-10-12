@@ -544,3 +544,71 @@ fn a_mesh_becomes_a_project_fitted_to_a_body() {
     assert_eq!(moved("Bra again"), 0);
     assert_eq!(moved("Panty"), 0);
 }
+
+#[test]
+fn an_outfit_given_its_bodys_bones_bends_much_as_it_did() {
+    use apoc_bodyslide::conform;
+    use apoc_bodyslide::project::Project;
+    use apoc_nif::{mesh, weights, Nif};
+
+    let tools = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/cbbe/@required/Data/CalienteTools/BodySlide");
+    let on_disk = |path: &str| std::fs::read(tools.join(path)).ok();
+    let Some(sets) = on_disk("SliderSets/CBBE.osp").and_then(|b| set::read(&b).ok()) else {
+        return;
+    };
+    let set = sets.iter().find(|s| s.name == "CBBE NeverNude").unwrap();
+    let mut project = Project::open(set, &on_disk).unwrap();
+    let skin_of = |nif: &Nif, name: &str| {
+        let at = mesh::shapes(nif)
+            .into_iter()
+            .find(|at| mesh::name(nif, *at).as_deref() == Some(name))
+            .unwrap();
+        weights::read(nif, at).unwrap()
+    };
+    let heaviest = |skin: &weights::Skin| -> Vec<String> {
+        skin.vertices
+            .iter()
+            .map(|v| skin.bones[v[0].0 as usize].clone())
+            .collect()
+    };
+    let body = skin_of(&project.nif, "CBBE");
+    for shape in ["Bra", "Panty"] {
+        let before = skin_of(&project.nif, shape);
+        let bones = project
+            .copy_weights(shape, "CBBE", conform::Options::default())
+            .unwrap();
+        // The file is still a file, with the skin it was given.
+        let nif = Nif::read(&project.nif.write()).unwrap();
+        let after = skin_of(&nif, shape);
+        assert_eq!(after.bones.len(), bones);
+        assert_eq!(after.vertices.len(), before.vertices.len());
+        assert!(
+            after.bones.iter().all(|b| body.bones.contains(b)),
+            "{shape}"
+        );
+        for v in &after.vertices {
+            assert!(
+                (v.iter().map(|x| x.1).sum::<f32>() - 1.0).abs() < 0.01,
+                "{shape}"
+            );
+        }
+        // Most vertices follow, most of all, the bone they did as made.
+        let (was, now) = (heaviest(&before), heaviest(&after));
+        let same = was.iter().zip(&now).filter(|(a, b)| a == b).count();
+        assert!(
+            same * 10 >= was.len() * 8,
+            "{shape}: {same} of {} follow the bone they did",
+            was.len()
+        );
+        eprintln!(
+            "{shape}: {same} of {} keep their heaviest bone, {bones} bones",
+            was.len()
+        );
+    }
+    assert!(project
+        .copy_weights("Bra", "Bra", conform::Options::default())
+        .is_err());
+    // The body itself is as it was.
+    assert_eq!(skin_of(&project.nif, "CBBE"), body);
+}

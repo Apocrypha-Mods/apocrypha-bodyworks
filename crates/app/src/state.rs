@@ -115,6 +115,9 @@ impl Work {
             Change::Conform { shape, body } => p
                 .conform(&shape, &body, files, Default::default())
                 .map(drop),
+            Change::Weights { shape, body } => {
+                p.copy_weights(&shape, &body, Default::default()).map(drop)
+            }
             Change::Stroke { shape, slider } => {
                 let moves: Vec<osd::Diff> = data
                     .as_chunks::<16>()
@@ -219,6 +222,12 @@ enum Change {
     /// Give a shape what every slider does to another (a body), so that
     /// it follows it.
     Conform {
+        shape: String,
+        body: String,
+    },
+    /// Give a shape the bones of another (a body), so that it bends as
+    /// that one does.
+    Weights {
         shape: String,
         body: String,
     },
