@@ -1142,19 +1142,6 @@ function foot() {
   const working = Boolean(state.busy);
   const ready = state.set && state.shapes.length && !working;
   el.replaceChildren(
-    // The mod builds go into is always here to be changed: what else there
-    // is to say sits beside it, not in its place.
-    h(
-      "button.btn.ghost.small",
-      {
-        type: "button",
-        id: "status",
-        title: "The mod builds go into",
-        disabled: Boolean(state.busy),
-        onclick: (e) => chooseTarget(e.currentTarget),
-      },
-      `Into ${state.into ? state.into.name : state.output}`,
-    ),
     state.problem
       ? h("span.sub.warn.cut", null, state.problem)
       : state.unread && state.built === null
@@ -1184,6 +1171,15 @@ function foot() {
       h("span.box"),
       h("span", null, `${morphsBy()} morphs`),
     ),
+    // The mod builds go into, beside the other places a build can go: a
+    // picker like the ones above the sliders, so it reads as a choice.
+    (() => {
+      const b = pickButton("Into", state.into ? state.into.name : state.output, chooseTarget);
+      b.id = "status";
+      b.title = "The mod builds go into";
+      b.disabled = working;
+      return b;
+    })(),
     h(
       "button.btn.ghost",
       { type: "button", disabled: !ready, title: "Build into a folder you pick, outside the mods", onclick: buildToFolder },
