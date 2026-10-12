@@ -13,6 +13,7 @@ pub mod build;
 pub mod category;
 pub mod conform;
 pub mod group;
+pub mod headtri;
 pub mod morph;
 pub mod osd;
 pub mod pack;

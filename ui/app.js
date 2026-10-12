@@ -1327,6 +1327,7 @@ function studioSide() {
                     { name: "Export FBX…", value: "exportFbx" },
                     state.shapes.length > 1 && { name: "Export all as FBX…", value: "exportAll" },
                     state.work && { name: "Import points…", value: "import" },
+                    state.work && !sh.reference && cur().sliders.length > 0 && { name: "Export head morphs…", value: "headMorphs" },
                     state.work && sh.reference && { name: "Conform all to this", value: "conformAll" },
                     state.work && sh.mask.some((m) => m >= 0.5) && { name: "Separate masked points…", value: "part", rule: true },
                     state.work && sh.mask.some((m) => m >= 0.5) && { name: "Delete masked points", value: "cut", danger: true },
@@ -1404,6 +1405,7 @@ function studioSide() {
                     if (what === "export") return exportObj(sh);
                     if (what === "exportFbx") return exportFbx([sh], sh.name);
                     if (what === "exportAll") return exportFbx(state.shapes, cur().name || "Project");
+                    if (what === "headMorphs") return headMorphs(sh);
                     if (what === "import") return importObj(sh);
                     if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
                     if (Array.isArray(what)) {
@@ -2823,6 +2825,17 @@ function texturesOf(sh) {
     h("div.fields", null, inputs.map((f) => f[0])),
     [said, h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"), go],
   );
+}
+
+/** Outfit Studio: what the sliders do to one shape, as the morph file a part of a head comes with. */
+async function headMorphs(sh) {
+  try {
+    const [made, bytes] = core.ask({ op: "headMorphs", shape: sh.name });
+    await host.request("disk.save", { name: made.name, bytes: bytes.slice(0) });
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
 }
 
 /** Outfit Studio: every slider out as a morph file, or sliders in from one. */

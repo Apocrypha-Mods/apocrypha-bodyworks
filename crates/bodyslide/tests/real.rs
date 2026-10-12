@@ -2225,3 +2225,82 @@ fn a_face_part_loses_vertices_and_still_reads() {
     assert!(project.weld(&name).is_err());
     assert_eq!(project.nif.write(), before);
 }
+
+#[test]
+fn a_head_parts_morph_file_becomes_sliders_and_goes_back_out() {
+    use apoc_bodyslide::headtri;
+    use apoc_bodyslide::project::Project;
+    use apoc_nif::mesh;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/ube/body/0base/meshes/!UBE/Brows");
+    let (Ok(nif), Ok(tri)) = (
+        std::fs::read(root.join("FemaleBrows.nif")),
+        std::fs::read(root.join("femaleheadbrows.tri")),
+    ) else {
+        return;
+    };
+    let theirs = headtri::read(&tri).unwrap();
+    assert_eq!(headtri::write(&theirs), tri);
+    let mut project = Project::from_mesh("Brows", "meshes/brows.nif", &nif).unwrap();
+    let name = project.set.shapes[0].name.clone();
+    let m = mesh::read(&project.nif, mesh::shapes(&project.nif)[0]).unwrap();
+    // The file is of the same mesh, vertex for vertex: nearly all of them
+    // where the part has them (a few were moved in one and not the other).
+    assert_eq!(m.positions.len(), theirs.vertices.len());
+    let close = m
+        .positions
+        .iter()
+        .zip(&theirs.vertices)
+        .filter(|(a, b)| (0..3).all(|k| (a[k] - b[k]).abs() < 0.01))
+        .count();
+    assert!(
+        close * 10 > m.positions.len() * 9,
+        "{close} of {}",
+        m.positions.len()
+    );
+
+    let taken = project.import_morphs(&tri).unwrap();
+    assert_eq!(taken, theirs.morphs.len());
+    assert_eq!(project.set.sliders.len(), theirs.morphs.len());
+
+    // Out again: the same mesh, and each morph doing what it did, to what
+    // a 16-bit number can say of it.
+    let ours = headtri::read(&project.head_morphs(&name).unwrap()).unwrap();
+    assert_eq!(ours.triangles, theirs.triangles);
+    assert_eq!(
+        ours.morphs.iter().map(|m| &m.name).collect::<Vec<_>>(),
+        theirs.morphs.iter().map(|m| &m.name).collect::<Vec<_>>()
+    );
+    let uv_off = ours
+        .uvs
+        .iter()
+        .zip(&theirs.uvs)
+        .flat_map(|(a, b)| [(a[0] - b[0]).abs(), (a[1] - b[1]).abs()])
+        .fold(0.0f32, f32::max);
+    assert!(uv_off < 0.001, "{uv_off}");
+    for theirs in theirs
+        .morphs
+        .iter()
+        .filter(|m| m.offsets.iter().any(|o| *o != [0; 3]))
+    {
+        let ours = ours.morphs.iter().find(|m| m.name == theirs.name).unwrap();
+        for (a, b) in ours.offsets.iter().zip(&theirs.offsets) {
+            for k in 0..3 {
+                let (x, y) = (a[k] as f32 * ours.scale, b[k] as f32 * theirs.scale);
+                assert!(
+                    (x - y).abs() <= theirs.scale.max(ours.scale) * 1.01,
+                    "{} {x} {y}",
+                    theirs.name
+                );
+            }
+        }
+    }
+    // A file for another mesh is refused, and says how many vertices it is for.
+    let mut other = Project::from_mesh("Brows", "meshes/brows.nif", &nif).unwrap();
+    other.delete_vertices(&name, &[0, 1, 2]).unwrap();
+    assert!(other
+        .import_morphs(&tri)
+        .unwrap_err()
+        .to_string()
+        .contains("501"));
+}

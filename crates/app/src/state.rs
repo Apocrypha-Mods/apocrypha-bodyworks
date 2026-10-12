@@ -784,6 +784,9 @@ enum Request {
     /// What one slider of the open project does, as a slider data file
     /// after the answer.
     SliderData { slider: String },
+    /// What the open project's sliders do to one shape, as the morph file
+    /// of a part of a head, after the answer.
+    HeadMorphs { shape: String },
     /// The names of the bones of a skeleton: the request's bytes.
     Skeleton,
     /// Change the open project.
@@ -1399,6 +1402,16 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
         Request::SliderData { slider } => match &state.work {
             Some(work) => match work.project.slider_data(&slider) {
                 Ok(bytes) => Answer::with(json!({ "name": format!("{slider}.osd") }), bytes),
+                Err(e) => Answer::failed(e),
+            },
+            None => Answer::failed("No project is open."),
+        },
+        Request::HeadMorphs { shape } => match &state.work {
+            Some(work) => match work.project.head_morphs(&shape) {
+                Ok(bytes) => Answer::with(
+                    json!({ "name": format!("{}.tri", apoc_bodyslide::project::file_name(&shape)) }),
+                    bytes,
+                ),
                 Err(e) => Answer::failed(e),
             },
             None => Answer::failed("No project is open."),

@@ -1746,11 +1746,137 @@ impl Project {
         done
     }
 
+    /// Take sliders from the morph file of a part of a head: each of its
+    /// morphs becomes what the slider of that name does to the one shape of
+    /// the project's own that has as many vertices as the file. Such a
+    /// file names no shape, so it must be plain which is meant.
+    fn import_head_morphs(&mut self, file: &[u8]) -> Result<usize, Error> {
+        let tri = crate::headtri::read(file)?;
+        let fits: Vec<Shape> = self
+            .set
+            .shapes
+            .iter()
+            .filter(|s| s.data_folder.is_none())
+            .filter(|s| {
+                self.block(&s.name)
+                    .and_then(|b| mesh::read(&self.nif, b).ok())
+                    .is_some_and(|m| m.positions.len() == tri.vertices.len())
+            })
+            .cloned()
+            .collect();
+        let [shape] = &fits[..] else {
+            return invalid(format!(
+                "The file is for a mesh of {} vertices, and {} of the project's shapes have that many.",
+                tri.vertices.len(),
+                if fits.is_empty() { "none" } else { "more than one" }
+            ));
+        };
+        let before = self.clone();
+        let mut taken = 0;
+        let done = (|| {
+            for morph in &tri.morphs {
+                if !morph.scale.is_finite() || morph.name.trim().is_empty() {
+                    continue;
+                }
+                let diffs: Vec<Diff> = morph
+                    .offsets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, o)| **o != [0; 3])
+                    .map(|(v, o)| Diff {
+                        vertex: v as u16,
+                        offset: o.map(|c| c as f32 * morph.scale),
+                    })
+                    .collect();
+                if diffs
+                    .iter()
+                    .any(|d| d.offset.iter().any(|c| !c.is_finite()))
+                {
+                    return invalid(format!(
+                        "{} in the file moves a vertex further than a mesh can say.",
+                        morph.name
+                    ));
+                }
+                let index = match self.set.sliders.iter().position(|s| s.name == morph.name) {
+                    Some(i) => i,
+                    None => {
+                        self.add_slider(&morph.name)?;
+                        self.set.sliders.len() - 1
+                    }
+                };
+                if self.set.sliders[index].zap || self.set.sliders[index].uv {
+                    continue;
+                }
+                let own = &mut self.own[index];
+                own.retain(|o| o.target != shape.target);
+                own.push(Own {
+                    target: shape.target.clone(),
+                    diffs: Arc::new(diffs),
+                });
+                taken += 1;
+            }
+            Ok(())
+        })();
+        if done.is_err() {
+            *self = before;
+        }
+        done.map(|()| taken)
+    }
+
+    /// The project's sliders as the morph file of a part of a head: the
+    /// shape as it is, and what each slider of the project's own does to
+    /// it, under the slider's name. Sliders that take vertices out or move
+    /// the texture are left out, as are those that say nothing of it.
+    pub fn head_morphs(&self, shape: &str) -> Result<Vec<u8>, Error> {
+        let at = self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let m = mesh::read(&self.nif, block).map_err(|e| Error::Invalid(e.to_string()))?;
+        let target = &self.set.shapes[at].target;
+        let mut morphs = Vec::new();
+        for (slider, own) in self.set.sliders.iter().zip(&self.own) {
+            if slider.zap || slider.uv {
+                continue;
+            }
+            let Some(o) = own.iter().find(|o| &o.target == target) else {
+                continue;
+            };
+            let mut offsets = vec![[0.0f32; 3]; m.positions.len()];
+            for d in o.diffs.iter() {
+                if let Some(slot) = offsets.get_mut(d.vertex as usize) {
+                    for (c, by) in slot.iter_mut().zip(d.offset) {
+                        *c += by;
+                    }
+                }
+            }
+            // One that does nothing to it is written all the same: the game
+            // looks each up by its name.
+            morphs.push(crate::headtri::HeadMorph::of(&slider.name, &offsets));
+        }
+        if morphs.is_empty() {
+            return invalid(format!(
+                "No slider of the project's own does anything to {shape}."
+            ));
+        }
+        Ok(crate::headtri::write(&crate::headtri::HeadTri {
+            vertices: m.positions,
+            triangles: m.triangles.iter().map(|t| t.map(u32::from)).collect(),
+            // Places in the texture as the mesh has them: the file's own
+            // were found to be the mesh's, unturned.
+            uvs: m.uvs.clone(),
+            morphs,
+        }))
+    }
+
     /// Take sliders from a morph file (`.tri`): each morph it has for a
     /// shape of the project's own becomes what the slider of that name
     /// does to the shape, a slider being added where there is none.
     /// Returns how many morphs were taken.
     pub fn import_morphs(&mut self, file: &[u8]) -> Result<usize, Error> {
+        if crate::headtri::is(file) {
+            return self.import_head_morphs(file);
+        }
         let morphs = crate::tri::read(file)?;
         let before = self.clone();
         let mut taken = 0;
