@@ -1684,6 +1684,62 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
         .filter(|(a, b)| a.data != b.data)
         .count();
     assert_eq!(changed, 1);
+    // Another kind of lighting: what the kind keeps for itself comes and
+    // goes with it, and its switch; back again, the block is as it was.
+    let lighting = |p: &Project| {
+        p.nif
+            .blocks
+            .iter()
+            .zip(&project.nif.blocks)
+            .find(|(a, b)| a.data != b.data)
+            .map(|(a, _)| a.data.clone())
+    };
+    let plain = lit(&glowing);
+    if plain.kind == Some(0) {
+        let before = glowing.nif.write();
+        let size = lighting(&glowing).unwrap().len();
+        for (kind, more, set, bit) in [(1u32, 4usize, 0usize, 7u32), (5, 12, 0, 21), (2, 0, 1, 6)] {
+            let mut other = glowing.clone();
+            other
+                .set_look(
+                    "Bra",
+                    &mesh::Look {
+                        kind: Some(kind),
+                        ..plain
+                    },
+                )
+                .unwrap();
+            let now = lit(&other);
+            assert_eq!(now.kind, Some(kind));
+            assert_eq!(now.switches[set] >> bit & 1, 1);
+            assert_eq!(lighting(&other).unwrap().len(), size + more);
+            assert_eq!(
+                (now.glow, now.gloss, now.shine),
+                (plain.glow, plain.gloss, plain.shine)
+            );
+            built(&other, "Bra");
+            other
+                .set_look(
+                    "Bra",
+                    &mesh::Look {
+                        kind: Some(0),
+                        ..now
+                    },
+                )
+                .unwrap();
+            assert_eq!(other.nif.write(), before);
+        }
+        assert!(glowing
+            .clone()
+            .set_look(
+                "Bra",
+                &mesh::Look {
+                    kind: Some(14),
+                    ..plain
+                }
+            )
+            .is_err());
+    }
     look.alpha = 2000.0;
     assert!(glowing.set_look("Bra", &look).is_err());
     assert!(boned_name_refused(&project));

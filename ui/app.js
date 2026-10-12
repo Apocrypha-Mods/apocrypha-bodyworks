@@ -2707,6 +2707,38 @@ function material(sh) {
     ["Vertex alpha", 0, 3],
     ["Decal", 0, 26],
   ].map(([label, set, bit]) => [...option(label, Boolean((look.switches[set] >>> bit) & 1)), set, bit]);
+  // The kinds of lighting one can be changed between, by the number files give each.
+  const KINDS = [
+    ["Plain", 0],
+    ["Environment", 1],
+    ["Glow map", 2],
+    ["Skin", 5],
+  ];
+  let kind = look.kind;
+  const kinds = KINDS.some(([, n]) => n === look.kind)
+    ? h(
+        "div.seg",
+        { role: "radiogroup", "aria-label": "Kind" },
+        KINDS.map(([label, n]) =>
+          h(
+            "button" + (n === kind ? ".on" : ""),
+            {
+              type: "button",
+              role: "radio",
+              "aria-checked": n === kind ? "true" : "false",
+              onclick: (e) => {
+                kind = n;
+                for (const b of e.currentTarget.parentNode.children) {
+                  b.classList.toggle("on", b === e.currentTarget);
+                  b.setAttribute("aria-checked", b === e.currentTarget ? "true" : "false");
+                }
+              },
+            },
+            label,
+          ),
+        ),
+      )
+    : null;
   const go = h("button.btn.primary", { type: "button" }, "Done");
   const said = h("span.sub.warn.grow.cut");
   go.addEventListener("click", () => {
@@ -2730,6 +2762,7 @@ function material(sh) {
         shine: kept(shine[1], look.shine),
         shineStrength: amount(shineStrength, look.shineStrength),
         switches,
+        kind,
       });
       close(el);
     } catch (e) {
@@ -2739,7 +2772,7 @@ function material(sh) {
   const pair = (a, b) => h("div.pair", null, [a[0], b[0]]);
   // What else is drawn by the same lighting changes with it.
   const also = sh.lookShared?.length ? [h("span.sub", null, `Shared with ${sh.lookShared.join(", ")}`)] : [];
-  const el = sheet(sh.name, null, [pair(glow, glowStrength), pair(shine, shineStrength), pair(gloss, alpha), h("div.pair", null, SWITCHES.map((sw) => sw[0])), ...also], [
+  const el = sheet(sh.name, null, [...(kinds ? [kinds] : []), pair(glow, glowStrength), pair(shine, shineStrength), pair(gloss, alpha), h("div.pair", null, SWITCHES.map((sw) => sw[0])), ...also], [
     said,
     h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
     go,

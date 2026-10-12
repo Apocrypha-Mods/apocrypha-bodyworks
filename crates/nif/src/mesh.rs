@@ -67,16 +67,41 @@ pub struct Look {
     pub shine_strength: f32,
     /// Its lighting's two sets of thirty-two switches.
     pub switches: [u32; 2],
+    /// Which kind of lighting it is, by the number files give it; nothing
+    /// where the file does not say.
+    pub kind: Option<u32>,
 }
 
 /// The switches that are not a look's to change. Two say what the shape
 /// itself is (that it follows bones, that its vertices carry colours) and
-/// are the shape's to keep in step. Two go with the kind of lighting, which
-/// keeps more or less after its numbers by its kind: every lighting of the
-/// kind with an environment map has the first set's switch 7 on and no
-/// other has (`--example envflag`), and the glow map's switch goes with
-/// its kind the same way.
-pub const KEPT_SWITCHES: [u32; 2] = [(1 << 1) | (1 << 7), (1 << 5) | (1 << 6)];
+/// are the shape's to keep in step. Three go with the kind of lighting:
+/// every lighting of the kind with an environment map has the first set's
+/// switch 7 on and no other has, and so the glow map's kind with the second
+/// set's switch 6 and the skin's kind with the first set's switch 21
+/// (`--example kindflags`).
+pub const KEPT_SWITCHES: [u32; 2] = [(1 << 1) | (1 << 7) | (1 << 21), (1 << 5) | (1 << 6)];
+
+/// A kind of lighting: its number, the bytes it keeps for itself, and its
+/// switch (which set, which switch).
+type Kind = (u32, usize, Option<(usize, u32)>);
+
+/// The kinds of lighting one can be changed between, as measured
+/// (`--example look`, `--example kindflags`): its number, how many bytes it
+/// keeps after the numbers every kind keeps, and the switch that goes with
+/// it (which set, which switch).
+const KINDS: [Kind; 4] = [
+    // Plain.
+    (0, 0, None),
+    // With an environment map: how strongly it shows.
+    (1, 4, Some((0, 7))),
+    // With a glow map.
+    (2, 0, Some((1, 6))),
+    // Skin: the colour it is tinted.
+    (5, 12, Some((0, 21))),
+];
+
+/// What every kind keeps after its link to its textures.
+const COMMON_BYTES: usize = 56;
 
 /// Where in a lighting shader's kept bytes each number of a [`Look`] is.
 const LOOK_BYTES: usize = 48;
@@ -126,6 +151,7 @@ pub fn look(nif: &Nif, block: usize) -> Option<Look> {
         shine: [f(8), f(9), f(10)],
         shine_strength: f(11),
         switches: [s.flags1, s.flags2],
+        kind: s.shader_type,
     })
 }
 
@@ -152,6 +178,42 @@ pub fn set_look(nif: &mut Nif, block: usize, look: &Look) -> Result<(), NifError
     put(11, look.shine_strength);
     s.flags1 = (look.switches[0] & !KEPT_SWITCHES[0]) | (s.flags1 & KEPT_SWITCHES[0]);
     s.flags2 = (look.switches[1] & !KEPT_SWITCHES[1]) | (s.flags2 & KEPT_SWITCHES[1]);
+    if look.kind != s.shader_type {
+        // Another kind: what the old kept for itself goes, what the new
+        // keeps comes as a kind new to it has it (an environment map at
+        // full strength, a skin tinted white), and each kind's switch
+        // follows.
+        let of = |kind: Option<u32>| KINDS.iter().find(|k| Some(k.0) == kind);
+        let (Some(was), Some(now)) = (of(s.shader_type), of(look.kind)) else {
+            return Err(NifError::Unsupported(
+                "the shape's lighting is not of a kind that can be changed to another".into(),
+            ));
+        };
+        if s.rest.len() != COMMON_BYTES + was.1 {
+            return Err(NifError::Unsupported(
+                "the shape's lighting is not laid out as its kind was found to be".into(),
+            ));
+        }
+        s.rest.truncate(COMMON_BYTES);
+        for _ in 0..now.1 / 4 {
+            s.rest.extend_from_slice(&1.0f32.to_le_bytes());
+        }
+        for (kind, on) in [(was, false), (now, true)] {
+            if let Some((set, bit)) = kind.2 {
+                let flags = if set == 0 {
+                    &mut s.flags1
+                } else {
+                    &mut s.flags2
+                };
+                *flags = if on {
+                    *flags | (1 << bit)
+                } else {
+                    *flags & !(1 << bit)
+                };
+            }
+        }
+        s.shader_type = look.kind;
+    }
     nif.blocks[at].data = s.write();
     Ok(())
 }

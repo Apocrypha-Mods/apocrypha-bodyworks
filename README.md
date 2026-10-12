@@ -81,8 +81,9 @@ Outfit Studio:
   vertices are laid out one of three ways real files pair with a coloured
   one, and it shares its lighting with no other shape.
 - Shapes: merging shapes that keep different things for each vertex,
-  the kind of shader a shape is drawn with, and its
-  switches beyond the ten most used (its textures, glow, shine, gloss
+  kinds of lighting beyond the four most used (plain,
+  environment map, glow map, skin), and lighting switches beyond the ten
+  most used (its textures, glow, shine, gloss
   and opacity are changed).
 - Meshes that move by themselves or hang together (animation controllers,
   collision joined by constraints): their shapes are changed in place, but

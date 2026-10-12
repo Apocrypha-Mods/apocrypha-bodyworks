@@ -233,6 +233,7 @@ impl Work {
                 shine,
                 shine_strength,
                 switches,
+                kind,
             } => p.set_look(
                 &shape,
                 &mesh::Look {
@@ -243,6 +244,7 @@ impl Work {
                     shine,
                     shine_strength,
                     switches,
+                    kind,
                 },
             ),
             Change::Separate { shape, to } => {
@@ -548,6 +550,9 @@ enum Change {
         /// Its lighting's two sets of switches; those that say what the
         /// shape itself is are kept as they are.
         switches: [u32; 2],
+        /// Which kind of lighting, by the number files give it.
+        #[serde(default)]
+        kind: Option<u32>,
     },
     /// Part a shape from its bones.
     RemoveSkinning {
@@ -1159,7 +1164,7 @@ impl State {
                     .collect::<Vec<_>>(),
                 "look": mesh::look(&nif, m.block).map(|l| json!({
                     "glow": l.glow, "glowStrength": l.glow_strength, "alpha": l.alpha,
-                    "gloss": l.gloss, "shine": l.shine, "shineStrength": l.shine_strength, "switches": l.switches,
+                    "gloss": l.gloss, "shine": l.shine, "shineStrength": l.shine_strength, "switches": l.switches, "kind": l.kind,
                 })),
                 "sliders": sliders,
                 "zaps": zaps,
