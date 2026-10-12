@@ -214,6 +214,11 @@ function reshape() {
         s.now[v + 2] += offsets[k * 3 + 2] * amount;
       }
     }
+    // A part seen alone stays alone, whatever a slider took out or put back.
+    if (left && s.live && i === state.picked && state.part !== null && s.parts[state.part]) {
+      s.shown = s.parts[state.part].triangles;
+      view.cut(i, s.shown);
+    }
     shade(s.now, s.shown, s.weld, s.normals, s.sum);
     view.move(i, s.now, s.normals);
   });
@@ -1091,11 +1096,15 @@ function showPart(index) {
   state.part = index;
   if (!s) return;
   if (index !== null && s.parts[index]) {
-    // What is drawn is what a brush can touch.
+    // What is drawn is what a brush can touch: its triangles, and of the
+    // shape's vertices only theirs.
     s.shown = s.parts[index].triangles;
+    s.live = new Uint8Array(s.base.length / 3);
+    for (const v of s.shown) s.live[v] = 1;
     s.zapped = null;
     view.cut(state.picked, s.shown);
   } else {
+    s.live = null;
     s.zapped = null;
     reshape();
   }
@@ -1574,7 +1583,7 @@ function brushing(what, ray) {
   if (what === "over") return false;
   if (state.tool === "colour") {
     if (!s.colors.length) return false;
-    const reached = brush.spared(brush.reach(found.point, r, s.now), s.mask);
+    const reached = alive(s, brush.spared(brush.reach(found.point, r, s.now), s.mask));
     if (ray.alt) {
       // Alt picks up the colour under the middle of the brush.
       if (what === "down" && reached.vertices.length) {
@@ -1617,13 +1626,13 @@ function brushing(what, ray) {
     const far = stroke.last ? Math.hypot(...found.point.map((c, k) => c - stroke.last[k])) : Infinity;
     if (far < r * 0.25) return true;
     stroke.last = found.point;
-    const reached = brush.spared(brush.reach(found.point, r, s.now), s.mask);
+    const reached = alive(s, brush.spared(brush.reach(found.point, r, s.now), s.mask));
     const by = (ray.alt ? -1 : 1) * (state.strength / 100) * 0.35;
     reached.vertices.forEach((v, k) => {
       state.heat[v] = Math.max(0, Math.min(1, state.heat[v] + by * reached.weights[k]));
     });
     if (stroke.twin) {
-      const there = brush.spared(brush.reach(brush.across(found.point), r, s.now), s.mask);
+      const there = alive(s, brush.spared(brush.reach(brush.across(found.point), r, s.now), s.mask));
       there.vertices.forEach((v, k) => {
         stroke.twin.heat[v] = Math.max(0, Math.min(1, stroke.twin.heat[v] + by * there.weights[k]));
       });
@@ -1635,7 +1644,7 @@ function brushing(what, ray) {
     // Not a change to the outfit: what the other brushes are to leave alone.
     if (what === "down") stroke = { tool: "mask", shape: s, before: s.now, amount: 1 };
     for (const point of state.mirror ? [found.point, brush.across(found.point)] : [found.point]) {
-      brush.cover(s.mask, brush.reach(point, r, s.now), ray.alt);
+      brush.cover(s.mask, alive(s, brush.reach(point, r, s.now)), ray.alt);
     }
     view.mask(state.picked, s.mask);
     return true;
@@ -1702,6 +1711,12 @@ function brushing(what, ray) {
  * that is asked for.
  */
 function within(s, reached, corners) {
+  // With one part of the shape seen alone, the rest of it is out of reach.
+  if (s.live) {
+    const keep = [];
+    reached.vertices.forEach((v, k) => s.live[v] && keep.push(k));
+    reached = { vertices: Uint32Array.from(keep, (k) => reached.vertices[k]), weights: Float32Array.from(keep, (k) => reached.weights[k]) };
+  }
   // A wider focus lifts the edge of the brush toward its middle.
   const power = 0.25 + (1 - state.focus / 100) * 1.5;
   for (let k = 0; k < reached.weights.length; k++) reached.weights[k] = Math.sqrt(reached.weights[k]) ** (power * 2);
@@ -1710,6 +1725,14 @@ function within(s, reached, corners) {
     reached = brush.joined(reached, s.weld, stroke.near, corners);
   }
   return brush.spared(reached, s.mask);
+}
+
+/** What a brush reaches of a shape, less what is out of sight while one part of it is seen alone. */
+function alive(s, reached) {
+  if (!s.live) return reached;
+  const keep = [];
+  reached.vertices.forEach((v, k) => s.live[v] && keep.push(k));
+  return { vertices: Uint32Array.from(keep, (k) => reached.vertices[k]), weights: Float32Array.from(keep, (k) => reached.weights[k]) };
 }
 
 /** Which vertices of a shape its triangles join, worked out once for the triangles it now shows. */

@@ -121,9 +121,9 @@ pub fn placed(
     let mut at = node;
     // No further up than there are blocks: a file whose nodes hang in a
     // ring is not followed round it.
-    for _ in 0..nif.blocks.len() {
+    for _ in 0..=nif.blocks.len() {
         let Some(parent) = parents.get(&at).copied().filter(|p| Some(*p) != root) else {
-            break;
+            return Ok(place);
         };
         place = composed(
             &Node::read(&nif.blocks[parent].data, stream)?.av.transform,
@@ -131,7 +131,7 @@ pub fn placed(
         );
         at = parent;
     }
-    Ok(place)
+    Err(NifError::Corrupt("the mesh's nodes hang in a ring".into()))
 }
 
 /// Each node's parent in a file: the node whose children list it.
@@ -214,7 +214,9 @@ pub fn copy_bone(into: &mut Nif, from: &Nif, name: &str) -> Result<usize, NifErr
     if let Some(e) = &mut node.effects {
         e.clear();
     }
-    // A plain node, whatever kind the skeleton made it: a bone needs no more.
+    // A plain node, whatever kind the skeleton made it: a bone needs no
+    // more, and what another kind adds after a node is not a node's.
+    node.rest.clear();
     let kind = into.kind_index("NiNode");
     into.blocks.push(Block {
         kind,
@@ -334,6 +336,14 @@ pub fn copy_shape(into: &mut Nif, from: &Nif, block: usize) -> Result<usize, Nif
         if let Some(at) = have.get(&name) {
             place.insert(*bone, *at as i32);
             continue;
+        }
+        // A kind of node that links to more than a node does is not one
+        // that can be brought along bare.
+        if !crate::edit::links_known(from.kind_of(*bone)) {
+            return Err(NifError::Unsupported(format!(
+                "a bone is a {}, which cannot be brought along",
+                from.kind_of(*bone)
+            )));
         }
         // Bare: nothing hanging from it, and since it hangs from the root
         // here, placed where its own parents had it in the file it is from.

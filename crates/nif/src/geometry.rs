@@ -172,6 +172,26 @@ pub fn is_tri_shape(kind: &str) -> bool {
 }
 
 impl TriShape {
+    /// The shape's link to its skin, read from the start of the block
+    /// without its vertices or triangles.
+    pub fn skin_of(data: &[u8], stream: u32) -> Option<Ref> {
+        let mut r = Reader::new(data);
+        AvObject::read(&mut r, stream).ok()?;
+        // The sphere round it, and from Fallout 4 on a box as well.
+        r.take(16).ok()?;
+        if stream == 155 {
+            r.take(24).ok()?;
+        }
+        r.i32().ok()
+    }
+
+    /// The shape's name, as a place in the file's table of texts, read
+    /// from the start of the block.
+    pub fn name_of(data: &[u8], stream: u32) -> Option<i32> {
+        let mut r = Reader::new(data);
+        AvObject::read(&mut r, stream).ok().map(|av| av.name)
+    }
+
     pub fn read(data: &[u8], stream: u32) -> Result<Self, NifError> {
         let mut r = Reader::new(data);
         let av = AvObject::read(&mut r, stream)?;

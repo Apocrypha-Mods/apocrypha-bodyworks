@@ -62,42 +62,47 @@ fn blocks(nif: &Nif, block: usize) -> Result<Blocks, NifError> {
         of(read.data, &["NiSkinData"]),
         of(read.partition, &["NiSkinPartition"]),
     ) {
-        (Some(data), Some(partition)) => {
-            // A skin two shapes share is not one shape's to change, and what
-            // is read of it for one would be wrong for the other.
-            let mut users = 0;
-            for other in 0..nif.blocks.len() {
-                let kind = nif.kind_of(other);
-                if kind != "NiSkinInstance" && kind != "BSDismemberSkinInstance" {
-                    continue;
-                }
-                if other != instance {
-                    if let Ok(theirs) =
-                        SkinInstance::read(&nif.blocks[other].data, kind != "NiSkinInstance")
-                    {
-                        if theirs.data == read.data || theirs.partition == read.partition {
-                            users += 1;
-                        }
-                    }
-                }
-            }
-            let shapes = (0..nif.blocks.len())
-                .filter(|b| is_tri_shape(nif.kind_of(*b)))
-                .filter_map(|b| TriShape::read(&nif.blocks[b].data, stream).ok())
-                .filter(|s| s.skin == shape.skin)
-                .count();
-            if users > 0 || shapes > 1 {
-                return unsupported("the shape shares its skin with another shape");
-            }
-            Ok(Blocks {
-                instance,
-                dismember,
-                data,
-                partition,
-            })
-        }
+        (Some(data), Some(partition)) => Ok(Blocks {
+            instance,
+            dismember,
+            data,
+            partition,
+        }),
         _ => unsupported("the shape's skin has no data or no partitions"),
     }
+}
+
+/// Whether the shape at `block` has its skin to itself. A skin two shapes
+/// share is not one shape's to change: what is written of it for one would
+/// be wrong for the other. Reading one is no harm, and is not stopped.
+pub fn owned(nif: &Nif, block: usize) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    let at = blocks(nif, block)?;
+    let mine = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;
+    for other in 0..nif.blocks.len() {
+        let kind = nif.kind_of(other);
+        let shares = if other == block {
+            false
+        } else if is_tri_shape(kind) {
+            // Its link to a skin follows what every scene object starts
+            // with, and is read without the vertices after it.
+            TriShape::skin_of(&nif.blocks[other].data, stream) == Some(at.instance as i32)
+        } else if kind == "NiTriShape" {
+            crate::geometry_le::NiTriShape::read(&nif.blocks[other].data, stream)
+                .is_ok_and(|s| s.skin == at.instance as i32)
+        } else if other != at.instance
+            && (kind == "NiSkinInstance" || kind == "BSDismemberSkinInstance")
+        {
+            SkinInstance::read(&nif.blocks[other].data, kind != "NiSkinInstance")
+                .is_ok_and(|theirs| theirs.data == mine.data || theirs.partition == mine.partition)
+        } else {
+            false
+        };
+        if shares {
+            return unsupported("the shape shares its skin with another shape");
+        }
+    }
+    Ok(())
 }
 
 /// The skin of the shape at `block`.
@@ -183,6 +188,7 @@ pub fn write(
     like: Option<usize>,
 ) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
+    owned(nif, block)?;
     let at = blocks(nif, block)?;
     if skin.bones.len() > 255 {
         return unsupported("a shape follows 255 bones at most");
@@ -430,6 +436,7 @@ pub fn parts(nif: &Nif, block: usize) -> Result<Vec<Part>, NifError> {
 
 /// Say which part of the body the `index`th part of a shape is.
 pub fn set_part(nif: &mut Nif, block: usize, index: usize, part: u16) -> Result<(), NifError> {
+    owned(nif, block)?;
     let at = blocks(nif, block)?;
     let mut instance = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;
     match instance.body_parts.as_mut().and_then(|p| p.get_mut(index)) {
@@ -491,6 +498,7 @@ pub fn move_to_part(
     new_part: u16,
 ) -> Result<usize, NifError> {
     let stream = nif.header.stream.version;
+    owned(nif, block)?;
     let at = blocks(nif, block)?;
     let mut instance = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;
     let mut partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
@@ -559,6 +567,9 @@ pub fn flip_facing(nif: &mut Nif, block: usize) -> Result<(), NifError> {
         t.swap(1, 2);
     }
     let skinned = shape.skin >= 0;
+    if skinned {
+        owned(nif, block)?;
+    }
     nif.blocks[block].data = shape.write(stream);
     if !skinned {
         return Ok(());
@@ -603,6 +614,7 @@ pub fn across(bone: &str) -> String {
 /// `into`th. The parts after it move up by one.
 pub fn remove_part(nif: &mut Nif, block: usize, index: usize, into: usize) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
+    owned(nif, block)?;
     let at = blocks(nif, block)?;
     let mut instance = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;
     let mut partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;

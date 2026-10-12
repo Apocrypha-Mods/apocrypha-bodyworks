@@ -269,16 +269,15 @@ pub fn read(nif: &Nif, block: usize) -> Result<Mesh, NifError> {
 /// The name of the shape at `block`.
 pub fn name(nif: &Nif, block: usize) -> Option<String> {
     let stream = nif.header.stream.version;
+    // Read from the start of the block: looking a shape up by its name
+    // does not cost a copy of its vertices.
     let name = if nif.kind_of(block) == "NiTriShape" {
         NiTriShape::read(&nif.blocks[block].data, stream)
             .ok()?
             .av
             .name
     } else {
-        TriShape::read(&nif.blocks[block].data, stream)
-            .ok()?
-            .av
-            .name
+        TriShape::name_of(&nif.blocks[block].data, stream)?
     };
     Some(name_of(nif, name))
 }
@@ -514,6 +513,10 @@ pub fn set_colors(nif: &mut Nif, block: usize, colors: &[(u16, [u8; 4])]) -> Res
     let layout = Layout::of(shape.vertex_desc, stream)
         .filter(|l| l.has(attr::COLOR))
         .ok_or_else(|| NifError::Unsupported("the shape's vertices carry no colour".into()))?;
+    // Where its vertices are in a skin, the skin must be its own.
+    if shape.skin >= 0 && partition_of(nif, &shape).is_some() {
+        crate::weights::owned(nif, block)?;
+    }
     let apply = |target: &mut TriShape| {
         for (v, c) in colors {
             target.set_color(&layout, *v as usize, *c);

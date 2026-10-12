@@ -8,12 +8,32 @@ use crate::Error;
 /// older tools, and a byte that is not UTF-8 is read as the character it
 /// most likely was rather than refusing the whole file.
 pub fn text_of(bytes: &[u8]) -> String {
+    spaced(&without_comments(&decoded(bytes)))
+}
+
+/// What bytes 0x80 to 0x9f are in Windows-1252, the older tools' encoding;
+/// the rest of a byte's range is the character of the same number.
+const WINDOWS_1252: [char; 32] = [
+    '\u{20ac}', '\u{81}', '\u{201a}', '\u{192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}',
+    '\u{2c6}', '\u{2030}', '\u{160}', '\u{2039}', '\u{152}', '\u{8d}', '\u{17d}', '\u{8f}',
+    '\u{90}', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}',
+    '\u{2dc}', '\u{2122}', '\u{161}', '\u{203a}', '\u{153}', '\u{9d}', '\u{17e}', '\u{178}',
+];
+
+/// Bytes as the text they are: UTF-8, or failing that Windows-1252. Nothing
+/// is taken out or put in: a name in a data file is whatever it says.
+pub fn decoded(bytes: &[u8]) -> String {
     let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
-    let text = match std::str::from_utf8(bytes) {
+    match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
-        Err(_) => bytes.iter().map(|b| *b as char).collect(),
-    };
-    spaced(&without_comments(&text))
+        Err(_) => bytes
+            .iter()
+            .map(|b| match b {
+                0x80..=0x9f => WINDOWS_1252[(*b - 0x80) as usize],
+                _ => *b as char,
+            })
+            .collect(),
+    }
 }
 
 /// Files written by hand also run one attribute into the next
@@ -85,6 +105,17 @@ pub fn flag(value: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_bytes_are_read_as_the_letters_they_were() {
+        assert_eq!(
+            decoded(b"Caf\xe9 \x93x\x94 \x80"),
+            "Caf\u{e9} \u{201c}x\u{201d} \u{20ac}"
+        );
+        assert_eq!(decoded("Caf\u{e9}".as_bytes()), "Caf\u{e9}");
+        // A name is not XML: nothing in it is a comment to take out.
+        assert_eq!(decoded(b"a<!--b-->c"), "a<!--b-->c");
+    }
 
     #[test]
     fn comments_are_dropped_even_ones_a_strict_reader_refuses() {

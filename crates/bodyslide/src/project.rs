@@ -666,6 +666,16 @@ impl Project {
         }
         mesh::set_positions(&mut self.nif, block, &positions).map_err(fail)?;
         let target = &self.set.shapes[at].target;
+        if self
+            .own
+            .iter()
+            .flatten()
+            .filter(|o| &o.target == target)
+            .flat_map(|o| o.diffs.iter())
+            .any(|d| turned(d.offset).iter().any(|c| !c.is_finite()))
+        {
+            return invalid("That would scale what a slider does past what a mesh can say.");
+        }
         for own in &mut self.own {
             for o in own.iter_mut().filter(|o| &o.target == target) {
                 for d in Arc::make_mut(&mut o.diffs) {
@@ -1330,6 +1340,15 @@ impl Project {
             .iter()
             .map(|o| (format!("{}{slider}", o.target), o.diffs.to_vec()))
             .collect();
+        // Nothing the file would cut short.
+        if lists
+            .iter()
+            .any(|(name, diffs)| name.len() > 255 || diffs.len() > u16::MAX as usize)
+        {
+            return invalid(format!(
+                "{slider} has a name too long, or moves too much, for a slider data file."
+            ));
+        }
         if lists.is_empty() {
             return invalid(format!(
                 "{slider} does nothing to this project's own shapes."

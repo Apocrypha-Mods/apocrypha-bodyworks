@@ -245,6 +245,7 @@ impl Work {
             return Err(e);
         }
         if self.project != before {
+            self.redo.clear();
             self.undo.push(before);
             self.trim();
             self.redo.clear();
@@ -283,6 +284,7 @@ impl Work {
         if let Some(then) = from.pop() {
             to.push(std::mem::replace(&mut self.project, then));
             self.changed = true;
+            self.trim();
             self.refresh()?;
         }
         Ok(())

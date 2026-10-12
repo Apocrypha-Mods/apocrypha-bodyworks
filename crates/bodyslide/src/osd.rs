@@ -62,7 +62,7 @@ impl SliderData {
                     ],
                 })
                 .collect();
-            lists.push((crate::xml::text_of(name), diffs));
+            lists.push((crate::xml::decoded(name), diffs));
         }
         if at != bytes.len() {
             return Err(Error::Invalid(format!(

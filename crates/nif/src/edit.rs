@@ -373,8 +373,11 @@ pub fn remove_vertices(nif: &mut Nif, block: usize, gone: &[bool]) -> Result<usi
         .iter()
         .map(|g| {
             (!g).then(|| {
-                next += 1;
-                next - 1
+                // The last of 65,536 kept is numbered 65,535, and there is
+                // no next after it to count to.
+                let at = next;
+                next = next.wrapping_add(1);
+                at
             })
         })
         .collect();
