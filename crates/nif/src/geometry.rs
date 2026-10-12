@@ -131,6 +131,23 @@ impl Layout {
     pub fn has(&self, a: u16) -> bool {
         self.attributes & a != 0
     }
+
+    /// The description of the same vertex carrying a colour as well, and
+    /// where in its bytes the colour goes. Only for the descriptions real
+    /// files were found to pair this way (`--example descs`): each is
+    /// written here as the files write it, not worked out.
+    pub fn with_color(desc: u64, stream: u32) -> Option<(u64, usize)> {
+        let to = match desc {
+            // Place, texture, normal and tangent; and the same with bones.
+            0x0001_b000_0065_0407 => 0x0003_b000_0765_0408,
+            0x0005_b000_7065_040a => 0x0007_b000_8765_040b,
+            // Place and texture with bones, lit from a normal map.
+            0x0004_3000_5000_0408 => 0x0006_3000_6500_0409,
+            _ => return None,
+        };
+        let at = Layout::of(to, stream)?.color?;
+        Some((to, at))
+    }
 }
 
 /// A shape with its vertices in the block: `BSTriShape` and the kinds built

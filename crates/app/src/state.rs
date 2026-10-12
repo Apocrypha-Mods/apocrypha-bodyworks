@@ -222,6 +222,7 @@ impl Work {
                 p.add_zap(&name, &shape, &vertices)
             }
             Change::Textures { shape, textures } => p.set_textures(&shape, &textures),
+            Change::AddColours { shape } => p.add_colors(&shape),
             Change::Look {
                 shape,
                 glow,
@@ -541,6 +542,10 @@ enum Change {
         gloss: f32,
         shine: [f32; 3],
         shine_strength: f32,
+    },
+    /// Give a shape's vertices colours to carry, where they carry none.
+    AddColours {
+        shape: String,
     },
     /// Name the texture files a shape is drawn with, slot by slot.
     Textures {

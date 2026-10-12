@@ -1308,6 +1308,31 @@ impl Project {
         done.map_err(|e| Error::Invalid(e.to_string()))
     }
 
+    /// Give a shape's vertices colours to carry, all white and solid, where
+    /// they carry none.
+    pub fn add_colors(&mut self, shape: &str) -> Result<(), Error> {
+        self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let before = self.nif.clone();
+        let done = mesh::add_colors(&mut self.nif, block).and_then(|()| {
+            // Read back as a check: as many colours as it has vertices.
+            let count = mesh::read(&self.nif, block)?.positions.len();
+            if mesh::colors(&self.nif, block)?.len() == count {
+                Ok(())
+            } else {
+                Err(apoc_nif::NifError::Unsupported(
+                    "this kind of shape cannot be given colours".into(),
+                ))
+            }
+        });
+        if done.is_err() {
+            self.nif = before;
+        }
+        done.map_err(|e| Error::Invalid(e.to_string()))
+    }
+
     /// Give vertices of a shape colours: each `(vertex, colour)`.
     pub fn paint_colors(&mut self, shape: &str, colors: &[(u16, [u8; 4])]) -> Result<(), Error> {
         self.shape(shape)?;

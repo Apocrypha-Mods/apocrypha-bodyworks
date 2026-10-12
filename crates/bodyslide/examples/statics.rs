@@ -180,6 +180,47 @@ fn main() {
             p.paint_colors(&shape, &[(0, [255, 0, 0, 255])])
                 .map_err(said),
         );
+        // Colours given to a shape with none: everything else of it as it
+        // was, and one to paint.
+        if let Some(m) = block.and_then(|b| mesh::read(&project.nif, b).ok()) {
+            if block.is_some_and(|b| mesh::colors(&project.nif, b).is_ok_and(|c| c.is_empty())) {
+                let mut p = project.clone();
+                let done = p
+                    .add_colors(&shape)
+                    .and_then(|()| p.paint_colors(&shape, &[(0, [255, 0, 0, 255])]))
+                    .map_err(said);
+                if done.is_ok() {
+                    let nif = Nif::read(&p.nif.write()).unwrap();
+                    let at = mesh::shapes(&nif)
+                        .into_iter()
+                        .find(|at| mesh::name(&nif, *at).as_deref() == Some(shape.as_str()));
+                    let now = at.and_then(|a| mesh::read(&nif, a).ok());
+                    let same = now.is_some_and(|n| {
+                        n.positions == m.positions
+                            && n.uvs == m.uvs
+                            && n.triangles == m.triangles
+                            && n.normals == m.normals
+                    });
+                    let skin = |n: &Nif, a: Option<usize>| {
+                        a.and_then(|a| apoc_nif::weights::read(n, a).ok())
+                    };
+                    let skinned = skin(&nif, at) == skin(&project.nif, block);
+                    let colours = at
+                        .and_then(|a| mesh::colors(&nif, a).ok())
+                        .unwrap_or_default();
+                    let painted = colours.first() == Some(&[255, 0, 0, 255])
+                        && colours.len() == m.positions.len()
+                        && colours[1..].iter().all(|c| *c == [255; 4]);
+                    note(
+                        "given colours: the rest as it was, read back",
+                        (same && skinned && painted).then_some(()).ok_or(format!(
+                            "{path}: same {same} skin {skinned} painted {painted}"
+                        )),
+                    );
+                }
+                note("give colours", done);
+            }
+        }
         let mut p = project.clone();
         note("new slider", p.add_slider("Probe").map_err(said));
         note("save", project.save("Probe").map(drop).map_err(said));

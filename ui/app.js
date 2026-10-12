@@ -1303,6 +1303,7 @@ function studioSide() {
                     { name: sh.ghost ? "Solid" : "Ghost", value: "ghost" },
                     state.work && sh.textures.length > 0 && { name: "Textures…", value: "textures" },
                     state.work && sh.look && { name: "Material…", value: "material" },
+                    state.work && !sh.reference && !sh.colors.length && { name: "Add colours", value: "addColours" },
                     state.work && { name: "Flip texture left to right", value: "flipU" },
                     state.work && { name: "Flip texture top to bottom", value: "flipV" },
                     { name: "Export OBJ…", value: "export", rule: true },
@@ -1323,6 +1324,7 @@ function studioSide() {
                     }
                     if (what === "transform") return transform(sh);
                     if (what === "material") return material(sh);
+                    if (what === "addColours") return attempt({ do: "addColours", shape: sh.name });
                     if (what === "mirror") return attempt({ do: "mirror", shape: sh.name });
                     if (what === "refine") {
                       // Masked points, and the edges they end, stay as they are.
@@ -2329,7 +2331,7 @@ function heat() {
       state.problem = e.message;
     }
   }
-  if (state.tool === "colour" && !s.colors.length) state.problem = `${s.name} carries no colours to paint.`;
+  if (state.tool === "colour" && !s.colors.length) state.problem = `${s.name} carries no colours. Add them from its menu.`;
   view.look({ heat: Boolean(state.heat), colour: state.tool === "colour" && s.colors.length > 0 });
   view.mask(state.picked, state.heat || s.mask);
 }

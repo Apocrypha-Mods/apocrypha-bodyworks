@@ -1669,6 +1669,39 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
     assert!(boned_name_refused(&project));
     built(&glowing, "Bra");
 
+    // Colours for a shape that carries none: every vertex white, the shape
+    // otherwise as it was, built as before but for them.
+    let coloured = |p: &Project, name: &str| {
+        let at = mesh::shapes(&p.nif)
+            .into_iter()
+            .find(|at| mesh::name(&p.nif, *at).as_deref() == Some(name))
+            .unwrap();
+        mesh::colors(&p.nif, at).unwrap()
+    };
+    if coloured(&project, "Bra").is_empty() {
+        let mut tinted = project.clone();
+        tinted.add_colors("Bra").unwrap();
+        let (now, now_skin) = shape(&tinted, "Bra");
+        assert_eq!(
+            coloured(&tinted, "Bra"),
+            vec![[255u8; 4]; now.positions.len()]
+        );
+        assert_eq!(
+            (&now.positions, &now.uvs, &now.triangles),
+            (&was.positions, &was.uvs, &was.triangles)
+        );
+        assert_eq!(now_skin, was_skin);
+        tinted
+            .paint_colors("Bra", &[(3, [10, 20, 30, 40])])
+            .unwrap();
+        assert_eq!(coloured(&tinted, "Bra")[3], [10, 20, 30, 40]);
+        assert_eq!(built(&tinted, "Bra").positions, was_built.positions);
+        // Asked again, nothing more is done.
+        let again = tinted.clone();
+        tinted.add_colors("Bra").unwrap();
+        assert_eq!(tinted.nif.write(), again.nif.write());
+    }
+
     // A bone made up by hand: once, and where it was put.
     let mut boned = project.clone();
     boned

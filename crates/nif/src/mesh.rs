@@ -627,6 +627,81 @@ pub fn set_colors(nif: &mut Nif, block: usize, colors: &[(u16, [u8; 4])]) -> Res
     Ok(())
 }
 
+/// Give the vertices of the shape at `block` colours to carry, all white
+/// and solid, where they carry none: in every place the file keeps them,
+/// and with the switch on its lighting that every shape with colours was
+/// found to have on and none without (`--example colourflag`). A shape that
+/// carries them already is left as it is.
+pub fn add_colors(nif: &mut Nif, block: usize) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    let none = || NifError::Unsupported("this kind of shape cannot be given colours".into());
+    if nif.kind_of(block) != "BSTriShape" {
+        return Err(none());
+    }
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let was = Layout::of(shape.vertex_desc, stream).ok_or_else(none)?;
+    if was.has(attr::COLOR) {
+        return Ok(());
+    }
+    let (desc, at) = Layout::with_color(shape.vertex_desc, stream).ok_or_else(none)?;
+    let lighting = shader_of(nif, block).ok_or_else(none)?;
+    // The switch is the lighting's, and so every shape's that is drawn by it.
+    if shapes(nif)
+        .into_iter()
+        .any(|other| other != block && shader_of(nif, other) == Some(lighting))
+    {
+        return Err(NifError::Unsupported(
+            "the shape shares its lighting with another, which carries no colours".into(),
+        ));
+    }
+    let stride = was.stride.max(1);
+    let widened = |data: &[u8]| -> Result<Vec<u8>, NifError> {
+        if !data.len().is_multiple_of(stride) || at > stride {
+            return Err(NifError::Corrupt(
+                "the shape's vertices are not a whole number".into(),
+            ));
+        }
+        let mut out = Vec::with_capacity(data.len() / stride * (stride + 4));
+        for row in data.chunks_exact(stride) {
+            out.extend_from_slice(&row[..at]);
+            out.extend_from_slice(&[255; 4]);
+            out.extend_from_slice(&row[at..]);
+        }
+        Ok(out)
+    };
+    let partition = partition_of(nif, &shape).filter(|(_, p)| !p.vertex_data.is_empty());
+    if partition.is_some() {
+        crate::weights::owned(nif, block)?;
+    }
+    let mut lit = LightingShader::read(&nif.blocks[lighting].data, stream)?;
+    // All worked out before anything is put in the file.
+    let skin = match partition {
+        Some((p_at, mut p)) => {
+            if p.vertex_desc != Some(shape.vertex_desc) {
+                return Err(none());
+            }
+            p.vertex_data = widened(&p.vertex_data)?;
+            p.vertex_desc = Some(desc);
+            p.vertex_size = Some((stride + 4) as u32);
+            Some((p_at, p.write(stream)))
+        }
+        None => None,
+    };
+    if shape.has_vertices() {
+        shape.vertex_data = widened(&shape.vertex_data)?;
+    } else if skin.is_none() {
+        return Err(none());
+    }
+    shape.vertex_desc = desc;
+    lit.flags2 |= 1 << 5;
+    if let Some((p_at, bytes)) = skin {
+        nif.blocks[p_at].data = bytes;
+    }
+    nif.blocks[block].data = shape.write(stream);
+    nif.blocks[lighting].data = lit.write();
+    Ok(())
+}
+
 /// Give a shape new normals, and with them new tangents and bitangents
 /// where it stores those, in every place the file keeps them. A shape that
 /// stores no normals (a body lit from a normal map) is left as it is.

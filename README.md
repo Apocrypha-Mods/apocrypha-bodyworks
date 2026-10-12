@@ -77,7 +77,9 @@ their documentation. Each line is something they do that this does not.
 
 Outfit Studio:
 
-- Brushes: colour is painted only on a shape that already carries colours.
+- Brushes: a shape with none is given colours to paint only where its
+  vertices are laid out one of three ways real files pair with a coloured
+  one, and it shares its lighting with no other shape.
 - Shapes: merging shapes that keep different things for each vertex,
   removing skinning, the kind of shader a shape is drawn with and its
   switches (its textures, glow, shine, gloss and opacity are changed).
