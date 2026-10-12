@@ -63,6 +63,9 @@ browser for the screen's own script, drawing apart):
   with its morph file in 19 ms.
 - The screen: a slider moved in about 1 ms, a brush moved in under 1 ms, a
   stroke's end in about 15 ms.
+- FBX files (in Node, the same script): the body written with its 26
+  bones in 3 ms; a project of three shapes read back in 19 ms, and the same
+  as Blender writes it (compressed) in 45 ms.
 
 Larger meshes cost in proportion: every brush move looks at each vertex and
 triangle of the picked shape once.
