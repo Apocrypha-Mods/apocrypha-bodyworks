@@ -870,7 +870,7 @@ function several() {
 
 function busy(text) {
   state.busy = text;
-  const el = document.getElementById("status");
+  const el = document.getElementById("busy");
   if (el) el.textContent = text;
   else render();
 }
@@ -1074,38 +1074,43 @@ function foot() {
   const working = Boolean(state.busy);
   const ready = state.set && state.shapes.length && !working;
   el.replaceChildren(
+    // The mod builds go into is always here to be changed: what else there
+    // is to say sits beside it, not in its place.
+    h(
+      "button.btn.ghost.small",
+      {
+        type: "button",
+        id: "status",
+        title: "The mod builds go into",
+        disabled: Boolean(state.busy),
+        onclick: () =>
+          rename(
+            "Build into",
+            state.output,
+            (to) => {
+              const name = to.trim();
+              if (!name || name.length > 80 || /^[.]|[\\/:*?"<>|]/.test(name)) throw new Error('A mod\'s name, without \\ / : * ? " < > |');
+              state.output = name;
+              remembered.set("output", name);
+              state.built = null;
+              foot();
+            },
+            "Done",
+          ),
+      },
+      `Into ${state.output}`,
+    ),
     state.problem
       ? h("span.sub.warn.cut", null, state.problem)
       : state.unread && state.built === null
         ? h("span.sub.warn.cut", null, state.unread)
         : state.built !== null
-        ? h("span.sub.cut", null, `${state.built} ${state.built === 1 ? "file" : "files"} built into ${state.output}`)
-        : state.note
-          ? h("span.sub.cut", null, state.note)
-          : state.busy
-          ? h("span.sub.cut", { id: "status" }, state.busy)
-          : h(
-              "button.btn.ghost.small",
-              {
-                type: "button",
-                id: "status",
-                title: "The mod builds go into",
-                onclick: () =>
-                  rename(
-                    "Build into",
-                    state.output,
-                    (to) => {
-                      const name = to.trim();
-                      if (!name || name.length > 80 || /^[.]|[\\/:*?"<>|]/.test(name)) throw new Error('A mod\'s name, without \\ / : * ? " < > |');
-                      state.output = name;
-                      remembered.set("output", name);
-                      foot();
-                    },
-                    "Done",
-                  ),
-              },
-              `Into ${state.output}`,
-            ),
+          ? h("span.sub.cut", null, `${state.built} ${state.built === 1 ? "file" : "files"} built`)
+          : state.note
+            ? h("span.sub.cut", null, state.note)
+            : state.busy
+              ? h("span.sub.cut", { id: "busy" }, state.busy)
+              : null,
     h("span.grow"),
     h(
       "button.check.inline" + (state.morphs ? ".on" : ""),
