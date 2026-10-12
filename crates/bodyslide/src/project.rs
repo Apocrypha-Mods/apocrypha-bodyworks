@@ -10,9 +10,18 @@ use apoc_nif::{copy, edit, mesh, weights, Nif};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// What a file says its mesh's vertices follow: its bones by name, and for
-/// each vertex four pairs of a bone's number among them and how much.
-pub type Followed<'a> = (&'a [String], &'a [[(u32, f32); 4]]);
+/// What a file says its mesh's vertices follow: its bones by name, for
+/// each vertex four pairs of a bone's number among them and how much, and
+/// where the file stands each bone (nothing for one it does not stand).
+#[derive(Debug, Clone, Copy)]
+pub struct Followed<'a> {
+    pub bones: &'a [String],
+    pub follows: &'a [[(u32, f32); 4]],
+    pub stands: &'a [Option<Stand>],
+}
+
+/// Where a file stands a bone: its place, and its turn a row at a time.
+pub type Stand = ([f32; 3], [f32; 9]);
 
 /// What one slider does to one of the project's own shapes.
 #[derive(Debug, Clone, PartialEq)]
@@ -1298,6 +1307,36 @@ impl Project {
             .map_err(|e| Error::Invalid(e.to_string()))
     }
 
+    /// A bone made up, not one of a skeleton's: named, and standing where
+    /// it is put (`turn` a row at a time), for shapes to be painted onto.
+    pub fn new_bone(&mut self, bone: &str, at: [f32; 3], turn: [f32; 9]) -> Result<(), Error> {
+        let bone = bone.trim();
+        if bone.is_empty() || bone.len() > 255 {
+            return invalid("Give the bone a name.");
+        }
+        if at.iter().chain(&turn).any(|c| !c.is_finite()) {
+            return invalid("Where the bone stands is not numbers a mesh can hold.");
+        }
+        // A turn only: rows a unit long and square to each other.
+        let row = |r: usize| [turn[r * 3], turn[r * 3 + 1], turn[r * 3 + 2]];
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let square = (0..3).all(|r| (dot(row(r), row(r)) - 1.0).abs() < 0.01)
+            && dot(row(0), row(1)).abs() < 0.01
+            && dot(row(0), row(2)).abs() < 0.01
+            && dot(row(1), row(2)).abs() < 0.01;
+        if !square {
+            return invalid("How the bone is turned is not a turn.");
+        }
+        let place = apoc_nif::node::Transform {
+            translation: at,
+            rotation: turn,
+            scale: 1.0,
+        };
+        copy::new_bone(&mut self.nif, bone, place)
+            .map(drop)
+            .map_err(|e| Error::Invalid(e.to_string()))
+    }
+
     /// Make two shapes one: `from` goes into `into`, with what sliders do
     /// to it, and is no longer a shape of its own. The one shape is drawn
     /// as `into` was: with its textures.
@@ -1437,7 +1476,7 @@ impl Project {
         given: Option<Followed>,
     ) -> Result<(), Error> {
         let name = name.trim();
-        if given.is_some_and(|g| g.1.len() != positions.len()) {
+        if given.is_some_and(|g| g.follows.len() != positions.len()) {
             return invalid("The file says what other vertices follow than it has.");
         }
         if positions.is_empty() || triangles.is_empty() {
@@ -1501,10 +1540,33 @@ impl Project {
                 vertices.push(skin.vertices[near]);
             }
             let mut bones = skin.bones.clone();
-            if let Some((names, follows)) = given {
+            if let Some(Followed {
+                bones: names,
+                follows,
+                stands,
+            }) = given
+            {
                 // A bone of the file's is one of the mesh's by its name; one
                 // the mesh has not got is left out, and a vertex left with
                 // nothing keeps what its likeness follows.
+                // A bone the file stands somewhere and the mesh has not got
+                // is made where the file stands it, if a vertex follows it.
+                let known: std::collections::HashSet<String> =
+                    copy::bone_names(&self.nif).into_iter().collect();
+                let mut wanted = vec![false; names.len()];
+                for (bone, weight) in follows.iter().flatten() {
+                    if let Some(w) = wanted.get_mut(*bone as usize) {
+                        *w |= *weight > 0.0 && weight.is_finite();
+                    }
+                }
+                for (i, bone) in names.iter().enumerate() {
+                    let Some((at, turn)) = stands.get(i).copied().flatten() else {
+                        continue;
+                    };
+                    if wanted[i] && !known.contains(bone) && !bone.trim().is_empty() {
+                        self.new_bone(bone, at, turn)?;
+                    }
+                }
                 let have: std::collections::HashSet<String> =
                     copy::bone_names(&self.nif).into_iter().collect();
                 let mut at: Vec<Option<u16>> = vec![None; names.len()];

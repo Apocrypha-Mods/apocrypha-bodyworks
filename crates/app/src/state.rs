@@ -249,12 +249,30 @@ impl Work {
             }
             Change::Weld { shape } => p.weld(&shape).map(drop),
             Change::Refine { shape } => p.refine(&shape, &numbers(data)).map(drop),
-            Change::ShapeFrom { like, name, bones } => match outside_mesh(data) {
+            Change::NewBone { bone, at, turn } => p.new_bone(
+                &bone,
+                at,
+                turn.unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            ),
+            Change::ShapeFrom {
+                like,
+                name,
+                bones,
+                stands,
+            } => match outside_mesh(data) {
                 Some(((positions, uvs, triangles), rest))
                     if rest.is_empty() || rest.len() == positions.len() * 32 =>
                 {
                     let follows = outside_weights(rest);
-                    let given = (!rest.is_empty()).then_some((&bones[..], &follows[..]));
+                    let stands: Vec<_> = stands
+                        .iter()
+                        .map(|s| s.as_ref().map(|s| (s.at, s.turn)))
+                        .collect();
+                    let given = (!rest.is_empty()).then_some(apoc_bodyslide::project::Followed {
+                        bones: &bones,
+                        follows: &follows,
+                        stands: &stands,
+                    });
                     p.shape_from(&like, &name, &positions, &uvs, &triangles, given)
                 }
                 _ => Err(apoc_bodyslide::Error::Invalid(
@@ -382,6 +400,13 @@ impl Work {
         }
         Ok(())
     }
+}
+
+/// Where a file stands a bone.
+#[derive(Debug, Clone, Deserialize)]
+struct Stand {
+    at: [f32; 3],
+    turn: [f32; 9],
 }
 
 #[derive(Deserialize)]
@@ -541,6 +566,18 @@ enum Change {
         name: String,
         #[serde(default)]
         bones: Vec<String>,
+        /// Where the file stands each of `bones`, for one the mesh has not
+        /// got to be made there; nothing for one it does not stand.
+        #[serde(default)]
+        stands: Vec<Option<Stand>>,
+    },
+    /// A bone made up, standing at `at`, turned as `turn` (a row at a
+    /// time) or not at all.
+    NewBone {
+        bone: String,
+        at: [f32; 3],
+        #[serde(default)]
+        turn: Option<[f32; 9]>,
     },
     /// Make two shapes one: `from` goes into `into`.
     Merge {

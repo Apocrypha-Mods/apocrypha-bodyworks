@@ -486,6 +486,21 @@ async function meshes(bytes) {
   // Directions that make a left hand of a right one turn every face over.
   const [lx, ly, lz] = [laid([1, 0, 0]), laid([0, 1, 0]), laid([0, 0, 1])];
   const flipped = lx[0] * (ly[1] * lz[2] - ly[2] * lz[1]) - lx[1] * (ly[0] * lz[2] - ly[2] * lz[0]) + lx[2] * (ly[0] * lz[1] - ly[1] * lz[0]) < 0;
+  // Where a cluster says its bone stands, in the games' space: its place, and its turn a row at a time with any
+  // scale taken out. Nothing where the file's directions make a left hand of a right one: that is no turn.
+  const stood = (m) => {
+    if (flipped || !(m instanceof Float64Array) || m.length !== 16 || m.some((c) => !Number.isFinite(c))) return null;
+    const turn = new Array(9);
+    for (let c = 0; c < 3; c++) {
+      // Each direction of the bone's own, a unit long, laid as the games lay theirs.
+      const far = Math.hypot(m[c * 4], m[c * 4 + 1], m[c * 4 + 2]);
+      if (!(far > 1e-9)) return null;
+      const [x, y, z] = laid([m[c * 4] / far, m[c * 4 + 1] / far, m[c * 4 + 2] / far]).map((v) => v / unit);
+      [turn[c], turn[3 + c], turn[6 + c]] = [x, y, z];
+    }
+    const at = laid([m[12], m[13], m[14]]);
+    return at.every((c) => Number.isFinite(Math.fround(c))) ? { at, turn } : null;
+  };
   const objects = top("Objects")?.records || [];
   const models = objects.filter((o) => o.name === "Model");
   const names = new Map(models.map((o) => [o.values[0], String(o.values[1]).split("\0")[0]]));
@@ -530,7 +545,7 @@ async function meshes(bytes) {
         const bone = (users.get(id) || []).map((b) => names.get(b)).find(Boolean);
         const [points, weights] = [child(cluster, "Indexes")?.values[0], child(cluster, "Weights")?.values[0]];
         if (!bone || !(points instanceof Int32Array) || !(weights instanceof Float64Array) || points.length !== weights.length) continue;
-        followed.push({ bone, points, weights: Float32Array.from(weights) });
+        followed.push({ bone, points, weights: Float32Array.from(weights), stands: stood(child(cluster, "TransformLink")?.values[0]) });
       }
     }
     // Once for each object that places it, or once where it lies if none does.

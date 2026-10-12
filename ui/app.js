@@ -1993,26 +1993,28 @@ async function shapeFromObj(like) {
     const meshes = /\.fbx$/i.test(picked.name) ? await fbx.read(new Uint8Array(picked.bytes)) : [{ name: plain, ...obj.mesh(new TextDecoder().decode(picked.bytes)) }];
     // A mesh with what its file says it follows, where the file says: its bytes, then that.
     const sent = (made) => {
-      if (!made.followed?.length) return [[], meshBytes(made)];
+      if (!made.followed?.length) return [[], [], meshBytes(made)];
       const [mesh, rig] = [meshBytes(made), fbx.follows(made)];
       const bytes = new Uint8Array(mesh.length + rig.bytes.length);
       bytes.set(mesh);
       bytes.set(rig.bytes, mesh.length);
-      return [rig.bones, bytes];
+      // Where the file stands each bone, for one the project has not got to be made there.
+      const stands = rig.bones.map((b) => made.followed.find((f) => f.bone === b)?.stands || null);
+      return [rig.bones, stands, bytes];
     };
     // Bones the file names that the project has not got are left out, and said.
     const missing = () => {
-      const lost = [...new Set(meshes.flatMap((m) => (m.followed || []).map((f) => f.bone)))].filter((b) => !state.bones.includes(b));
+      const lost = [...new Set(meshes.flatMap((m) => (m.followed || []).filter((f) => !f.stands).map((f) => f.bone)))].filter((b) => !state.bones.includes(b));
       if (lost.length) state.problem = lost.length === 1 ? `${lost[0]} is not in the project. Its weights were left out.` : `${lost.length} bones are not in the project (${lost.slice(0, 3).join(", ")}${lost.length > 3 ? "…" : ""}). Their weights were left out.`;
       if (lost.length) render();
     };
     if (meshes.length === 1) {
-      const [bones, bytes] = sent(meshes[0]);
+      const [bones, stands, bytes] = sent(meshes[0]);
       rename(
         "New shape",
         meshes[0].name || plain,
         (name) => {
-          const [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name, bones } }, bytes);
+          const [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name, bones, stands } }, bytes);
           taken(work);
           missing();
         },
@@ -2028,8 +2030,8 @@ async function shapeFromObj(like) {
         let name = given;
         for (let n = 2; names.has(name); n++) name = `${given} ${n}`;
         names.add(name);
-        const [bones, bytes] = sent(made);
-        [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name, bones } }, bytes);
+        const [bones, stands, bytes] = sent(made);
+        [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name, bones, stands } }, bytes);
       }
     } finally {
       // Those made before one that could not be are there all the same.
@@ -2463,12 +2465,15 @@ async function addBone(anchor) {
         items.push({ name, note: sk.path.split("/").pop(), value: { name, sk } });
       }
     }
-    if (!items.length) throw new Error(skeletons.length ? "The mesh has every bone of the game's skeleton." : "No mod, nor the game, has a skeleton to take a bone from.");
     items.sort((a, b) => a.name.localeCompare(b.name));
+    // One made up, where the skeleton has none to give or none that will do.
+    items.push({ name: "New bone…", value: "new", rule: items.length > 0 });
     menu(
       anchor,
       items,
-      ({ name, sk }) => {
+      (picked) => {
+        if (picked === "new") return newBone();
+        const { name, sk } = picked;
         try {
           const [work] = core.ask({ op: "change", change: { do: "addBone", bone: name } }, new Uint8Array(sk.bytes));
           state.bone = name;
@@ -2488,6 +2493,39 @@ async function addBone(anchor) {
     state.problem = e.message;
     render();
   }
+}
+
+/** Outfit Studio: a bone made up, named and stood somewhere. It is then the bone the weight brush paints. */
+function newBone() {
+  const name = h("input.input", { type: "text", value: "", "aria-label": "Name", maxLength: 120, spellcheck: false });
+  const places = ["X", "Y", "Z"].map((axis) => {
+    const input = h("input.input", { type: "number", step: "any", value: "0", "aria-label": axis });
+    return [h("label.field", null, h("span", null, axis), input), input];
+  });
+  const go = h("button.btn.primary", { type: "button" }, "Add");
+  const said = h("span.sub.warn.grow.cut");
+  const run = () => {
+    try {
+      const bone = name.value.trim();
+      const [work] = core.ask({ op: "change", change: { do: "newBone", bone, at: places.map(([, input]) => Number(input.value)) } });
+      state.bone = bone;
+      state.tool = "weights";
+      view.brush = brushing;
+      canvas.style.cursor = "crosshair";
+      taken(work);
+      close(el);
+    } catch (e) {
+      said.textContent = e.message;
+    }
+  };
+  go.addEventListener("click", run);
+  name.addEventListener("keydown", (e) => e.key === "Enter" && run());
+  const el = sheet("New bone", null, [h("label.field", null, h("span", null, "Name"), name), h("div.pair.three", null, places.map((f) => f[0]))], [
+    said,
+    h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
+    go,
+  ]);
+  name.focus();
 }
 
 /** Every mesh the mods have, listed once: `{ name, note, value }` for the menu. */

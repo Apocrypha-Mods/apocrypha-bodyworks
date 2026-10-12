@@ -234,6 +234,56 @@ pub fn copy_bone(into: &mut Nif, from: &Nif, name: &str) -> Result<usize, NifErr
     Ok(at)
 }
 
+/// A bone made up: a bare node of that name hung from the first root, placed
+/// as given. It is made as the file's own bones are (the first node the
+/// root holds, or the root itself where it holds none), so it carries what
+/// a node of this game does. Refused where the file has a node of the name.
+pub fn new_bone(into: &mut Nif, name: &str, place: Transform) -> Result<usize, NifError> {
+    let stream = into.header.stream.version;
+    if node_names(into).contains_key(name.as_bytes()) {
+        return Err(NifError::Unsupported(format!(
+            "the mesh already has a bone named {name}"
+        )));
+    }
+    let root = into
+        .roots
+        .first()
+        .and_then(|r| usize::try_from(*r).ok())
+        .filter(|r| *r < into.blocks.len() && is_node(into.kind_of(*r)))
+        .ok_or_else(|| NifError::Unsupported("the mesh has no node to hang a bone from".into()))?;
+    let top = Node::read(&into.blocks[root].data, stream)?;
+    let like = top
+        .children
+        .iter()
+        .filter_map(|c| usize::try_from(*c).ok())
+        .find(|c| *c < into.blocks.len() && into.kind_of(*c) == "NiNode")
+        .unwrap_or(root);
+    let mut node = Node::read(&into.blocks[like].data, stream)?;
+    node.av.transform = place;
+    node.av.name = into.intern(name.as_bytes());
+    node.av.extra_data.clear();
+    node.av.controller = -1;
+    node.av.collision = -1;
+    if let Some(p) = &mut node.av.properties {
+        p.clear();
+    }
+    node.children.clear();
+    if let Some(e) = &mut node.effects {
+        e.clear();
+    }
+    node.rest.clear();
+    let kind = into.kind_index("NiNode");
+    into.blocks.push(Block {
+        kind,
+        data: node.write(stream),
+    });
+    let at = into.blocks.len() - 1;
+    let mut top = Node::read(&into.blocks[root].data, stream)?;
+    top.children.push(at as i32);
+    into.blocks[root].data = top.write(stream);
+    Ok(at)
+}
+
 /// The names of every node of a file, in the file's order: a skeleton's bones.
 pub fn bone_names(nif: &Nif) -> Vec<String> {
     let stream = nif.header.stream.version;
