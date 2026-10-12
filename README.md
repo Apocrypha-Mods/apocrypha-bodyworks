@@ -81,7 +81,8 @@ Outfit Studio:
 - Brushes: the vertex tools (collapse, flip or split an edge, weld, move one
   vertex). Colour is painted only on a shape that already carries colours.
 - Brush settings: spacing.
-- Shapes: refining (subdividing) a mesh, merging shapes,
+- Shapes: refining (subdividing) a mesh, merging shapes that keep different
+  things for each vertex (two that keep the same are merged),
   removing skinning, shader properties other than the texture files, making
   a shape from an OBJ or FBX file.
 - Bones: custom bones (one made up, not taken from the game's skeleton),

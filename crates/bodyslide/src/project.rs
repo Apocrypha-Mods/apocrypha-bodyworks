@@ -1268,6 +1268,67 @@ impl Project {
             .map_err(|e| Error::Invalid(e.to_string()))
     }
 
+    /// Make two shapes one: `from` goes into `into`, with what sliders do
+    /// to it, and is no longer a shape of its own. The one shape is drawn
+    /// as `into` was: with its textures.
+    pub fn merge_shapes(&mut self, into: &str, from: &str) -> Result<(), Error> {
+        let (a, b) = (self.shape(into)?, self.shape(from)?);
+        if a == b {
+            return invalid("A shape is merged into another shape.");
+        }
+        let (ta, tb) = (
+            self.set.shapes[a].target.clone(),
+            self.set.shapes[b].target.clone(),
+        );
+        if self
+            .set
+            .sliders
+            .iter()
+            .any(|s| s.data.iter().any(|d| d.target == ta || d.target == tb))
+        {
+            return invalid(
+                "What sliders do to one of them is another project's, which counts on its vertices as they are.",
+            );
+        }
+        let block = |p: &Project, name: &str| {
+            p.block(name)
+                .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {name}.")))
+        };
+        let before = self.clone();
+        let done = (|| {
+            let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+            let (to, other) = (block(self, into)?, block(self, from)?);
+            let first = weights::merge(&mut self.nif, to, other).map_err(fail)?;
+            // The sphere round it, round all of it now.
+            let positions = mesh::read(&self.nif, to).map_err(fail)?.positions;
+            mesh::set_positions(&mut self.nif, to, &positions).map_err(fail)?;
+            edit::remove_shapes(&mut self.nif, &[other]).map_err(fail)?;
+            for own in &mut self.own {
+                let Some(at) = own.iter().position(|o| o.target == tb) else {
+                    continue;
+                };
+                let theirs = own.remove(at);
+                let moved = theirs.diffs.iter().map(|d| Diff {
+                    vertex: d.vertex + first as u16,
+                    offset: d.offset,
+                });
+                match own.iter_mut().find(|o| o.target == ta) {
+                    Some(mine) => Arc::make_mut(&mut mine.diffs).extend(moved),
+                    None => own.push(Own {
+                        target: ta.clone(),
+                        diffs: Arc::new(moved.collect()),
+                    }),
+                }
+            }
+            self.set.shapes.remove(b);
+            Ok(())
+        })();
+        if done.is_err() {
+            *self = before;
+        }
+        done
+    }
+
     /// Mirror a shape across the middle of the body: every vertex to the
     /// other side, its triangles turned to face out again, what sliders do
     /// to it mirrored too, and each bone it follows changed for its twin on

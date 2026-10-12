@@ -41,9 +41,10 @@ fn main() {
                 .ok()
                 .and_then(|p| SkinPartition::read(&nif.blocks[p].data, stream).ok());
             println!(
-                "  shape {at}: {} vertices, own vertex bytes {}, {} bones, skin data bones {:?} has_weights {:?} weights in data {:?}",
+                "  shape {at}: {} vertices, own vertex bytes {}, own triangles {}, {} bones, skin data bones {:?} has_weights {:?} weights in data {:?}",
                 shape.vertex_count,
                 shape.vertex_data.len(),
+                shape.triangles.len(),
                 instance.bones.len(),
                 data.as_ref().map(|d| d.bones.len()),
                 data.as_ref().map(|d| d.has_weights),

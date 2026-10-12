@@ -639,3 +639,89 @@ pub fn remove_part(nif: &mut Nif, block: usize, index: usize, into: usize) -> Re
     nif.blocks[at.partition].data = partition.write(stream);
     settle(nif, block)
 }
+
+/// Put the shape at `from` into the shape at `into`: its vertices after
+/// the other's, its triangles as parts of their own, its bones added to
+/// the other's. The two must keep the same things for each vertex, and
+/// both keep their vertices in their skins, as skinned shapes of Special
+/// Edition do. The shape at `from` is left as it was, for the caller to
+/// take out. Returns how many vertices `into` had before: where the
+/// other's now begin.
+pub fn merge(nif: &mut Nif, into: usize, from: usize) -> Result<usize, NifError> {
+    let stream = nif.header.stream.version;
+    owned(nif, into)?;
+    owned(nif, from)?;
+    let (a, b) = (blocks(nif, into)?, blocks(nif, from)?);
+    for shape in [into, from] {
+        if TriShape::read(&nif.blocks[shape].data, stream)?.has_vertices() {
+            return unsupported("a shape that keeps its vertices outside its skin is not merged");
+        }
+    }
+    let mut pa = SkinPartition::read(&nif.blocks[a.partition].data, stream)?;
+    let pb = SkinPartition::read(&nif.blocks[b.partition].data, stream)?;
+    let same = pa.vertex_desc.is_some()
+        && pa.vertex_desc == pb.vertex_desc
+        && pa.vertex_size == pb.vertex_size;
+    let Some(layout) = pa
+        .vertex_desc
+        .and_then(|d| Layout::of(d, stream))
+        .filter(|_| same)
+    else {
+        return unsupported(
+            "the two shapes keep different things for each vertex, and cannot be one shape",
+        );
+    };
+    let stride = layout.stride.max(1);
+    let (na, nb) = (pa.vertex_data.len() / stride, pb.vertex_data.len() / stride);
+    if na + nb > u16::MAX as usize {
+        return unsupported("together they have more vertices than one shape can number");
+    }
+    let (sa, sb) = (read(nif, into)?, read(nif, from)?);
+    let mut ia = SkinInstance::read(&nif.blocks[a.instance].data, a.dismember)?;
+    let ib = SkinInstance::read(&nif.blocks[b.instance].data, b.dismember)?;
+
+    pa.vertex_data.extend_from_slice(&pb.vertex_data);
+    for (i, p) in pb.partitions.iter().enumerate() {
+        let Some(triangles) = &p.true_triangles else {
+            return unsupported("a part keeps its triangles in a way this cannot change");
+        };
+        let moved = triangles.iter().map(|t| t.map(|v| v + na as u16)).collect();
+        let mut q = p.clone();
+        q.retriangle(moved)?;
+        pa.partitions.push(q);
+        if let Some(parts) = &mut ia.body_parts {
+            let theirs = ib.body_parts.as_ref().and_then(|x| x.get(i)).copied();
+            let Some(part) = theirs.or_else(|| parts.first().copied()) else {
+                return unsupported("the shape has no part to put the other's triangles in");
+            };
+            parts.push(part);
+        }
+    }
+    nif.blocks[a.partition].data = pa.write(stream);
+    nif.blocks[a.instance].data = ia.write();
+
+    // One list of bones, the first shape's and then any only the second has.
+    let mut bones = sa.bones.clone();
+    let place: Vec<u16> = sb
+        .bones
+        .iter()
+        .map(|name| {
+            bones.iter().position(|b| b == name).unwrap_or_else(|| {
+                bones.push(name.clone());
+                bones.len() - 1
+            }) as u16
+        })
+        .collect();
+    let mut vertices = sa.vertices;
+    vertices.extend(sb.vertices.iter().map(|slots| {
+        slots.map(|(bone, w)| {
+            if w > 0.0 {
+                (place[bone as usize], w)
+            } else {
+                (0, 0.0)
+            }
+        })
+    }));
+    write(nif, into, &Skin { bones, vertices }, Some(from))?;
+    Ok(na)
+}

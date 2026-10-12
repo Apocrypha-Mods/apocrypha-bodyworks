@@ -174,6 +174,7 @@ impl Work {
             }
             Change::DropBone { shape, bone } => p.drop_bone(&shape, &bone),
             Change::BodyPart { shape, index, part } => p.set_part(&shape, index, part),
+            Change::Merge { into, from } => p.merge_shapes(&into, &from),
             Change::Mirror { shape } => p.mirror_shape(&shape),
             Change::ToPart { shape, to, part } => {
                 p.move_to_part(&shape, &numbers(data), to, part).map(drop)
@@ -415,6 +416,11 @@ enum Change {
         shape: String,
         index: usize,
         part: u16,
+    },
+    /// Make two shapes one: `from` goes into `into`.
+    Merge {
+        into: String,
+        from: String,
     },
     /// Mirror a shape across the middle of the body.
     Mirror {

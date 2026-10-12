@@ -1170,3 +1170,90 @@ fn a_bone_brought_in_from_a_skeleton_is_placed_as_a_skin_that_has_it_places_it()
     }
     assert!(project.add_bone("No such bone", &body).is_err());
 }
+
+#[test]
+fn two_shapes_merged_are_one_shape_that_builds_as_the_two_did() {
+    use apoc_bodyslide::project::Project;
+    use apoc_bodyslide::{build, morph};
+    use apoc_nif::{mesh, weights, Nif};
+    use std::collections::HashMap;
+
+    let tools = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/cbbe/@required/Data/CalienteTools/BodySlide");
+    let on_disk = |path: &str| std::fs::read(tools.join(path)).ok();
+    let Some(sets) = on_disk("SliderSets/CBBE.osp").and_then(|b| set::read(&b).ok()) else {
+        return;
+    };
+    let set = sets.iter().find(|s| s.name == "CBBE NeverNude").unwrap();
+    let project = Project::open(set, &on_disk).unwrap();
+    let built = |p: &Project| -> Vec<mesh::Mesh> {
+        let (saved, files) = p.save("Merged").unwrap();
+        let held: HashMap<String, Vec<u8>> = files.into_iter().map(|o| (o.path, o.bytes)).collect();
+        let files = |path: &str| held.get(path).cloned().or_else(|| on_disk(path));
+        let values = morph::values(&saved, None, true);
+        let out = build::build_at(&saved, &values, &values, &files).unwrap();
+        assert_eq!(out.notes, Vec::<String>::new());
+        let nif = Nif::read(&out.outputs[0].bytes).unwrap();
+        mesh::shapes(&nif)
+            .into_iter()
+            .map(|at| mesh::read(&nif, at).unwrap())
+            .collect()
+    };
+    let two = built(&project);
+    let of = |all: &[mesh::Mesh], name: &str| all.iter().find(|m| m.name == name).unwrap().clone();
+    let (bra, panty) = (of(&two, "Bra"), of(&two, "Panty"));
+
+    let mut merged = project.clone();
+    // The body keeps other things for each vertex, and its sliders are another project's.
+    assert!(merged.merge_shapes("Bra", "CBBE").is_err());
+    assert!(merged.merge_shapes("Bra", "Bra").is_err());
+    assert_eq!(merged.set.shapes.len(), 3);
+    merged.merge_shapes("Bra", "Panty").unwrap();
+    assert_eq!(merged.set.shapes.len(), 2);
+    let one = built(&merged);
+    assert_eq!(one.len(), 2);
+    let both = of(&one, "Bra");
+    // The bra's vertices, then the panty's, each where the sliders put it
+    // when they were two; and every triangle of both.
+    let mut want = bra.positions.clone();
+    want.extend(&panty.positions);
+    assert_eq!(both.positions.len(), want.len());
+    for (a, b) in both.positions.iter().zip(&want) {
+        assert!((0..3).all(|k| (a[k] - b[k]).abs() < 0.01), "{a:?} {b:?}");
+    }
+    assert_eq!(
+        both.triangles.len(),
+        bra.triangles.len() + panty.triangles.len()
+    );
+    let n = bra.positions.len() as u16;
+    assert_eq!(&both.triangles[..bra.triangles.len()], &bra.triangles[..]);
+    assert!(both.triangles[bra.triangles.len()..]
+        .iter()
+        .zip(&panty.triangles)
+        .all(|(a, b)| *a == b.map(|v| v + n)));
+    // Its skin: every bone either had, each vertex following what it did.
+    let nif = Nif::read(&merged.nif.write()).unwrap();
+    let at = mesh::shapes(&nif)
+        .into_iter()
+        .find(|at| mesh::name(&nif, *at).as_deref() == Some("Bra"))
+        .unwrap();
+    let skin = weights::read(&nif, at).unwrap();
+    let skin_of = |name: &str| {
+        let at = mesh::shapes(&project.nif)
+            .into_iter()
+            .find(|at| mesh::name(&project.nif, *at).as_deref() == Some(name))
+            .unwrap();
+        weights::read(&project.nif, at).unwrap()
+    };
+    let (sa, sb) = (skin_of("Bra"), skin_of("Panty"));
+    assert!(sa
+        .bones
+        .iter()
+        .chain(&sb.bones)
+        .all(|b| skin.bones.contains(b)));
+    let heaviest = |s: &weights::Skin, v: usize| s.bones[s.vertices[v][0].0 as usize].clone();
+    for v in (0..sb.vertices.len()).step_by(37) {
+        assert_eq!(heaviest(&skin, sa.vertices.len() + v), heaviest(&sb, v));
+    }
+    assert_eq!(weights::parts(&nif, at).unwrap().len(), 2);
+}

@@ -1257,6 +1257,7 @@ function studioSide() {
                     state.work && { name: "Duplicate…", value: "duplicate" },
                     state.work && { name: "Move, turn, scale…", value: "transform" },
                     state.work && !sh.reference && { name: "Mirror", value: "mirror" },
+                    state.work && !sh.reference && state.shapes.some((o) => o !== sh && !o.reference) && { name: "Merge into…", value: "merge" },
                     ...(state.work ? bodies.map((o) => ({ name: `Conform to ${o.name}`, value: ["conform", o.name] })) : []),
                     ...(state.work ? bodies.map((o) => ({ name: `Copy weights from ${o.name}`, value: ["weights", o.name] })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
@@ -1281,6 +1282,14 @@ function studioSide() {
                     }
                     if (what === "transform") return transform(sh);
                     if (what === "mirror") return attempt({ do: "mirror", shape: sh.name });
+                    if (what === "merge") {
+                      // Into which: it is drawn as that one is, and goes by its name.
+                      return menu(
+                        document.querySelector("#side .side-head"),
+                        state.shapes.filter((o) => o !== sh && !o.reference).map((o) => ({ name: `Into ${o.name}`, value: o.name })),
+                        (into) => attempt({ do: "merge", into, from: sh.name }),
+                      );
+                    }
                     if (what === "ghost") {
                       sh.ghost = !sh.ghost;
                       view.ghost(i, sh.ghost);
