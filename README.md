@@ -75,9 +75,8 @@ their documentation. Each line is something they do that this does not.
 Outfit Studio:
 
 - Brushes: colour is painted only on a shape that already carries colours.
-- Shapes: refining only part of a mesh (the whole of one is refined),
-  merging shapes that keep different things for each vertex, removing
-  skinning, shader properties other than the texture files.
+- Shapes: merging shapes that keep different things for each vertex,
+  removing skinning, shader properties other than the texture files.
 - Bones: custom bones (one made up, not taken from the game's skeleton).
 - Segments (Fallout 4): viewing and editing.
 - Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI

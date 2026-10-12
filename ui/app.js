@@ -1290,7 +1290,7 @@ function studioSide() {
                     state.work && { name: "Duplicate…", value: "duplicate" },
                     state.work && { name: "Move, turn, scale…", value: "transform" },
                     state.work && !sh.reference && { name: "Mirror", value: "mirror" },
-                    state.work && !sh.reference && { name: "Refine", value: "refine" },
+                    state.work && !sh.reference && { name: sh.mask.some((m) => m >= 0.5) ? "Refine unmasked points" : "Refine", value: "refine" },
                     state.work && !sh.reference && { name: "Weld doubled points", value: "weld" },
                     state.work && !sh.reference && state.shapes.some((o) => o !== sh && !o.reference) && { name: "Merge into…", value: "merge" },
                     state.work && !sh.reference && { name: "New shape from a file…", value: "fromObj" },
@@ -1320,7 +1320,19 @@ function studioSide() {
                     }
                     if (what === "transform") return transform(sh);
                     if (what === "mirror") return attempt({ do: "mirror", shape: sh.name });
-                    if (what === "refine") return attempt({ do: "refine", shape: sh.name });
+                    if (what === "refine") {
+                      // Masked points, and the edges they end, stay as they are.
+                      const spared = [];
+                      sh.mask.forEach((m, v) => m >= 0.5 && spared.push(v));
+                      try {
+                        const [work] = core.ask({ op: "change", change: { do: "refine", shape: sh.name } }, new Uint8Array(Uint32Array.from(spared).buffer));
+                        taken(work);
+                      } catch (err) {
+                        state.problem = err.message;
+                        render();
+                      }
+                      return;
+                    }
                     if (what === "weld") return attempt({ do: "weld", shape: sh.name });
                     if (what === "fromObj") return shapeFromObj(sh);
                     if (what === "merge") {

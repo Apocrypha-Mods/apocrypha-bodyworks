@@ -1409,8 +1409,8 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
     let (was, was_skin) = shape(&project, "Bra");
     let was_built = built(&project, "Bra");
     let mut refined = project.clone();
-    let added = refined.refine("Bra").unwrap();
-    assert!(refined.refine("CBBE").is_err());
+    let added = refined.refine("Bra", &[]).unwrap();
+    assert!(refined.refine("CBBE", &[]).is_err());
     let (now, now_skin) = shape(&refined, "Bra");
     assert_eq!(now.triangles.len(), was.triangles.len() * 4);
     assert_eq!(now.positions.len(), was.positions.len() + added);
@@ -1451,6 +1451,46 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
             );
         }
     }
+
+    // Refined in part: the left half spared. Its vertices keep every
+    // triangle they had, a triangle with one spared corner becomes two,
+    // and no halved edge is left whole on its other side.
+    let spared: Vec<u16> = (0..was.positions.len() as u16)
+        .filter(|v| was.positions[*v as usize][0] < 0.0)
+        .collect();
+    let is_spared = |v: u16| spared.binary_search(&v).is_ok();
+    let mut part = project.clone();
+    let part_added = part.refine("Bra", &spared).unwrap();
+    assert!(part_added > 0 && part_added < added);
+    let (half, half_skin) = shape(&part, "Bra");
+    assert_eq!(half.positions.len(), was.positions.len() + part_added);
+    assert_eq!(&half.positions[..was.positions.len()], &was.positions[..]);
+    let expected: usize = was
+        .triangles
+        .iter()
+        .map(|t| match t.iter().filter(|v| is_spared(**v)).count() {
+            0 => 4,
+            1 => 2,
+            _ => 1,
+        })
+        .sum();
+    assert_eq!(half.triangles.len(), expected);
+    let edges: std::collections::HashSet<(u16, u16)> = half
+        .triangles
+        .iter()
+        .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+        .map(|(a, b)| (a.min(b), a.max(b)))
+        .collect();
+    for t in &was.triangles {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let halved = !is_spared(a) && !is_spared(b);
+            assert_eq!(edges.contains(&(a.min(b), a.max(b))), !halved);
+        }
+    }
+    for v in &half_skin.vertices {
+        assert!((v.iter().map(|x| x.1).sum::<f32>() - 1.0).abs() < 0.01);
+    }
+    built(&part, "Bra");
 
     // A shape made of an outside mesh, here the panty turned into one:
     // its vertices and triangles as given, drawn and boned as its likeness.

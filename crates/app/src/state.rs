@@ -229,7 +229,7 @@ impl Work {
                 }
             }
             Change::Weld { shape } => p.weld(&shape).map(drop),
-            Change::Refine { shape } => p.refine(&shape).map(drop),
+            Change::Refine { shape } => p.refine(&shape, &numbers(data)).map(drop),
             Change::ShapeFrom { like, name } => match outside_mesh(data) {
                 Some((positions, uvs, triangles)) => {
                     p.shape_from(&like, &name, &positions, &uvs, &triangles)
@@ -498,7 +498,8 @@ enum Change {
     Weld {
         shape: String,
     },
-    /// Refine a shape: every triangle made four.
+    /// Refine a shape: every triangle made four. The request's bytes: the
+    /// vertices to leave as they are, four bytes each.
     Refine {
         shape: String,
     },

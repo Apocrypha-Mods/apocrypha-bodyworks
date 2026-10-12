@@ -1336,7 +1336,7 @@ impl Project {
     /// middle of each edge. What sliders do to a new vertex is halfway
     /// between what they do to the two it lies between. Returns how many
     /// vertices were added.
-    pub fn refine(&mut self, shape: &str) -> Result<usize, Error> {
+    pub fn refine(&mut self, shape: &str, spared: &[u16]) -> Result<usize, Error> {
         let at = self.shape(shape)?;
         let block = self
             .block(shape)
@@ -1355,7 +1355,7 @@ impl Project {
         let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
         let had = mesh::read(&self.nif, block).map_err(fail)?.positions.len();
         let before = self.nif.clone();
-        let between = match weights::refine(&mut self.nif, block) {
+        let between = match weights::refine(&mut self.nif, block, spared) {
             Ok(b) => b,
             Err(e) => {
                 self.nif = before;

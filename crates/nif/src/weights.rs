@@ -852,7 +852,11 @@ pub fn packed(nif: &Nif, block: usize) -> Result<Packed, NifError> {
 /// halfway between two of them in place, in texture and in the bones it
 /// follows, and is otherwise as the first of the two. Returns, for each new
 /// vertex in order, the two it lies between.
-pub fn refine(nif: &mut Nif, block: usize) -> Result<Vec<(u16, u16)>, NifError> {
+///
+/// An edge with an end in `spared` is left whole. A triangle left with one
+/// edge to halve becomes two, so no new vertex sits on an edge that does
+/// not know of it.
+pub fn refine(nif: &mut Nif, block: usize, spared: &[u16]) -> Result<Vec<(u16, u16)>, NifError> {
     let stream = nif.header.stream.version;
     let (mut bytes, layout, parts) = packed(nif, block)?;
     let stride = layout.stride.max(1);
@@ -864,13 +868,31 @@ pub fn refine(nif: &mut Nif, block: usize) -> Result<Vec<(u16, u16)>, NifError> 
     let shape = TriShape::read(&nif.blocks[block].data, stream)?;
     let mut between: Vec<(u16, u16)> = Vec::new();
     let mut middle: std::collections::HashMap<(u16, u16), u16> = std::collections::HashMap::new();
+    let mut whole = vec![false; had];
+    for v in spared {
+        if let Some(w) = whole.get_mut(*v as usize) {
+            *w = true;
+        }
+    }
     let mut refined = Vec::with_capacity(parts.len());
     for triangles in &parts {
         let mut out = Vec::with_capacity(triangles.len() * 4);
         for t in triangles {
+            if t.iter().any(|v| *v as usize >= had) {
+                return unsupported("a triangle of the shape names a vertex it does not have");
+            }
+            // Two ends spared leave one edge to halve; one or none, all three.
+            let kept = t.iter().filter(|v| whole[**v as usize]).count();
+            if kept >= 2 {
+                out.push(*t);
+                continue;
+            }
             let mut mid = [0u16; 3];
             for (k, slot) in mid.iter_mut().enumerate() {
                 let (a, b) = (t[k], t[(k + 1) % 3]);
+                if whole[a as usize] || whole[b as usize] {
+                    continue;
+                }
                 let edge = (a.min(b), a.max(b));
                 *slot = match middle.get(&edge) {
                     Some(m) => *m,
@@ -886,6 +908,12 @@ pub fn refine(nif: &mut Nif, block: usize) -> Result<Vec<(u16, u16)>, NifError> 
                         at as u16
                     }
                 };
+            }
+            if let Some(k) = t.iter().position(|v| whole[*v as usize]) {
+                // The edge across from the spared corner is the one halved.
+                let (a, b, m) = (t[(k + 1) % 3], t[(k + 2) % 3], mid[(k + 1) % 3]);
+                out.extend([[t[k], a, m], [t[k], m, b]]);
+                continue;
             }
             out.extend([
                 [t[0], mid[0], mid[2]],
