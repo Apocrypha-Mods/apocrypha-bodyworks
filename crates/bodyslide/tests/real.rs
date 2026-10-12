@@ -961,6 +961,45 @@ fn what_is_spared_keeps_its_sliders_and_its_bones() {
     }
     assert!(bare.import_morphs(b"not a file").is_err());
 
+    // Two sliders as one: at full, the new one puts the bra where the two
+    // together put it at the values they stood at.
+    let mut combined = project.clone();
+    let names: Vec<String> = combined
+        .set
+        .sliders
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    let mut at = vec![0.0; names.len()];
+    at[names.iter().position(|n| n == "Breasts").unwrap()] = 100.0;
+    at[names.iter().position(|n| n == "BigTorso").unwrap()] = 50.0;
+    combined.combine("Both", &at).unwrap();
+    assert!(combined.combine("Both", &at).is_err());
+    assert!(combined
+        .combine("None", &vec![0.0; names.len() + 1])
+        .is_err());
+    let both = osd::SliderData::read(&combined.slider_data("Both").unwrap()).unwrap();
+    let (a, b) = (
+        osd::SliderData::read(&project.slider_data("Breasts").unwrap()).unwrap(),
+        osd::SliderData::read(&project.slider_data("BigTorso").unwrap()).unwrap(),
+    );
+    let at_vertex = |d: &osd::SliderData, list: &str, v: u16| {
+        d.list(list)
+            .and_then(|l| l.iter().find(|x| x.vertex == v).map(|x| x.offset))
+            .unwrap_or([0.0; 3])
+    };
+    for v in (0..500u16).step_by(13) {
+        let (x, y, z) = (
+            at_vertex(&a, "BraBreasts", v),
+            at_vertex(&b, "BraBigTorso", v),
+            at_vertex(&both, "BraBoth", v),
+        );
+        assert!(
+            (0..3).all(|k| (x[k] + y[k] * 0.5 - z[k]).abs() < 0.0001),
+            "vertex {v}"
+        );
+    }
+
     // Sliders likewise: the spared keep the data the outfit came with.
     let (shipped, _) = project.save("A").unwrap();
     let mut conformed = project.clone();

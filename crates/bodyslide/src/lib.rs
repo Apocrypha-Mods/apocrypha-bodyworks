@@ -15,6 +15,7 @@ pub mod conform;
 pub mod group;
 pub mod morph;
 pub mod osd;
+pub mod pack;
 pub mod preset;
 pub mod project;
 pub mod set;

@@ -87,15 +87,15 @@ Outfit Studio:
   there).
 - Bones: custom bones (one made up, not taken from the game's skeleton).
 - Segments (Fallout 4): viewing and editing.
-- Sliders: combined sliders, importing and exporting slider data as BSD
-  or FBX (OSD and TRI go both ways).
-- Files: FBX in and out, head TRI files, physics data, packing projects for
-  sharing, making a conversion reference.
-- View: bones drawn as more than a dot where each is, field of view and lighting
-  settings, recalculating or locking normals by hand.
-- Most keyboard shortcuts: there are undo and redo, Q and the digits for the
-  brushes (1 to 8), the square brackets for a brush's size, W and T for how the
-  outfit is drawn.
+- Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI
+  go both ways).
+- Files: FBX in and out, head TRI files, physics data.
+- View: bones drawn as more than a dot where each is, recalculating or
+  locking normals by hand.
+- The original's own keyboard shortcuts: this has its own (undo and redo,
+  Ctrl+S and Ctrl+E, Q and the digits for the brushes, the square brackets
+  and minus and equals for a brush's size and strength, X for both sides,
+  W, T, F, H and G for the view).
 
 Games: only Skyrim Special Edition has been measured. Skyrim (2011),
 Fallout 4, Fallout 3, New Vegas and Oblivion meshes are read in part or not

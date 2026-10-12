@@ -89,6 +89,9 @@ const state = {
   size: Number(remembered.get("brush.size")) || 30,
   strength: Number(remembered.get("brush.strength")) || 40,
   mirror: remembered.get("brush.mirror") !== "0",
+  /** How wide the view sees, in degrees, and how brightly it is lit, in percent. */
+  fov: Number(remembered.get("view.fov")) || 34,
+  light: Number(remembered.get("view.light")) || 100,
   /** How far a brush goes between one dab and the next, 1 to 100 as a share of its reach. */
   spacing: Number(remembered.get("brush.spacing")) || 25,
   /** How much of a brush's reach has its full strength, 1 to 100: a point, up to nearly all of it. */
@@ -1502,6 +1505,7 @@ function studioSliders() {
                   e.currentTarget,
                   [
                     { name: "Slider…", value: "slider" },
+                    state.at.some((v, i) => v !== 0 && !cur().sliders[i]?.zap) && { name: "Slider of what is shown…", value: "combine" },
                     masked.length > 0 && { name: "Zap of what is masked…", value: "zap" },
                     { name: "Sliders from a morph file…", value: "in", rule: true },
                     cur().sliders.length > 0 && { name: "Export morph file…", value: "out" },
@@ -1509,6 +1513,21 @@ function studioSliders() {
                   (what) =>
                     what === "slider"
                       ? newSlider()
+                      : what === "combine"
+                        ? rename(
+                            "New slider",
+                            "",
+                            (name) => {
+                              const [work] = core.ask({ op: "change", change: { do: "combine", name, values: state.at } });
+                              // The others go back to nothing and the new one stands in full: the outfit looks as it did.
+                              state.at = state.at.map((v, i) => (cur().sliders[i].zap ? v : 0));
+                              taken(work);
+                              state.at[work.sliders.findIndex((sl) => sl.name === name.trim())] = 100;
+                              reshape();
+                              render();
+                            },
+                            "Add",
+                          )
                       : what === "in" || what === "out"
                         ? morphFile(what === "in")
                         : rename(
@@ -2159,6 +2178,31 @@ function heat() {
   view.mask(state.picked, state.heat || s.mask);
 }
 
+/** How the view is drawn: how wide it sees, and how brightly it is lit. */
+function lens(anchor) {
+  const box = anchor.getBoundingClientRect();
+  const knob = (label, key, min, max, apply) => {
+    const input = h("input", { type: "range", min, max, step: 1, value: state[key], "aria-label": label });
+    const fill = () => input.style.setProperty("--at", `${((input.value - min) / (max - min)) * 100}%`);
+    fill();
+    input.addEventListener("input", () => {
+      state[key] = Number(input.value);
+      remembered.set(`view.${key}`, input.value);
+      fill();
+      apply();
+    });
+    return h("label.knob.wide", null, h("span", null, label), input);
+  };
+  const panel = h(
+    "div.menu.lens",
+    { role: "dialog", "aria-label": "View", style: `left: ${Math.max(8, box.left)}px; top: ${box.bottom + 6}px` },
+    knob("Field of view", "fov", 15, 80, () => view.lens({ fov: state.fov })),
+    knob("Light", "light", 40, 220, () => view.lens({ bright: state.light / 100 })),
+  );
+  const scrim = h("div.scrim", { onpointerdown: (e) => e.target === scrim && close(scrim) }, panel);
+  document.body.append(scrim);
+}
+
 /** Take a brush in hand, or with null put it down. */
 function hold(tool) {
   state.tool = tool;
@@ -2580,7 +2624,25 @@ function saveProject() {
   };
   go.addEventListener("click", run);
   name.addEventListener("keydown", (e) => e.key === "Enter" && run());
+  // The project as one file to hand to someone else: laid out as a mod is.
+  const pack = h(
+    "button.btn.ghost",
+    {
+      type: "button",
+      title: "The project as one file to share, which installs as a mod",
+      onclick: async () => {
+        try {
+          const [made, bytes] = core.ask({ op: "pack" });
+          await host.request("disk.save", { name: made.name, bytes: bytes.slice(0) });
+        } catch (e) {
+          said.textContent = e.message;
+        }
+      },
+    },
+    "Pack as a file…",
+  );
   const el = sheet("Save project", null, [nameField, h("div.pair", null, folderField, fileField), h("div.checks", null, weights)], [
+    pack,
     said,
     h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
     go,
@@ -2671,7 +2733,17 @@ function renderStudio() {
         "div.view",
         null,
         canvas,
-        h("div.looks", null, h("div.seg", { role: "group", "aria-label": "How it is drawn" }, flag("Textures", "painted"), flag("Wireframe", "wire"))),
+        h(
+          "div.looks",
+          null,
+          h(
+            "div.seg",
+            { role: "group", "aria-label": "How it is drawn" },
+            flag("Textures", "painted"),
+            flag("Wireframe", "wire"),
+            h("button", { type: "button", "aria-haspopup": "dialog", onclick: (e) => lens(e.currentTarget) }, "View"),
+          ),
+        ),
         state.work && state.shapes.length > 0 && brushBar(),
       ),
       h("div.card.list", { id: "list" }),
@@ -2727,6 +2799,7 @@ function render() {
   if (!canvas) {
     canvas = h("canvas", { "aria-label": "Preview" });
     view = new View(canvas);
+    view.lens({ fov: state.fov, bright: state.light / 100 });
   }
   if (state.mode === "studio") return renderStudio();
   const set = state.set;
@@ -2904,8 +2977,39 @@ addEventListener("keydown", (e) => {
     state.size = Math.max(1, Math.min(100, state.size + (key === "[" ? -5 : 5)));
     remembered.set("brush.size", String(state.size));
     render();
+  } else if (key === "f") view.frame(state.shapes.filter((sh) => !sh.hidden).map((sh) => sh.now));
+  else if (key === "x") {
+    state.mirror = !state.mirror;
+    remembered.set("brush.mirror", state.mirror ? "1" : "0");
+    render();
+  } else if (key === "h" || key === "g") {
+    // The picked shape hidden, or drawn as a ghost; again to bring it back.
+    const sh = state.shapes[state.picked];
+    if (!sh) return;
+    if (key === "h") {
+      sh.hidden = !sh.hidden;
+      view.hide(state.picked, sh.hidden);
+    } else {
+      sh.ghost = !sh.ghost;
+      view.ghost(state.picked, sh.ghost);
+    }
+    render();
+  } else if (key === "-" || key === "=" || key === "+") {
+    state.strength = Math.max(1, Math.min(100, state.strength + (key === "-" ? -5 : 5)));
+    remembered.set("brush.strength", String(state.strength));
+    render();
   } else if (key === "w") view.look({ wire: !view.looks.wire }), render();
   else if (key === "t") view.look({ painted: !view.looks.painted }), render();
+  else return;
+  e.preventDefault();
+});
+
+// Outfit Studio: Ctrl+S saves the project and Ctrl+E exports the mesh.
+addEventListener("keydown", (e) => {
+  if (state.mode !== "studio" || !state.work || !(e.ctrlKey || e.metaKey) || document.querySelector(".scrim")) return;
+  const key = e.key.toLowerCase();
+  if (key === "s") saveProject();
+  else if (key === "e") exportMesh();
   else return;
   e.preventDefault();
 });

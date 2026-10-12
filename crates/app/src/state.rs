@@ -228,6 +228,7 @@ impl Work {
             Change::ToPart { shape, to, part } => {
                 p.move_to_part(&shape, &numbers(data), to, part).map(drop)
             }
+            Change::Combine { name, values } => p.combine(&name, &values),
             Change::ImportMorphs => p.import_morphs(data).map(drop),
             Change::ImportSlider { slider } => p.import_slider(&slider, data).map(drop),
             Change::CopyBone { shape, body, bone } => {
@@ -501,6 +502,11 @@ enum Change {
         #[serde(default)]
         part: u16,
     },
+    /// A new slider that does what the others do together at `values`.
+    Combine {
+        name: String,
+        values: Vec<f32>,
+    },
     /// Take sliders from a morph file: the request's bytes.
     ImportMorphs,
     /// Take what a slider does from a slider data file: the request's bytes.
@@ -611,6 +617,9 @@ enum Request {
     /// How much each vertex of a shape of the open project follows a bone:
     /// a number a vertex, after the answer.
     BoneWeights { shape: String, bone: String },
+    /// The open project packed as one zip file for sharing, laid out as a
+    /// mod is, after the answer.
+    Pack,
     /// Every slider of the open project as a morph file, after the answer.
     Morphs,
     /// What one slider of the open project does, as a slider data file
@@ -1155,6 +1164,21 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                     json!({ "vertices": weights.len() }),
                     weights.iter().flat_map(|w| w.to_le_bytes()).collect(),
                 ),
+                Err(e) => Answer::failed(e),
+            },
+            None => Answer::failed("No project is open."),
+        },
+        Request::Pack => match &state.work {
+            Some(work) => match work.project.save(&work.project.set.name) {
+                Ok((set, files)) => {
+                    match apoc_bodyslide::pack::zip("CalienteTools/BodySlide", &files) {
+                        Some(zip) => Answer::with(
+                            json!({ "name": format!("{}.zip", apoc_bodyslide::project::file_name(&set.name)) }),
+                            zip,
+                        ),
+                        None => Answer::failed("The project is too large to pack as one file."),
+                    }
+                }
                 Err(e) => Answer::failed(e),
             },
             None => Answer::failed("No project is open."),

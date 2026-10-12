@@ -1582,6 +1582,62 @@ impl Project {
         self.paint_weights(shape, bone, &painted)
     }
 
+    /// A new slider that does at once what the others do together at
+    /// `values` (percent, in the set's order): the outfit as it stands, as
+    /// one slider. Only what the project's own shapes are moved by counts.
+    pub fn combine(&mut self, name: &str, values: &[f32]) -> Result<(), Error> {
+        if values.len() != self.set.sliders.len() {
+            return invalid(format!(
+                "{} sliders, and {} values",
+                self.set.sliders.len(),
+                values.len()
+            ));
+        }
+        let mut sums: Vec<(String, HashMap<u16, [f32; 3]>)> = Vec::new();
+        for ((slider, own), value) in self.set.sliders.iter().zip(&self.own).zip(values) {
+            if slider.zap || slider.uv {
+                continue;
+            }
+            let amount = crate::morph::applied(slider, *value);
+            if amount == 0.0 {
+                continue;
+            }
+            for o in own {
+                let at = match sums.iter().position(|(t, _)| *t == o.target) {
+                    Some(at) => at,
+                    None => {
+                        sums.push((o.target.clone(), HashMap::new()));
+                        sums.len() - 1
+                    }
+                };
+                for d in o.diffs.iter() {
+                    let sum = sums[at].1.entry(d.vertex).or_insert([0.0; 3]);
+                    for (c, by) in sum.iter_mut().zip(d.offset) {
+                        *c += by * amount;
+                    }
+                }
+            }
+        }
+        if sums.is_empty() {
+            return invalid("Move the sliders the new one is to stand for first.");
+        }
+        self.add_slider(name)?;
+        let made = self.own.last_mut().expect("just added");
+        for (target, sum) in sums {
+            let mut diffs: Vec<Diff> = sum
+                .into_iter()
+                .filter(|(_, o)| o.iter().any(|c| c.abs() >= GONE))
+                .map(|(vertex, offset)| Diff { vertex, offset })
+                .collect();
+            diffs.sort_by_key(|d| d.vertex);
+            made.push(Own {
+                target,
+                diffs: Arc::new(diffs),
+            });
+        }
+        Ok(())
+    }
+
     /// Mirror a shape across the middle of the body: every vertex to the
     /// other side, its triangles turned to face out again, what sliders do
     /// to it mirrored too, and each bone it follows changed for its twin on

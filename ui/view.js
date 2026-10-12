@@ -10,7 +10,7 @@ void main() { vn = nm * n; vt = t; vm = m; vk = k; gl_Position = mvp * vec4(p, 1
 const FS = `#version 300 es
 precision highp float;
 in vec3 vn; in vec2 vt; in float vm; in vec4 vk; out vec4 o;
-uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha; uniform float coloured;
+uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha; uniform float coloured; uniform float bright;
 void main() {
   // The lines of a wireframe are one flat colour.
   if (line.a > 0.0) { o = line; return; }
@@ -23,7 +23,7 @@ void main() {
   float fill = max(dot(n, normalize(vec3(-0.6, 0.1, 0.4))), 0.0);
   float rim = pow(1.0 - max(n.z, 0.0), 3.0);
   // A painted shape is lit harder: a skin texture is darker than the tint.
-  float light = (0.22 + 0.72 * key + 0.2 * fill) * mix(1.0, 1.9, painted);
+  float light = (0.22 + 0.72 * key + 0.2 * fill) * mix(1.0, 1.9, painted) * bright;
   vec3 c = base * light + vec3(0.12) * rim * mix(1.0, 0.35, painted);
   // What a mask covers is drawn dark: the brushes leave it alone.
   float m = clamp(vm, 0.0, 1.0);
@@ -81,6 +81,10 @@ export class View {
     this.uHeat = gl.getUniformLocation(prog, "heat");
     this.uAlpha = gl.getUniformLocation(prog, "alpha");
     this.uColoured = gl.getUniformLocation(prog, "coloured");
+    this.uBright = gl.getUniformLocation(prog, "bright");
+    /** How wide the eye sees, in radians, and how brightly the shapes are lit (1 is as designed). */
+    this.fov = 0.6;
+    this.bright = 1;
     /** How shapes are drawn: with their textures, with their edges, and which one is picked out. */
     this.looks = { painted: true, wire: false, picked: -1, heat: false, colour: false };
     this.shapes = [];
@@ -361,7 +365,7 @@ export class View {
   camera(aspect) {
     // The games' meshes stand along Z and face +Y. The eye circles Z, far
     // enough that the whole of it fits the canvas either way.
-    const fov = 0.6;
+    const fov = this.fov;
     const f = 1 / Math.tan(fov / 2);
     const d = Math.max(this.tall * f, (this.wide * f) / aspect) * 0.56 * this.far;
     const near = d * 0.05;
@@ -392,6 +396,13 @@ export class View {
     const dir = [0, 1, 2].map((k) => right[k] * x + up[k] * y - back[k]);
     const l = Math.hypot(dir[0], dir[1], dir[2]);
     return { origin: eye, dir: dir.map((c) => c / l), back, alt: e.altKey };
+  }
+
+  /** How wide the eye sees (`fov`, in degrees) and how brightly the shapes are lit (1 is as designed). */
+  lens({ fov, bright }) {
+    if (fov) this.fov = (Math.max(10, Math.min(90, fov)) * Math.PI) / 180;
+    if (bright) this.bright = Math.max(0.2, Math.min(3, bright));
+    this.draw();
   }
 
   /** Mark where bones are (x, y, z each), one of them picked out; or with null mark none. */
@@ -466,6 +477,7 @@ export class View {
       gl.drawElements(gl.TRIANGLES, s.count, gl.UNSIGNED_INT, 0);
     };
     gl.uniform1f(this.uAlpha, 1);
+    gl.uniform1f(this.uBright, this.bright);
     this.shapes.forEach((s, i) => s.shown && !s.ghost && face(s, i));
     // Ghosts after everything solid, seen through and hiding nothing.
     if (this.shapes.some((s) => s.shown && s.ghost)) {
