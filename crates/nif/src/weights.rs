@@ -686,13 +686,17 @@ pub fn merge(nif: &mut Nif, into: usize, from: usize) -> Result<usize, NifError>
                 "a triangle names a vertex the shape does not have".into(),
             ));
         }
-        a.vertex_data.extend_from_slice(&b.vertex_data);
-        a.vertex_count = (na + nb) as u16;
-        a.triangles.extend(
+        let mut data = std::mem::take(&mut a.vertex_data);
+        data.extend_from_slice(&b.vertex_data);
+        let mut triangles = std::mem::take(&mut a.triangles);
+        triangles.extend(
             b.triangles
                 .iter()
                 .map(|t| t.map(|v| (v as usize + na) as u16)),
         );
+        // What the file stated of the first alone, and what it kept for
+        // particles, no longer hold.
+        a.hold(a.vertex_desc, data, (na + nb) as u16, triangles);
         nif.blocks[into].data = a.write(stream);
         return Ok(na);
     }
@@ -888,6 +892,14 @@ pub fn rebuild(
 /// following bones was found to have on and none other
 /// (`--example skinflag`) put off. The bones themselves stay.
 pub fn unskin(nif: &mut Nif, block: usize) -> Result<(), NifError> {
+    // Worked out on a copy: a file it cannot finish with is left as it was.
+    let mut staged = nif.clone();
+    unskin_in(&mut staged, block)?;
+    *nif = staged;
+    Ok(())
+}
+
+fn unskin_in(nif: &mut Nif, block: usize) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
     if nif.kind_of(block) != "BSTriShape" {
         return unsupported("this kind of shape is not parted from its bones");

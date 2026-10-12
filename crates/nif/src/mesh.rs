@@ -696,6 +696,12 @@ pub fn add_colors(nif: &mut Nif, block: usize) -> Result<(), NifError> {
             }
             p.vertex_data = widened(&p.vertex_data)?;
             p.vertex_desc = Some(desc);
+            // Each part says what a vertex carries too, and says the same.
+            for part in &mut p.partitions {
+                if part.vertex_desc.is_some() {
+                    part.vertex_desc = Some(desc);
+                }
+            }
             p.vertex_size = Some((stride + 4) as u32);
             Some((p_at, p.write(stream)))
         }
