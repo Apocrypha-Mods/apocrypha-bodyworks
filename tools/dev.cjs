@@ -43,13 +43,16 @@ function walk(dir, rel, list) {
   }
 }
 
+// Which game the stand-in says it is: `GAME=fallout4` for Fallout 4.
+const GAME = process.env.GAME === "fallout4" ? { id: "fallout4", name: "Fallout 4" } : { id: "skyrim-se", name: "Skyrim Special Edition" };
+
 const HOST = `<!doctype html><meta charset="utf-8"><title>Stand-in mod manager</title>
 <style>html,body{height:100%;margin:0;background:hsl(0 0% 7%)}iframe{width:100%;height:100%;border:0;display:block}</style>
 <iframe id="f" src="/ui/index.html" sandbox="allow-scripts"></iframe>
 <script>
 const frame = document.getElementById("f");
 const answers = {
-  hello: async () => ({ api: 1, game: { id: "skyrim-se", name: "Skyrim Special Edition" }, theme: { dark: true, vars: {} } }),
+  hello: async () => ({ api: 1, game: ${JSON.stringify(GAME)}, theme: { dark: true, vars: {} } }),
   fonts: async () => [],
   "files.list": async (a) => (await fetch("/list?folder=" + encodeURIComponent(a.folder))).json(),
   "files.picture": async (a) => { const r = await fetch("/picture?longest=" + (a.longest || 2048) + "&path=" + encodeURIComponent(a.path)); if (!r.ok) throw new Error("No such texture."); return r.arrayBuffer(); },

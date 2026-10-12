@@ -9,7 +9,8 @@ use crate::NifError;
 /// its textures. The rest is kept as it was.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LightingShader {
-    /// Skyrim and Special Edition say which kind of shader first.
+    /// Skyrim, Special Edition and Fallout 4 say which kind of shader
+    /// first (measured: every one of Fallout 4's begins with it).
     pub shader_type: Option<u32>,
     pub name: i32,
     pub extra_data: Vec<Ref>,
@@ -25,7 +26,7 @@ pub struct LightingShader {
 impl LightingShader {
     pub fn read(data: &[u8], stream: u32) -> Result<Self, NifError> {
         let mut r = Reader::new(data);
-        let shader_type = if (83..=100).contains(&stream) {
+        let shader_type = if (83..=139).contains(&stream) {
             Some(r.u32()?)
         } else {
             None

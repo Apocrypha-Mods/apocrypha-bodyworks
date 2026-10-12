@@ -59,10 +59,13 @@ pub fn f32_to_half(v: f32) -> u16 {
         let m = (frac | 0x0080_0000) >> (1 - exp);
         return sign | ((m + 0x1000) >> 13) as u16;
     }
-    // Rounded to nearest; a carry out of the fraction raises the exponent,
-    // which the addition does by itself.
+    // Rounded to nearest, and one exactly between two to the even one, as
+    // the original's files were found to be; a carry out of the fraction
+    // raises the exponent, which the addition does by itself.
     let half = ((exp as u32) << 10) | (frac >> 13);
-    sign | (half + ((frac >> 12) & 1)) as u16
+    let rest = frac & 0x1fff;
+    let up = rest > 0x1000 || (rest == 0x1000 && half & 1 == 1);
+    sign | (half + up as u32) as u16
 }
 
 /// A direction packed into a byte a part, as the direction.

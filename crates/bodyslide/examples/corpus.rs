@@ -78,7 +78,9 @@ fn main() {
     for root in std::env::args().skip(1) {
         walk(Path::new(&root), "", &mut all);
     }
-    let tools = "data/calientetools/bodyslide/";
+    // Fallout 4 keeps them one folder up: `TOOLS=data/tools/bodyslide/`.
+    let tools = std::env::var("TOOLS").unwrap_or_else(|_| "data/calientetools/bodyslide/".into());
+    let tools = tools.as_str();
     let files = |path: &str| {
         all.get(&format!("{tools}{}", path.to_lowercase()))
             .and_then(|p| std::fs::read(p).ok())

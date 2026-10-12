@@ -8,7 +8,10 @@ import * as brush from "./brush.js";
 import * as fbx from "./fbx.js";
 import * as obj from "./obj.js";
 
-const TOOLS = "Data/CalienteTools/BodySlide";
+// Where a game's mods keep their slider sets, under the game's folder: Skyrim's
+// in a folder of their own, Fallout 4's one level up.
+const TOOL_FOLDERS = ["Data/CalienteTools/BodySlide", "Data/Tools/BodySlide"];
+let TOOLS = TOOL_FOLDERS[0];
 /** The mod builds go into, unless another is chosen. */
 const OUTPUT = "Bodyworks output";
 const FOLDERS = ["SliderSets", "SliderPresets", "SliderGroups", "SliderCategories"];
@@ -140,6 +143,9 @@ async function give(rel) {
   return true;
 }
 
+/** The mod that reshapes a built body in the game: Skyrim's, or Fallout 4's. */
+const morphsBy = () => (/fallout/i.test(`${state.game?.id} ${state.game?.name}`) ? "LooksMenu" : "RaceMenu");
+
 async function inBatches(items, size, each) {
   for (let i = 0; i < items.length; i += size) await Promise.all(items.slice(i, i + size).map(each));
 }
@@ -147,6 +153,11 @@ async function inBatches(items, size, each) {
 async function readCatalog() {
   state.paths.clear();
   core.ask({ op: "clear" });
+  // The folder that has slider sets in it; with none in either, the game's usual one.
+  const usual = /fallout/i.test(`${state.game?.id} ${state.game?.name}`) ? TOOL_FOLDERS[1] : TOOL_FOLDERS[0];
+  const found = await Promise.all(TOOL_FOLDERS.map((t) => host.request("files.list", { folder: `${t}/SliderSets` }).catch(() => [])));
+  const have = TOOL_FOLDERS.filter((_, i) => found[i].some((f) => /\.osp$/i.test(f.path)));
+  TOOLS = have.includes(usual) || !have.length ? usual : have[0];
   const lists = await Promise.all(
     [...FOLDERS, "ShapeData"].map((f) => host.request("files.list", { folder: `${TOOLS}/${f}` }).catch(() => [])),
   );
@@ -1050,7 +1061,7 @@ function foot() {
         type: "button",
         role: "checkbox",
         "aria-checked": state.morphs ? "true" : "false",
-        title: "Also write the file RaceMenu needs to reshape this in the game",
+        title: `Also write the file ${morphsBy()} needs to reshape this in the game`,
         onclick: () => {
           state.morphs = !state.morphs;
           remembered.set("morphs", state.morphs ? "1" : "0");
@@ -1059,7 +1070,7 @@ function foot() {
         },
       },
       h("span.box"),
-      h("span", null, "RaceMenu morphs"),
+      h("span", null, `${morphsBy()} morphs`),
     ),
     h(
       "button.btn.ghost",
@@ -2926,7 +2937,7 @@ function saveProject() {
       title: "The project as one file to share, which installs as a mod",
       onclick: async () => {
         try {
-          const [made, bytes] = core.ask({ op: "pack" });
+          const [made, bytes] = core.ask({ op: "pack", tools: TOOLS.replace(/^Data\//, "") });
           await host.request("disk.save", { name: made.name, bytes: bytes.slice(0) });
         } catch (e) {
           said.textContent = e.message;

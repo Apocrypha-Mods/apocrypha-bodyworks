@@ -768,8 +768,12 @@ enum Request {
     /// the vertex follows it (nothing for a pair not used).
     Rig { shape: String },
     /// The open project packed as one zip file for sharing, laid out as a
-    /// mod is, after the answer.
-    Pack,
+    /// mod is, after the answer. `tools` is where under the game's data
+    /// such a mod keeps its slider sets.
+    Pack {
+        #[serde(default)]
+        tools: Option<String>,
+    },
     /// Every slider of the open project as a morph file, after the answer.
     Morphs,
     /// What one slider of the open project does, as a slider data file
@@ -1350,10 +1354,15 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
             },
             None => Answer::failed("No project is open."),
         },
-        Request::Pack => match &state.work {
+        Request::Pack { tools } => match &state.work {
             Some(work) => match work.project.save(&work.project.set.name) {
                 Ok((set, files)) => {
-                    match apoc_bodyslide::pack::zip("CalienteTools/BodySlide", &files) {
+                    // One of the two folders the games' mods use, and no other.
+                    let tools = match tools.as_deref() {
+                        Some("Tools/BodySlide") => "Tools/BodySlide",
+                        _ => "CalienteTools/BodySlide",
+                    };
+                    match apoc_bodyslide::pack::zip(tools, &files) {
                         Some(zip) => Answer::with(
                             json!({ "name": format!("{}.zip", apoc_bodyslide::project::file_name(&set.name)) }),
                             zip,

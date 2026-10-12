@@ -52,6 +52,18 @@ Edition:
 Rules found this way are written where they are used, each with what it was
 found from.
 
+### Fallout 4
+
+Held against CBBE for Fallout 4's own shipped meshes (348 sets, the "Curvy"
+option's files), with `TOOLS=data/tools/bodyslide/` for the same examples:
+344 sets build the same shapes, vertices and triangles, and 136 of them are
+the original's file byte for byte. The rest differ by a few bytes each: a
+handful of vertices with no direction to face, and where the reference to
+the morph file sits among a mesh's other extra data. Building, the preview
+and saving presets work; in the Studio, moving vertices, sliders and
+transforms work, and what needs a shape's bones or its segments does not
+yet.
+
 ## How fast it is
 
 Measured on CBBE's body (13,554 vertices, 136 sliders), not assumed

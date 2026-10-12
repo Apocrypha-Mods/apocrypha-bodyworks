@@ -80,6 +80,19 @@ fn collision_links(kind: &str, data: &[u8]) -> Option<Vec<usize>> {
             (data.len() == after.checked_add(4)?.checked_add(m.checked_mul(4)?)?)
                 .then(|| (0..n).map(|i| 4 + i * 4).collect())
         }
+        // Fallout 4's skin: the skeleton's root, its bone data, how many
+        // bones, those, and how many scales with three numbers each.
+        "BSSkin::Instance" => {
+            let n = word(8)? as usize;
+            let after = n.checked_mul(4)?.checked_add(12)?;
+            let m = word(after)? as usize;
+            (data.len() == after.checked_add(4)?.checked_add(m.checked_mul(12)?)?).then(|| {
+                [0, 4]
+                    .into_iter()
+                    .chain((0..n).map(|i| 12 + i * 4))
+                    .collect()
+            })
+        }
         // Its shape first; at its end how many things hold it to others,
         // those, and two bytes.
         "bhkRigidBody" | "bhkRigidBodyT" => (0..8usize).find_map(|n| {
@@ -124,7 +137,8 @@ pub fn links_known(kind: &str) -> bool {
         || is_tri_shape(kind)
         || matches!(
             kind,
-            "bhkCollisionObject"
+            "BSSkin::Instance"
+                | "bhkCollisionObject"
                 | "bhkSPCollisionObject"
                 | "bhkConvexTransformShape"
                 | "bhkTransformShape"
@@ -380,8 +394,14 @@ pub fn add_text(nif: &mut Nif, block: usize, name: &str, value: &str) -> Result<
         let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
         shape.av.extra_data.push(at);
         nif.blocks[block].data = shape.write(stream);
+    } else if is_node(&kind) {
+        let mut node = Node::read(&nif.blocks[block].data, stream)?;
+        node.av.extra_data.push(at);
+        nif.blocks[block].data = node.write(stream);
     } else {
-        return Err(NifError::Unsupported(format!("a {kind} is not a shape")));
+        return Err(NifError::Unsupported(format!(
+            "a {kind} is neither a shape nor a node"
+        )));
     }
     Ok(())
 }

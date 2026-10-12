@@ -243,7 +243,15 @@ pub fn build_with(
                     .copied()
                     .find(|at| mesh::read(&nif, *at).is_ok_and(|m| m.name == shape.name))
             });
-            if let Some(at) = first {
+            // Fallout 4's files hang it from the mesh's root instead, as the
+            // original's builds for that game were found to (`--example
+            // kindsdiff`).
+            let root = nif
+                .roots
+                .first()
+                .and_then(|r| usize::try_from(*r).ok())
+                .filter(|_| nif.header.stream.version >= 130);
+            if let Some(at) = first.and(root).or(first) {
                 let folder = join(&[&set.output_path]);
                 let under = folder
                     .strip_prefix("meshes/")
