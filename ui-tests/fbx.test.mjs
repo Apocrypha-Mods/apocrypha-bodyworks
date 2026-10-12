@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { read, write } from "../ui/fbx.js";
+import { follows, read, write } from "../ui/fbx.js";
 
 const square = {
   name: "Square",
@@ -98,6 +98,14 @@ test("a shape's bones and what follows them are written", async () => {
   const spine = back.followed.find((f) => f.bone === "Spine");
   assert.deepEqual([...spine.points], [0, 1, 2, 3]);
   assert.deepEqual([...spine.weights], [0.75, 0.25, 0.75, 0.25]);
+  // As the engine takes it: for each vertex, its bones and how much, heaviest kept.
+  const sent = follows(back);
+  const got = new DataView(sent.bytes.buffer);
+  assert.equal(sent.bytes.length, 4 * 32);
+  for (let v = 0; v < 4; v++) {
+    const pairs = [0, 1, 2, 3].map((k) => [sent.bones[got.getUint32(v * 32 + k * 8, true)], got.getFloat32(v * 32 + k * 8 + 4, true)]).filter((x) => x[1] > 0);
+    assert.deepEqual(pairs.sort((x, y) => y[1] - x[1]), [[v % 2 ? "Arm" : "Spine", 0.75], [v % 2 ? "Spine" : "Arm", 0.25]]);
+  }
   // The bones are objects of the file, not meshes of it.
   assert.equal((await read(write([{ ...square, rig: { bones, slots } }]))).length, 1);
 });

@@ -39,7 +39,7 @@ struct Work {
 /// A mesh from outside, as [`Change::ShapeFrom`] sends it.
 type Outside = (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<[u16; 3]>);
 
-fn outside_mesh(data: &[u8]) -> Option<Outside> {
+fn outside_mesh(data: &[u8]) -> Option<(Outside, &[u8])> {
     let word = |at: usize| -> Option<[u8; 4]> { data.get(at..at + 4)?.try_into().ok() };
     let (nv, nt) = (
         u32::from_le_bytes(word(0)?) as usize,
@@ -49,9 +49,10 @@ fn outside_mesh(data: &[u8]) -> Option<Outside> {
     let need = 8usize
         .checked_add(nv.checked_mul(20)?)?
         .checked_add(nt.checked_mul(12)?)?;
-    if need != data.len() {
+    if need > data.len() {
         return None;
     }
+    let rest = &data[need..];
     let float = |at: usize| word(at).map(f32::from_le_bytes);
     let mut at = 8;
     let mut positions = Vec::with_capacity(nv);
@@ -73,7 +74,25 @@ fn outside_mesh(data: &[u8]) -> Option<Outside> {
         triangles.push(t);
         at += 12;
     }
-    Some((positions, uvs, triangles))
+    Some(((positions, uvs, triangles), rest))
+}
+
+/// What each vertex follows, as [`Change::ShapeFrom`] sends it after the
+/// mesh: four pairs a vertex, a bone's number and how much.
+fn outside_weights(data: &[u8]) -> Vec<[(u32, f32); 4]> {
+    data.as_chunks::<32>()
+        .0
+        .iter()
+        .map(|c| {
+            std::array::from_fn(|k| {
+                let at = k * 8;
+                (
+                    u32::from_le_bytes([c[at], c[at + 1], c[at + 2], c[at + 3]]),
+                    f32::from_le_bytes([c[at + 4], c[at + 5], c[at + 6], c[at + 7]]),
+                )
+            })
+        })
+        .collect()
 }
 
 /// Vertex numbers sent as a request's bytes, four bytes each.
@@ -230,11 +249,15 @@ impl Work {
             }
             Change::Weld { shape } => p.weld(&shape).map(drop),
             Change::Refine { shape } => p.refine(&shape, &numbers(data)).map(drop),
-            Change::ShapeFrom { like, name } => match outside_mesh(data) {
-                Some((positions, uvs, triangles)) => {
-                    p.shape_from(&like, &name, &positions, &uvs, &triangles)
+            Change::ShapeFrom { like, name, bones } => match outside_mesh(data) {
+                Some(((positions, uvs, triangles), rest))
+                    if rest.is_empty() || rest.len() == positions.len() * 32 =>
+                {
+                    let follows = outside_weights(rest);
+                    let given = (!rest.is_empty()).then_some((&bones[..], &follows[..]));
+                    p.shape_from(&like, &name, &positions, &uvs, &triangles, given)
                 }
-                None => Err(apoc_bodyslide::Error::Invalid(
+                _ => Err(apoc_bodyslide::Error::Invalid(
                     "The file's mesh could not be read.".into(),
                 )),
             },
@@ -508,9 +531,16 @@ enum Change {
     /// bytes each), then each vertex's place (three floats), each vertex's
     /// place in the texture (two floats), and each triangle's three vertices
     /// (four bytes each).
+    ///
+    /// With `bones`, those bytes go on with what each vertex follows: four
+    /// pairs a vertex, a bone's number in `bones` (four bytes) and how much
+    /// (a float). A vertex given nothing, or only bones the mesh has not
+    /// got, follows what its likeness does.
     ShapeFrom {
         like: String,
         name: String,
+        #[serde(default)]
+        bones: Vec<String>,
     },
     /// Make two shapes one: `from` goes into `into`.
     Merge {

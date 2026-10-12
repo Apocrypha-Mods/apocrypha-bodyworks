@@ -582,3 +582,34 @@ async function meshes(bytes) {
   if (!out.length) throw new Error("The file has no meshes.");
   return out;
 }
+
+/**
+ * What a mesh read from a file follows, as the engine takes it: the bones'
+ * names, and for each vertex four pairs of a bone's number among them and
+ * how much, the heaviest four it has.
+ */
+export function follows(mesh) {
+  const count = mesh.points.length / 3;
+  // For each of the file's own vertices, its heaviest four so far.
+  const bone = new Uint32Array(count * 4);
+  const much = new Float32Array(count * 4);
+  mesh.followed.forEach((f, b) => {
+    for (let i = 0; i < f.points.length; i++) {
+      const [v, w] = [f.points[i], f.weights[i]];
+      if (v < 0 || v >= count || !(w > 0) || !Number.isFinite(w)) continue;
+      // In place of the lightest of the four, where it is heavier.
+      let least = v * 4;
+      for (let k = v * 4 + 1; k < v * 4 + 4; k++) if (much[k] < much[least]) least = k;
+      if (w > much[least]) [bone[least], much[least]] = [b, w];
+    }
+  });
+  const bytes = new Uint8Array(mesh.from.length * 32);
+  const view = new DataView(bytes.buffer);
+  mesh.from.forEach((v, i) => {
+    for (let k = 0; k < 4; k++) {
+      view.setUint32(i * 32 + k * 8, bone[v * 4 + k], true);
+      view.setFloat32(i * 32 + k * 8 + 4, much[v * 4 + k], true);
+    }
+  });
+  return { bones: mesh.followed.map((f) => f.bone), bytes };
+}

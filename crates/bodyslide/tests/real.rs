@@ -1502,6 +1502,7 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
         &panty.positions,
         &panty.uvs,
         &panty.triangles,
+        None,
     )
     .unwrap();
     assert!(made
@@ -1510,10 +1511,90 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
             "From outside",
             &panty.positions,
             &panty.uvs,
-            &panty.triangles
+            &panty.triangles,
+            None,
         )
         .is_err());
-    assert!(made.shape_from("Bra", "Empty", &[], &[], &[]).is_err());
+    assert!(made
+        .shape_from("Bra", "Empty", &[], &[], &[], None)
+        .is_err());
+
+    // With what its file says each vertex follows: a bone of the mesh's is
+    // taken by its name, whether its likeness follows it or not; one the
+    // mesh has not got is left out, and a vertex left with nothing follows
+    // what its likeness does.
+    let names = vec![
+        "NPC Pelvis [Pelv]".to_string(),
+        "No such bone".to_string(),
+        "NPC L Thigh [LThg]".to_string(),
+    ];
+    let follows: Vec<[(u32, f32); 4]> = (0..panty.positions.len())
+        .map(|v| match v % 3 {
+            0 => [(0, 0.75), (2, 0.25), (0, 0.0), (0, 0.0)],
+            1 => [(1, 1.0), (0, 0.0), (0, 0.0), (0, 0.0)],
+            _ => [(1, 0.5), (2, 0.5), (0, 0.0), (0, 0.0)],
+        })
+        .collect();
+    let mut rigged = project.clone();
+    assert!(rigged
+        .shape_from(
+            "Bra",
+            "Rigged",
+            &panty.positions,
+            &panty.uvs,
+            &panty.triangles,
+            Some((&names, &follows[..1])),
+        )
+        .is_err());
+    rigged
+        .shape_from(
+            "Bra",
+            "Rigged",
+            &panty.positions,
+            &panty.uvs,
+            &panty.triangles,
+            Some((&names, &follows)),
+        )
+        .unwrap();
+    let (_, plain_skin) = shape(&made, "From outside");
+    let (_, rigged_skin) = shape(&rigged, "Rigged");
+    let bone = |s: &apoc_nif::weights::Skin, slot: (u16, f32)| s.bones[slot.0 as usize].clone();
+    assert!(!rigged_skin.bones.contains(&names[1]));
+    // Its bones are those something follows, and no others of its likeness.
+    for (i, name) in rigged_skin.bones.iter().enumerate() {
+        assert!(
+            rigged_skin
+                .vertices
+                .iter()
+                .flatten()
+                .any(|x| x.1 > 0.0 && x.0 as usize == i),
+            "{name}"
+        );
+    }
+    for (v, slots) in rigged_skin.vertices.iter().enumerate() {
+        let used: Vec<(String, f32)> = slots
+            .iter()
+            .filter(|x| x.1 > 0.0)
+            .map(|x| (bone(&rigged_skin, *x), x.1))
+            .collect();
+        match v % 3 {
+            0 => {
+                assert_eq!(used.len(), 2);
+                assert_eq!(used[0].0, names[0]);
+                assert!((used[0].1 - 0.75).abs() < 0.01 && (used[1].1 - 0.25).abs() < 0.01);
+            }
+            1 => {
+                let like: Vec<(String, f32)> = plain_skin.vertices[v]
+                    .iter()
+                    .filter(|x| x.1 > 0.0)
+                    .map(|x| (bone(&plain_skin, *x), x.1))
+                    .collect();
+                assert_eq!(used, like);
+            }
+            _ => assert_eq!(used, vec![(names[2].clone(), 1.0)]),
+        }
+    }
+    built(&rigged, "Rigged");
     let (got, got_skin) = shape(&made, "From outside");
     assert_eq!(got.triangles, panty.triangles);
     assert_eq!(got.positions.len(), panty.positions.len());
@@ -1601,7 +1682,7 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
         .collect();
     let mut welded = project.clone();
     welded
-        .shape_from("Bra", "Doubled", &doubled, &doubled_uv, &split)
+        .shape_from("Bra", "Doubled", &doubled, &doubled_uv, &split, None)
         .unwrap();
     assert_eq!(shape(&welded, "Doubled").0.positions.len(), n * 2);
     let gone = welded.weld("Doubled").unwrap();

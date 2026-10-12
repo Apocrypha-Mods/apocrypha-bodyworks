@@ -81,11 +81,11 @@ Outfit Studio:
 - Segments (Fallout 4): viewing and editing.
 - Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI
   go both ways).
-- Files: bones and their weights read from FBX files (meshes and their
-  texture places go both ways, and shapes go out with their bones and
-  weights, all checked against Blender's own reading and writing; a shape
-  from a file takes its bones from a shape already there), FBX files
-  written as text, head TRI files, physics data.
+- Files: FBX files written as text (the binary kind goes both ways:
+  meshes, their texture places, and the bones they follow with their
+  weights, all checked against Blender's own reading and writing), bones
+  an FBX file has that the project has not (their weights are left out,
+  and said), head TRI files, physics data.
 - View: bones drawn as more than a dot where each is, recalculating or
   locking normals by hand.
 - The original's own keyboard shortcuts: this has its own (undo and redo,

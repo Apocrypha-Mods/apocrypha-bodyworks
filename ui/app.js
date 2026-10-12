@@ -1991,14 +1991,30 @@ async function shapeFromObj(like) {
     if (!picked) return;
     const plain = picked.name.replace(/\.(obj|fbx)$/i, "");
     const meshes = /\.fbx$/i.test(picked.name) ? await fbx.read(new Uint8Array(picked.bytes)) : [{ name: plain, ...obj.mesh(new TextDecoder().decode(picked.bytes)) }];
+    // A mesh with what its file says it follows, where the file says: its bytes, then that.
+    const sent = (made) => {
+      if (!made.followed?.length) return [[], meshBytes(made)];
+      const [mesh, rig] = [meshBytes(made), fbx.follows(made)];
+      const bytes = new Uint8Array(mesh.length + rig.bytes.length);
+      bytes.set(mesh);
+      bytes.set(rig.bytes, mesh.length);
+      return [rig.bones, bytes];
+    };
+    // Bones the file names that the project has not got are left out, and said.
+    const missing = () => {
+      const lost = [...new Set(meshes.flatMap((m) => (m.followed || []).map((f) => f.bone)))].filter((b) => !state.bones.includes(b));
+      if (lost.length) state.problem = lost.length === 1 ? `${lost[0]} is not in the project. Its weights were left out.` : `${lost.length} bones are not in the project (${lost.slice(0, 3).join(", ")}${lost.length > 3 ? "…" : ""}). Their weights were left out.`;
+      if (lost.length) render();
+    };
     if (meshes.length === 1) {
-      const bytes = meshBytes(meshes[0]);
+      const [bones, bytes] = sent(meshes[0]);
       rename(
         "New shape",
         meshes[0].name || plain,
         (name) => {
-          const [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name } }, bytes);
+          const [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name, bones } }, bytes);
           taken(work);
+          missing();
         },
         "Add",
       );
@@ -2012,12 +2028,14 @@ async function shapeFromObj(like) {
         let name = given;
         for (let n = 2; names.has(name); n++) name = `${given} ${n}`;
         names.add(name);
-        [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name } }, meshBytes(made));
+        const [bones, bytes] = sent(made);
+        [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name, bones } }, bytes);
       }
     } finally {
       // Those made before one that could not be are there all the same.
       if (work) taken(work);
     }
+    missing();
   } catch (e) {
     state.problem = e.message;
     render();

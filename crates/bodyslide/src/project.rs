@@ -10,6 +10,10 @@ use apoc_nif::{copy, edit, mesh, weights, Nif};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// What a file says its mesh's vertices follow: its bones by name, and for
+/// each vertex four pairs of a bone's number among them and how much.
+pub type Followed<'a> = (&'a [String], &'a [[(u32, f32); 4]]);
+
 /// What one slider does to one of the project's own shapes.
 #[derive(Debug, Clone, PartialEq)]
 struct Own {
@@ -1419,7 +1423,7 @@ impl Project {
         Ok(between.len())
     }
 
-    /// A new shape made of an outside mesh (an OBJ file's): its vertices,
+    /// A new shape made of an outside mesh (an OBJ or FBX file's): its vertices,
     /// their places in the texture, and its triangles. It is made in the
     /// likeness of `like`, a shape of the project: drawn with what that is
     /// drawn with, and following the bones its nearest vertices follow.
@@ -1430,8 +1434,12 @@ impl Project {
         positions: &[[f32; 3]],
         uvs: &[[f32; 2]],
         triangles: &[[u16; 3]],
+        given: Option<Followed>,
     ) -> Result<(), Error> {
         let name = name.trim();
+        if given.is_some_and(|g| g.1.len() != positions.len()) {
+            return invalid("The file says what other vertices follow than it has.");
+        }
         if positions.is_empty() || triangles.is_empty() {
             return invalid("The file has no triangles to make a shape of.");
         }
@@ -1492,10 +1500,73 @@ impl Project {
                 data.extend_from_slice(&bytes[near * stride..(near + 1) * stride]);
                 vertices.push(skin.vertices[near]);
             }
-            let made = weights::Skin {
-                bones: skin.bones.clone(),
-                vertices,
-            };
+            let mut bones = skin.bones.clone();
+            if let Some((names, follows)) = given {
+                // A bone of the file's is one of the mesh's by its name; one
+                // the mesh has not got is left out, and a vertex left with
+                // nothing keeps what its likeness follows.
+                let have: std::collections::HashSet<String> =
+                    copy::bone_names(&self.nif).into_iter().collect();
+                let mut at: Vec<Option<u16>> = vec![None; names.len()];
+                for (v, slots) in follows.iter().enumerate() {
+                    let mut all: Vec<(u16, f32)> = Vec::with_capacity(4);
+                    for (bone, weight) in slots {
+                        let Some(name) = names.get(*bone as usize) else {
+                            continue;
+                        };
+                        if !(*weight > 0.0 && weight.is_finite()) || !have.contains(name) {
+                            continue;
+                        }
+                        let slot = &mut at[*bone as usize];
+                        let index = match *slot {
+                            Some(i) => i,
+                            None => {
+                                let i = match bones.iter().position(|b| b == name) {
+                                    Some(i) => i,
+                                    None => {
+                                        bones.push(name.clone());
+                                        bones.len() - 1
+                                    }
+                                };
+                                let Ok(i) = u16::try_from(i) else {
+                                    continue;
+                                };
+                                *slot = Some(i);
+                                i
+                            }
+                        };
+                        all.push((index, *weight));
+                    }
+                    if !all.is_empty() {
+                        vertices[v] = weights::settled(&all);
+                    }
+                }
+            }
+            if given.is_some() {
+                // Only the bones something follows: those of its likeness
+                // that the file gave no vertex to are not the new shape's.
+                let mut used = vec![false; bones.len()];
+                for slot in vertices.iter().flatten().filter(|x| x.1 > 0.0) {
+                    if let Some(u) = used.get_mut(slot.0 as usize) {
+                        *u = true;
+                    }
+                }
+                let mut now = vec![0u16; bones.len()];
+                let mut kept = Vec::with_capacity(bones.len());
+                for (i, name) in bones.iter().enumerate() {
+                    if used[i] {
+                        now[i] = kept.len() as u16;
+                        kept.push(name.clone());
+                    }
+                }
+                if !kept.is_empty() {
+                    for slot in vertices.iter_mut().flatten() {
+                        slot.0 = now.get(slot.0 as usize).copied().unwrap_or(0);
+                    }
+                    bones = kept;
+                }
+            }
+            let made = weights::Skin { bones, vertices };
             weights::rebuild(
                 &mut self.nif,
                 block,
