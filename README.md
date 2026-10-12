@@ -69,8 +69,8 @@ separated, duplicated, mirrored, made from files, and have weights
 painted and copied, their segments holding every triangle afterwards
 (`--example statics` over 1,643 meshes), and two are merged. Not yet for
 Fallout 4: giving a shape colours or parting it from its bones, changing its
-lighting (it is drawn from material files), editing which triangles are in
-which segment, and a bone no shape of the mesh follows yet (nothing in
+lighting (it is drawn from material files), adding or removing a segment
+(triangles are moved between those a shape has), and a bone no shape of the mesh follows yet (nothing in
 these files says where one stands).
 
 ## How fast it is

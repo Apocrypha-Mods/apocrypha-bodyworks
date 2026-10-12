@@ -307,6 +307,7 @@ function showShapes(frame) {
       colors: s.colors && s.colors[1] ? new Uint8Array(numbers.slice(s.colors[0] * 4, (s.colors[0] + s.colors[1]) * 4)) : new Uint8Array(0),
       parts: (s.parts || []).map((part) => ({
         part: part.part,
+        segment: part.segment || null,
         triangles: u32.slice(part.triangles[0], part.triangles[0] + part.triangles[1]),
       })),
       places: s.bonePlaces ? f32.slice(s.bonePlaces[0], s.bonePlaces[0] + s.bonePlaces[1]) : new Float32Array(0),
@@ -1197,14 +1198,18 @@ function studioSide() {
                   showPart(null);
                   taken(work);
                 };
+                // Fallout 4's segments are the file's own: triangles move between them, and that is all.
+                const own = !part.segment;
+                const items = [
+                  own && { name: "Change part…", value: "change" },
+                  masked.length > 0 && { name: "Move masked triangles here", value: "here", rule: own },
+                  own && masked.length > 0 && { name: "Move masked triangles to a new part…", value: "new" },
+                  own && picked.parts.length > 1 && { name: "Remove part…", value: "remove", danger: true, rule: true },
+                ].filter(Boolean);
+                if (!items.length) return;
                 menu(
                   e.currentTarget,
-                  [
-                    { name: "Change part…", value: "change" },
-                    masked.length > 0 && { name: "Move masked triangles here", value: "here", rule: true },
-                    masked.length > 0 && { name: "Move masked triangles to a new part…", value: "new" },
-                    picked.parts.length > 1 && { name: "Remove part…", value: "remove", danger: true, rule: true },
-                  ].filter(Boolean),
+                  items,
                   (what) => {
                     if (what === "here") {
                       try {
@@ -1252,7 +1257,7 @@ function studioSide() {
                   );
               },
             },
-            h("span.nm.cut", null, `${part.part}${PARTS[part.part] ? ` · ${PARTS[part.part]}` : ""}`),
+            h("span.nm.cut", null, part.segment ? `Segment ${part.segment.segment}${part.segment.run ? ` · part ${part.segment.run}` : ""}` : `${part.part}${PARTS[part.part] ? ` · ${PARTS[part.part]}` : ""}`),
             h("span.sub.quiet", null, (part.triangles.length / 3).toLocaleString()),
           ),
         )
@@ -1441,7 +1446,7 @@ function studioSide() {
     h(
       "div.side-head",
       null,
-      h("div.seg.plain", { role: "group", "aria-label": "List" }, tab("shapes", "Shapes"), tab("bones", "Bones"), picked?.parts.length > 0 && tab("parts", "Parts")),
+      h("div.seg.plain", { role: "group", "aria-label": "List" }, tab("shapes", "Shapes"), tab("bones", "Bones"), picked?.parts.length > 0 && tab("parts", picked.parts[0].segment ? "Segments" : "Parts")),
       h("span.grow"),
       state.work &&
         (state.side === "bones"

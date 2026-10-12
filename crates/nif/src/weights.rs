@@ -623,12 +623,40 @@ pub struct Part {
     /// Which part of the body it is, by the game's number for it.
     pub part: u16,
     pub triangles: Vec<[u16; 3]>,
+    /// For one of Fallout 4's groups, which segment it is (counted from
+    /// one) and which of the segment's own runs, or none for what of the
+    /// segment is in no run. Nothing for a part of a skin.
+    pub segment: Option<(usize, Option<usize>)>,
 }
 
 /// The parts of the shape at `block`, in the file's order. None for a
 /// shape whose skin does not divide it.
 pub fn parts(nif: &Nif, block: usize) -> Result<Vec<Part>, NifError> {
     let stream = nif.header.stream.version;
+    if fo4(nif, block)?.is_some() {
+        // Fallout 4: the groups its segments deal its triangles into.
+        if nif.kind_of(block) != "BSSubIndexTriShape" {
+            return Ok(Vec::new());
+        }
+        let shape = TriShape::read(&nif.blocks[block].data, stream)?;
+        let segments = crate::segments::Segments::read(&shape.rest, shape.triangles.len())?;
+        let mut named = Vec::with_capacity(segments.groups());
+        for (i, s) in segments.segments.iter().enumerate() {
+            named.extend((0..s.runs.len()).map(|k| (i + 1, Some(k + 1))));
+            named.push((i + 1, None));
+        }
+        return Ok(segments
+            .dealt(&shape.triangles)
+            .into_iter()
+            .zip(named)
+            .map(|(triangles, segment)| Part {
+                flags: 0,
+                part: 0,
+                triangles,
+                segment: Some(segment),
+            })
+            .collect());
+    }
     let at = blocks(nif, block)?;
     let instance = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;
     let partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
@@ -642,6 +670,7 @@ pub fn parts(nif: &Nif, block: usize) -> Result<Vec<Part>, NifError> {
             flags: *flags,
             part: *part,
             triangles: p.true_triangles.clone().unwrap_or_default(),
+            segment: None,
         })
         .collect())
 }
@@ -737,6 +766,36 @@ pub fn move_to_part(
     new_part: u16,
 ) -> Result<usize, NifError> {
     let stream = nif.header.stream.version;
+    if fo4(nif, block)?.is_some() {
+        // Fallout 4: the marked triangles join another of the groups its
+        // segments make; the groups themselves are the file's to keep.
+        let (data, _, mut parts) = packed(nif, block)?;
+        let Some(to) = to.filter(|t| *t < parts.len()) else {
+            return unsupported("Fallout 4's segments are moved between, not added to");
+        };
+        let marked = |t: &[u16; 3]| {
+            t.iter()
+                .all(|v| vertices.get(*v as usize).copied().unwrap_or(false))
+        };
+        let mut moved = Vec::new();
+        for (i, part) in parts.iter_mut().enumerate() {
+            if i == to {
+                continue;
+            }
+            let (going, staying): (Vec<_>, Vec<_>) =
+                std::mem::take(part).into_iter().partition(marked);
+            *part = staying;
+            moved.extend(going);
+        }
+        if moved.is_empty() {
+            return unsupported("no whole triangle is marked that is not in that part already");
+        }
+        let count = moved.len();
+        parts[to].extend(moved);
+        let skin = read(nif, block)?;
+        rebuild(nif, block, data, parts, &skin, None)?;
+        return Ok(count);
+    }
     owned(nif, block)?;
     let at = blocks(nif, block)?;
     let mut instance = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;

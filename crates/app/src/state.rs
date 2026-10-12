@@ -1135,7 +1135,7 @@ impl State {
                         &mut bytes,
                         &mut p.triangles.iter().flatten().map(|i| *i as u32),
                     );
-                    json!({ "part": p.part, "flags": p.flags, "triangles": triangles })
+                    json!({ "part": p.part, "flags": p.flags, "triangles": triangles, "segment": p.segment.map(|(s, run)| json!({ "segment": s, "run": run })) })
                 })
                 .collect();
             let places = put_f32(

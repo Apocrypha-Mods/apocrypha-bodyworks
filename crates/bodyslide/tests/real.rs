@@ -2075,6 +2075,45 @@ fn a_fallout_4_shape_keeps_its_segments_and_skin_through_changes() {
         left.triangles.len()
     );
 
+    // Triangles moved from one of its segments' groups to another: as many
+    // triangles as before, the two groups changed by what moved, the mesh
+    // and skin as they were.
+    let groups = |p: &Project| {
+        let at = mesh::shapes(&p.nif)
+            .into_iter()
+            .find(|at| mesh::name(&p.nif, *at).as_deref() == Some(name))
+            .unwrap();
+        weights::parts(&p.nif, at).unwrap()
+    };
+    let before = groups(&project);
+    let from = before.iter().position(|g| g.triangles.len() > 4).unwrap();
+    let to = before
+        .iter()
+        .position(|g| g.triangles.is_empty())
+        .unwrap_or((from + 1) % before.len());
+    let marked: Vec<u16> = before[from].triangles[..2]
+        .iter()
+        .flatten()
+        .copied()
+        .collect();
+    let mut moved = project.clone();
+    let count = moved.move_to_part(name, &marked, Some(to), 0).unwrap();
+    assert!(count >= 2);
+    let after = groups(&moved);
+    assert_eq!(after.len(), before.len());
+    assert_eq!(
+        after[to].triangles.len(),
+        before[to].triangles.len() + count
+    );
+    assert_eq!(
+        after.iter().map(|g| g.triangles.len()).sum::<usize>(),
+        before.iter().map(|g| g.triangles.len()).sum::<usize>()
+    );
+    let (kept, kept_skin, _) = read(&moved);
+    assert_eq!((&kept.positions, &kept.uvs), (&was.positions, &was.uvs));
+    assert_eq!(kept_skin, was_skin);
+    assert!(moved.move_to_part(name, &marked, None, 32).is_err());
+
     // A weight painted, and every other vertex as the file had it.
     let mut painted = project.clone();
     painted
