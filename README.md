@@ -127,7 +127,12 @@ Outfit Studio:
   not taken out, copied or merged. Other meshes that follow no bones
   (weapons, clutter) take every change a skinned one does, measured over
   2,160 of the game's own (`--example statics`).
-- Segments (Fallout 4): viewing and editing.
+- Segments (Fallout 4): adding or removing one (they are shown, and
+  triangles moved between them).
+- Tools not here: posing a mesh by its bones to see how it bends, a handle
+  in the view to move, turn or scale by, a slider that moves the texture
+  made here (one a set has is followed), and making a conversion reference
+  from two bodies.
 - Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI
   go both ways).
 - Files: FBX files written as text (the binary kind goes both ways:
