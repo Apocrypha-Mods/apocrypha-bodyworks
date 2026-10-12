@@ -1342,6 +1342,21 @@ impl Project {
         done.map_err(|e| Error::Invalid(e.to_string()))
     }
 
+    /// The cloth data the mesh carries (Fallout 4's), as a Havok file.
+    pub fn cloth(&self) -> Option<&[u8]> {
+        apoc_nif::edit::cloth(&self.nif)
+    }
+
+    /// Give the mesh cloth data: a Havok file, in place of any it carried.
+    pub fn set_cloth(&mut self, file: &[u8]) -> Result<(), Error> {
+        let before = self.nif.clone();
+        let done = apoc_nif::edit::set_cloth(&mut self.nif, file);
+        if done.is_err() {
+            self.nif = before;
+        }
+        done.map_err(|e| Error::Invalid(e.to_string()))
+    }
+
     /// Give a shape's vertices colours to carry, all white and solid, where
     /// they carry none.
     pub fn add_colors(&mut self, shape: &str) -> Result<(), Error> {

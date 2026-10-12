@@ -223,6 +223,7 @@ impl Work {
             }
             Change::Textures { shape, textures } => p.set_textures(&shape, &textures),
             Change::AddColours { shape } => p.add_colors(&shape),
+            Change::Cloth => p.set_cloth(data),
             Change::RemoveSkinning { shape } => p.remove_skinning(&shape),
             Change::Look {
                 shape,
@@ -559,6 +560,8 @@ enum Change {
         #[serde(default)]
         smooth: Option<bool>,
     },
+    /// Give the mesh cloth data: a Havok file, the request's bytes.
+    Cloth,
     /// Part a shape from its bones.
     RemoveSkinning {
         shape: String,
@@ -787,6 +790,8 @@ enum Request {
     /// What the open project's sliders do to one shape, as the morph file
     /// of a part of a head, after the answer.
     HeadMorphs { shape: String },
+    /// The cloth data the open project's mesh carries, after the answer.
+    Cloth,
     /// The names of the bones of a skeleton: the request's bytes.
     Skeleton,
     /// Change the open project.
@@ -1414,6 +1419,18 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 ),
                 Err(e) => Answer::failed(e),
             },
+            None => Answer::failed("No project is open."),
+        },
+        Request::Cloth => match state
+            .work
+            .as_ref()
+            .map(|w| (w.project.cloth(), &w.project.set.name))
+        {
+            Some((Some(file), name)) => Answer::with(
+                json!({ "name": format!("{}.hkx", apoc_bodyslide::project::file_name(name)) }),
+                file.to_vec(),
+            ),
+            Some((None, _)) => Answer::failed("The mesh carries no cloth data."),
             None => Answer::failed("No project is open."),
         },
         Request::Skeleton => match Nif::read(data) {

@@ -132,8 +132,10 @@ Outfit Studio:
 - Files: FBX files written as text (the binary kind goes both ways:
   meshes, their texture places, and the bones they follow with their
   weights, a bone the project has not got being made where the file
-  stands it; all checked against Blender's own reading and writing), physics
-  data. (A head part's morph file goes both ways: it becomes sliders, and
+  stands it; all checked against Blender's own reading and writing),
+  Skyrim's physics files. (Fallout 4's cloth data goes out of a mesh as
+  the Havok file it is and into one; all 215 measured are laid out the
+  same, `--example cloth`. A head part's morph file goes both ways: it becomes sliders, and
   sliders go out as one; all 87 of a real body mod's read and write back
   the same, `--example headtri`.)
 - View: bones drawn as more than a dot where each is, recalculating or

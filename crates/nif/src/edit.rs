@@ -472,6 +472,61 @@ pub fn remove_shapes(nif: &mut Nif, shapes: &[usize]) -> Result<(), NifError> {
     remove_blocks(nif, &gone)
 }
 
+/// How a Havok file begins: what Fallout 4's cloth data is, after its
+/// length (every one of 215 measured, `--example cloth`).
+const HAVOK: [u8; 8] = [0x57, 0xe0, 0xe0, 0x57, 0x10, 0xc0, 0xc0, 0x10];
+
+/// The cloth data a Fallout 4 mesh carries (what makes a skirt or a coat
+/// swing): the Havok file inside its block. Nothing for a mesh with none.
+pub fn cloth(nif: &Nif) -> Option<&[u8]> {
+    let at = (0..nif.blocks.len()).find(|i| nif.kind_of(*i) == "BSClothExtraData")?;
+    let data = &nif.blocks[at].data;
+    let length = u32::from_le_bytes(data.get(..4)?.try_into().ok()?) as usize;
+    data.get(4..).filter(|d| d.len() == length)
+}
+
+/// Give a Fallout 4 mesh cloth data: a Havok file, in place of what it
+/// carried or, where it carried none, hung from its root after what the
+/// root already carries.
+pub fn set_cloth(nif: &mut Nif, file: &[u8]) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    if !(130..=139).contains(&stream) {
+        return Err(NifError::Unsupported(
+            "cloth data is a Fallout 4 mesh's to carry".into(),
+        ));
+    }
+    if file.get(..8) != Some(&HAVOK) || file.len() > u32::MAX as usize {
+        return Err(NifError::Unsupported("that is not a Havok file".into()));
+    }
+    let mut data = (file.len() as u32).to_le_bytes().to_vec();
+    data.extend_from_slice(file);
+    if let Some(at) = (0..nif.blocks.len()).find(|i| nif.kind_of(*i) == "BSClothExtraData") {
+        nif.blocks[at].data = data;
+        return Ok(());
+    }
+    let root = nif
+        .roots
+        .first()
+        .and_then(|r| usize::try_from(*r).ok())
+        .filter(|r| *r < nif.blocks.len() && is_node(nif.kind_of(*r)))
+        .ok_or_else(|| NifError::Unsupported("the mesh has no node to hang it from".into()))?;
+    // Every link must be known for a block to go in among the others.
+    links_of(nif)?;
+    let after = Node::read(&nif.blocks[root].data, stream)?
+        .av
+        .extra_data
+        .iter()
+        .filter_map(|l| usize::try_from(*l).ok())
+        .filter(|l| *l > root && *l < nif.blocks.len())
+        .max()
+        .unwrap_or(root);
+    let at = insert_block(nif, after + 1, "BSClothExtraData", data) as i32;
+    let mut node = Node::read(&nif.blocks[root].data, stream)?;
+    node.av.extra_data.push(at);
+    nif.blocks[root].data = node.write(stream);
+    Ok(())
+}
+
 /// Take out those of `blocks` that nothing left in the file links to, and
 /// what only they kept in, short of nodes.
 pub(crate) fn remove_unlinked(nif: &mut Nif, blocks: &[usize]) -> Result<(), NifError> {

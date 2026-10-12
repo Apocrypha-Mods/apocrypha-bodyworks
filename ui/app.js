@@ -2832,6 +2832,23 @@ function texturesOf(sh) {
   );
 }
 
+/** Outfit Studio: the cloth data a Fallout 4 mesh carries, out as a Havok file or in from one. */
+async function clothData(into) {
+  try {
+    if (into) {
+      const picked = await host.request("disk.open", { extensions: ["hkx"] });
+      if (!picked) return;
+      const [work] = core.ask({ op: "change", change: { do: "cloth" } }, new Uint8Array(picked.bytes));
+      return taken(work);
+    }
+    const [made, bytes] = core.ask({ op: "cloth" });
+    await host.request("disk.save", { name: made.name, bytes: bytes.slice(0) });
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
+}
+
 /** Outfit Studio: what the sliders do to one shape, as the morph file a part of a head comes with. */
 async function headMorphs(sh) {
   try {
@@ -3053,7 +3070,27 @@ function renderStudio() {
       h("span.grow"),
       state.work && h("button.btn.ghost", { type: "button", disabled: !state.work.undo, onclick: () => undo(false) }, "Undo"),
       state.work && h("button.btn.ghost", { type: "button", disabled: !state.work.redo, onclick: () => undo(true) }, "Redo"),
-      h("button.btn.ghost", { type: "button", disabled: !state.shapes.length, onclick: exportMesh }, "Export mesh…"),
+      // Fallout 4's meshes carry what makes cloth swing: out and in beside the mesh.
+      state.work && /fallout/i.test(`${state.game?.id} ${state.game?.name}`)
+        ? h(
+            "button.btn.ghost",
+            {
+              type: "button",
+              disabled: !state.shapes.length,
+              onclick: (e) =>
+                menu(
+                  e.currentTarget,
+                  [
+                    { name: "Export mesh…", value: "mesh" },
+                    { name: "Export cloth data…", value: "clothOut", rule: true },
+                    { name: "Import cloth data…", value: "clothIn" },
+                  ],
+                  (what) => (what === "mesh" ? exportMesh() : clothData(what === "clothIn")),
+                ),
+            },
+            "Export…",
+          )
+        : h("button.btn.ghost", { type: "button", disabled: !state.shapes.length, onclick: exportMesh }, "Export mesh…"),
       state.work && h("button.btn", { type: "button", onclick: saveProject }, "Save project…"),
       h("label.search", { style: "flex: 0 1 160px; min-width: 120px", html: GLASS }, search),
     ),

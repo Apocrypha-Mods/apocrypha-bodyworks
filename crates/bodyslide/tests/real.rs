@@ -2186,6 +2186,31 @@ fn a_fallout_4_shape_keeps_its_segments_and_skin_through_changes() {
         (was_skin.clone(), was_segments.clone())
     );
 
+    // Cloth data: a mesh with none is given some (another mesh's), which
+    // it then carries from its root; and one that has some has it changed.
+    let coat = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/fo4/cbbe/06 Outfits Slim - Vanilla/Meshes/Armor/Maxson/MaxonCoatF.nif");
+    if let Ok(coat) = std::fs::read(&coat) {
+        let coat = Project::from_mesh("Coat", "meshes/coat.nif", &coat).unwrap();
+        let cloth = coat.cloth().unwrap().to_vec();
+        assert!(project.cloth().is_none());
+        let mut swinging = project.clone();
+        assert!(swinging.set_cloth(b"not a Havok file").is_err());
+        swinging.set_cloth(&cloth).unwrap();
+        let back = Nif::read(&swinging.nif.write()).unwrap();
+        assert_eq!(apoc_nif::edit::cloth(&back), Some(&cloth[..]));
+        assert_eq!(back.blocks.len(), project.nif.blocks.len() + 1);
+        let (still, still_skin, still_segments) = read(&swinging);
+        assert_eq!(
+            (&still.positions, &still_skin, &still_segments),
+            (&was.positions, &was_skin, &was_segments)
+        );
+        // Given again, it is changed where it is.
+        swinging.set_cloth(&cloth[..cloth.len() - 4]).unwrap();
+        assert_eq!(swinging.nif.blocks.len(), project.nif.blocks.len() + 1);
+        assert_eq!(swinging.cloth().map(<[u8]>::len), Some(cloth.len() - 4));
+    }
+
     // A weight painted, and every other vertex as the file had it.
     let mut painted = project.clone();
     painted
