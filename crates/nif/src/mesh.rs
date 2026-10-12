@@ -842,7 +842,10 @@ pub fn set_shading(
         let n = target.vertex_data.len() / layout.stride.max(1);
         for v in 0..n.min(normals.len()) {
             target.set_normal(&layout, v, normals[v]);
-            if with_tangents {
+            // A vertex with no way round it to be worked out (it is in no
+            // triangle with any area) keeps what the file had there, as
+            // the original's builds were found to (`--example kindsdiff`).
+            if with_tangents && (tangents[v] != [0.0; 3] || bitangents[v] != [0.0; 3]) {
                 target.set_tangent_space(&layout, v, tangents[v], bitangents[v]);
             }
         }

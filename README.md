@@ -31,7 +31,7 @@ Edition:
 - 468 of 478 build to the same shapes, vertices and triangles as the
   original's file. The other 10 are sets that share an output file with
   another set, or whose shipped mesh was built from slightly different data.
-- 684 of 933 built meshes are the original's file byte for byte. 84 of the
+- 704 of 933 built meshes are the original's file byte for byte. 84 of the
   rest are the physics variant of a set whose plain variant wrote the shipped
   file. What is left differs in the normals of a few vertices on seams.
 - 458 of 478 morph files (`.tri`) are the original's byte for byte; all 429
@@ -56,9 +56,11 @@ found from.
 
 Held against CBBE for Fallout 4's own shipped meshes (348 sets, the "Curvy"
 option's files), with `TOOLS=data/tools/bodyslide/` for the same examples:
-344 sets build the same shapes, vertices and triangles, and 176 of them are
+344 sets build the same shapes, vertices and triangles, and 193 of them are
 the original's file byte for byte. The rest differ by a few bytes each: a
-handful of vertices with no direction to face. Building, the preview
+vertex or two whose direction comes out one step away in its last place.
+The four sets that do not compare were shipped built from another mesh
+than the set now names. Building, the preview
 and saving presets work. In the Studio its skins (bones, weights, where
 each bone stands; all 3,253 read and write back as they were,
 `--example skinsame`) and its segments (all 3,195 likewise,

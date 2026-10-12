@@ -136,6 +136,30 @@ fn main() {
                     "      theirs    : {:02x?}",
                     &b.vertex_data[v * stride..(v + 1) * stride]
                 );
+                // The same vertex in the mesh the set is built from, and how many triangles use it.
+                let name = apoc_nif::mesh::name(&ours, i).unwrap_or_default();
+                if let Some(source) =
+                    files(&format!("shapedata/{}/{}", s.data_folder, s.source_file))
+                        .and_then(|b| apoc_nif::Nif::read(&b).ok())
+                {
+                    if let Some(at) = apoc_nif::mesh::shapes(&source).into_iter().find(|at| {
+                        apoc_nif::mesh::name(&source, *at).as_deref() == Some(name.as_str())
+                    }) {
+                        if let Ok(c) = TriShape::read(&source.blocks[at].data, stream) {
+                            println!(
+                                "      source    : {:02x?}",
+                                c.vertex_data.get(v * stride..(v + 1) * stride)
+                            );
+                        }
+                    }
+                }
+                println!(
+                    "      used by {} triangles",
+                    a.triangles
+                        .iter()
+                        .filter(|t| t.contains(&(v as u16)))
+                        .count()
+                );
             }
         }
     }

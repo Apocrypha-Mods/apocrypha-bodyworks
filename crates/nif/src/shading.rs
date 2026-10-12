@@ -188,8 +188,8 @@ pub fn tangent_space(
         // it: the order the original's numbers come out of, to the last bit.
         let v_dir = normalized(along_v[i], [0.0; 3]);
         let u_dir = normalized(along_u[i], [0.0; 3]);
-        // Where the texture does not grow along V at all (every triangle
-        // round the vertex has one V), the original leaves the normal with
+        // Where the texture does not grow along V at all, or along U (every
+        // triangle round the vertex has one V, or one U), the original leaves the normal with
         // its numbers turned round as the tangent, and what is square to
         // the two as the bitangent, neither brought to length one.
         // A normal of nothing read back from a file is not quite nothing:
@@ -199,7 +199,7 @@ pub fn tangent_space(
             // No normal (a vertex of triangles with no area): nothing to
             // be square to, and the original leaves both empty.
             ([0.0; 3], [0.0; 3])
-        } else if v_dir == [0.0; 3] {
+        } else if v_dir == [0.0; 3] || u_dir == [0.0; 3] {
             let tangent = [normal[1], normal[2], normal[0]];
             (tangent, cross(normal, tangent))
         } else {
