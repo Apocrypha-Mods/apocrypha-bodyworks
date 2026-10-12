@@ -1525,7 +1525,7 @@ impl Project {
             let (bytes, layout, _) = weights::packed(&self.nif, block).map_err(fail)?;
             let stride = layout.stride.max(1);
             let template = mesh::read(&self.nif, block).map_err(fail)?.positions;
-            let skin = weights::read(&self.nif, block).map_err(fail)?;
+            let skin = weights::skin_or_none(&self.nif, block).map_err(fail)?;
             if template.is_empty()
                 || template.len() != skin.vertices.len()
                 || template.len() * stride != bytes.len()

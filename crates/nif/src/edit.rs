@@ -44,7 +44,54 @@ fn has_no_links(kind: &str) -> bool {
             | "BSConnectPoint::Parents"
             | "BSConnectPoint::Children"
             | "BSSkin::BoneData"
+            // How a thing collides, where it is a shape that holds no other
+            // (`--example havok` measures these and those below).
+            | "bhkBoxShape"
+            | "bhkSphereShape"
+            | "bhkCapsuleShape"
+            | "bhkConvexVerticesShape"
+            | "bhkCompressedMeshShapeData"
     )
+}
+
+/// Where the links are in a block that says how a thing collides: the
+/// offsets of each, as measured over the game's own files. Nothing for a
+/// kind not measured, or a block not laid out as its kind was found to be.
+fn collision_links(kind: &str, data: &[u8]) -> Option<Vec<usize>> {
+    let word = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(
+            data.get(at..at.checked_add(4)?)?.try_into().ok()?,
+        ))
+    };
+    match kind {
+        // What it is on, two bytes of switches, and its body.
+        "bhkCollisionObject" | "bhkSPCollisionObject" => (data.len() == 10).then(|| vec![0, 6]),
+        // The shape it places.
+        "bhkConvexTransformShape" | "bhkTransformShape" => (data.len() == 84).then(|| vec![0]),
+        // The shape it sorts.
+        "bhkMoppBvTreeShape" => (data.len() >= 4).then(|| vec![0]),
+        // What it is on, and at its end its data.
+        "bhkCompressedMeshShape" => (data.len() == 56).then(|| vec![0, 52]),
+        // How many shapes, those, and after 28 bytes as many numbers as it says.
+        "bhkListShape" => {
+            let n = word(0)? as usize;
+            let after = n.checked_mul(4)?.checked_add(32)?;
+            let m = word(after)? as usize;
+            (data.len() == after.checked_add(4)?.checked_add(m.checked_mul(4)?)?)
+                .then(|| (0..n).map(|i| 4 + i * 4).collect())
+        }
+        // Its shape first; at its end how many things hold it to others,
+        // those, and two bytes.
+        "bhkRigidBody" | "bhkRigidBodyT" => (0..8usize).find_map(|n| {
+            let count = data.len().checked_sub(6 + n * 4)?;
+            (count >= 4 && word(count)? as usize == n).then(|| {
+                std::iter::once(0)
+                    .chain((0..n).map(|i| count + 4 + i * 4))
+                    .collect()
+            })
+        }),
+        _ => None,
+    }
 }
 
 /// Kinds that start as every named object does (name, extra data,
@@ -75,6 +122,18 @@ pub fn links_known(kind: &str) -> bool {
                 "BSTreeNode" | "BSMultiBoundNode" | "BSMasterParticleSystem" | "NiLODNode"
             ))
         || is_tri_shape(kind)
+        || matches!(
+            kind,
+            "bhkCollisionObject"
+                | "bhkSPCollisionObject"
+                | "bhkConvexTransformShape"
+                | "bhkTransformShape"
+                | "bhkMoppBvTreeShape"
+                | "bhkCompressedMeshShape"
+                | "bhkListShape"
+                | "bhkRigidBody"
+                | "bhkRigidBodyT"
+        )
         || matches!(
             kind,
             "NiTriShape"
@@ -170,6 +229,22 @@ pub(crate) fn relinked(
         one(&mut s.shader, map);
         one(&mut s.alpha, map);
         return Ok(s.write(stream));
+    }
+    if let Some(at) = collision_links(kind, data) {
+        let mut out = data.to_vec();
+        for at in at {
+            let mut link = i32::from_le_bytes([out[at], out[at + 1], out[at + 2], out[at + 3]]);
+            one(&mut link, map);
+            // A list of shapes keeps its length: one gone would leave a gap
+            // nothing here knows how to close.
+            if link < 0 && kind == "bhkListShape" {
+                return Err(NifError::Unsupported(
+                    "a shape a list of collision shapes holds cannot be taken out".into(),
+                ));
+            }
+            out[at..at + 4].copy_from_slice(&link.to_le_bytes());
+        }
+        return Ok(out);
     }
     match kind {
         "NiTriShape" => {
@@ -625,7 +700,8 @@ mod tests {
         let before = nif.clone();
         assert!(remove_blocks(&mut nif, &BTreeSet::from([1])).is_err());
         assert_eq!(nif, before);
-        assert!(!links_known("bhkCollisionObject"));
+        assert!(!links_known("bhkRagdollConstraint"));
+        assert!(links_known("bhkCollisionObject"));
         assert!(links_known("BSDismemberSkinInstance"));
     }
 

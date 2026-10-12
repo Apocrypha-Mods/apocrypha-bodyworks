@@ -663,6 +663,44 @@ pub fn remove_part(nif: &mut Nif, block: usize, index: usize, into: usize) -> Re
 /// other's now begin.
 pub fn merge(nif: &mut Nif, into: usize, from: usize) -> Result<usize, NifError> {
     let stream = nif.header.stream.version;
+    // Two shapes that follow no bones: one's vertices and triangles after
+    // the other's, in the shape itself.
+    if let (Some(mut a), Some(b)) = (bare(nif, into)?, bare(nif, from)?) {
+        let Some(layout) =
+            Layout::of(a.vertex_desc, stream).filter(|_| a.vertex_desc == b.vertex_desc)
+        else {
+            return unsupported(
+                "the two shapes keep different things for each vertex, and cannot be one shape",
+            );
+        };
+        let stride = layout.stride.max(1);
+        let (na, nb) = (a.vertex_data.len() / stride, b.vertex_data.len() / stride);
+        if na + nb > u16::MAX as usize || a.triangles.len() + b.triangles.len() > u16::MAX as usize
+        {
+            return unsupported(
+                "together they have more vertices or triangles than one shape can number",
+            );
+        }
+        if b.triangles.iter().flatten().any(|v| *v as usize >= nb) {
+            return Err(NifError::Corrupt(
+                "a triangle names a vertex the shape does not have".into(),
+            ));
+        }
+        a.vertex_data.extend_from_slice(&b.vertex_data);
+        a.vertex_count = (na + nb) as u16;
+        a.triangles.extend(
+            b.triangles
+                .iter()
+                .map(|t| t.map(|v| (v as usize + na) as u16)),
+        );
+        nif.blocks[into].data = a.write(stream);
+        return Ok(na);
+    }
+    if bare(nif, into)?.is_some() != bare(nif, from)?.is_some() {
+        return unsupported(
+            "one of the two follows bones and the other does not, and they cannot be one shape",
+        );
+    }
     owned(nif, into)?;
     owned(nif, from)?;
     let (a, b) = (blocks(nif, into)?, blocks(nif, from)?);
@@ -763,6 +801,29 @@ pub fn rebuild(
     like: Option<usize>,
 ) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
+    if let Some(mut shape) = bare(nif, block)? {
+        // A shape that follows no bones keeps all of it in itself.
+        let Some(layout) = Layout::of(shape.vertex_desc, stream) else {
+            return unsupported("the shape keeps no vertices this can read");
+        };
+        let stride = layout.stride.max(1);
+        let count = vertex_data.len() / stride;
+        if !vertex_data.len().is_multiple_of(stride) || count == 0 || count > u16::MAX as usize {
+            return unsupported("that is not a number of vertices one shape can hold");
+        }
+        let [triangles] = <[Vec<[u16; 3]>; 1]>::try_from(parts)
+            .map_err(|_| NifError::Unsupported("the shape has not that many parts".into()))?;
+        if triangles.len() > u16::MAX as usize
+            || triangles.iter().flatten().any(|v| *v as usize >= count)
+        {
+            return unsupported("a triangle names a vertex the shape would not have");
+        }
+        shape.vertex_data = vertex_data;
+        shape.vertex_count = count as u16;
+        shape.triangles = triangles;
+        nif.blocks[block].data = shape.write(stream);
+        return Ok(());
+    }
     owned(nif, block)?;
     let at = blocks(nif, block)?;
     if TriShape::read(&nif.blocks[block].data, stream)?.has_vertices() {
@@ -823,6 +884,31 @@ pub fn rebuild(
     done
 }
 
+/// The shape at `block` where it follows no bones and keeps its vertices
+/// and triangles in itself: a weapon, a piece of clutter. Nothing for one
+/// that is skinned, or that keeps its vertices another way.
+fn bare(nif: &Nif, block: usize) -> Result<Option<TriShape>, NifError> {
+    let stream = nif.header.stream.version;
+    if !matches!(nif.kind_of(block), "BSTriShape" | "BSMeshLODTriShape") {
+        return Ok(None);
+    }
+    let shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let skinned = usize::try_from(shape.skin).is_ok_and(|i| i < nif.blocks.len());
+    Ok((!skinned && shape.has_vertices()).then_some(shape))
+}
+
+/// The skin of the shape at `block`, or for one that follows no bones a
+/// skin of no bones: every vertex following nothing.
+pub fn skin_or_none(nif: &Nif, block: usize) -> Result<Skin, NifError> {
+    if let Some(shape) = bare(nif, block)? {
+        return Ok(Skin {
+            bones: Vec::new(),
+            vertices: vec![[(0, 0.0); MOST]; shape.vertex_count as usize],
+        });
+    }
+    read(nif, block)
+}
+
 /// A shape's vertices as packed bytes, their layout, and its triangles part
 /// by part.
 pub type Packed = (Vec<u8>, Layout, Vec<Vec<[u16; 3]>>);
@@ -831,6 +917,26 @@ pub type Packed = (Vec<u8>, Layout, Vec<Vec<[u16; 3]>>);
 /// by part: what [`rebuild`] takes back.
 pub fn packed(nif: &Nif, block: usize) -> Result<Packed, NifError> {
     let stream = nif.header.stream.version;
+    if let Some(shape) = bare(nif, block)? {
+        let Some(layout) = Layout::of(shape.vertex_desc, stream) else {
+            return unsupported("the shape keeps no vertices this can read");
+        };
+        let stride = layout.stride.max(1);
+        let count = shape.vertex_data.len() / stride;
+        if !shape.vertex_data.len().is_multiple_of(stride)
+            || count > u16::MAX as usize
+            || shape
+                .triangles
+                .iter()
+                .flatten()
+                .any(|v| *v as usize >= count)
+        {
+            return Err(NifError::Corrupt(
+                "the shape's vertices and triangles are out of step".into(),
+            ));
+        }
+        return Ok((shape.vertex_data, layout, vec![shape.triangles]));
+    }
     let at = blocks(nif, block)?;
     let partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
     let Some(layout) = partition.vertex_desc.and_then(|d| Layout::of(d, stream)) else {
@@ -875,7 +981,7 @@ pub fn refine(nif: &mut Nif, block: usize, spared: &[u16]) -> Result<Vec<(u16, u
     let (mut bytes, layout, parts) = packed(nif, block)?;
     let stride = layout.stride.max(1);
     let had = bytes.len() / stride;
-    let skin = read(nif, block)?;
+    let skin = skin_or_none(nif, block)?;
     if skin.vertices.len() != had {
         return unsupported("the shape and its skin disagree about its vertices");
     }
@@ -998,7 +1104,7 @@ pub fn weld(nif: &mut Nif, block: usize) -> Result<Vec<u16>, NifError> {
     let (bytes, layout, parts) = packed(nif, block)?;
     let stride = layout.stride.max(1);
     let count = bytes.len() / stride;
-    let skin = read(nif, block)?;
+    let skin = skin_or_none(nif, block)?;
     if skin.vertices.len() != count {
         return unsupported("the shape and its skin disagree about its vertices");
     }
@@ -1083,7 +1189,7 @@ pub fn edge(nif: &mut Nif, block: usize, a: u16, b: u16, op: EdgeOp) -> Result<E
     let (bytes, layout, mut parts) = packed(nif, block)?;
     let stride = layout.stride.max(1);
     let count = bytes.len() / stride;
-    let skin = read(nif, block)?;
+    let skin = skin_or_none(nif, block)?;
     if skin.vertices.len() != count {
         return unsupported("the shape and its skin disagree about its vertices");
     }

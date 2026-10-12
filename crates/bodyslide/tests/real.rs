@@ -1801,3 +1801,69 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
         one.positions.len()
     );
 }
+
+#[test]
+fn a_mesh_that_follows_no_bones_takes_the_changes_a_skinned_one_does() {
+    use apoc_bodyslide::project::Project;
+    use apoc_nif::{mesh, Nif};
+    // One of the game's own, with what says how it collides after its shapes.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/statics/meshes/weapons/steel/steelmace.nif");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    let project = Project::from_mesh("Mace", "meshes/mace.nif", &bytes).unwrap();
+    let name = project.set.shapes[0].name.clone();
+    let read = |p: &Project, name: &str| {
+        let nif = Nif::read(&p.nif.write()).unwrap();
+        let at = mesh::shapes(&nif)
+            .into_iter()
+            .find(|at| mesh::name(&nif, *at).as_deref() == Some(name))
+            .unwrap();
+        mesh::read(&nif, at).unwrap()
+    };
+    let was = read(&project, &name);
+
+    let mut refined = project.clone();
+    let added = refined.refine(&name, &[]).unwrap();
+    let now = read(&refined, &name);
+    assert_eq!(now.positions.len(), was.positions.len() + added);
+    assert_eq!(now.triangles.len(), was.triangles.len() * 4);
+    assert_eq!(&now.positions[..was.positions.len()], &was.positions[..]);
+
+    let mut welded = project.clone();
+    welded.weld(&name).unwrap();
+    assert!(read(&welded, &name).positions.len() <= was.positions.len());
+
+    // A copy made and merged back: twice the shape, and every other block
+    // of the file as it was, what says how it collides among them.
+    let mut merged = project.clone();
+    merged.duplicate_shape(&name, "Copy").unwrap();
+    merged.merge_shapes(&name, "Copy").unwrap();
+    let both = read(&merged, &name);
+    assert_eq!(both.positions.len(), was.positions.len() * 2);
+    assert_eq!(both.triangles.len(), was.triangles.len() * 2);
+    let kinds = |nif: &Nif| -> Vec<String> {
+        (0..nif.blocks.len())
+            .map(|i| nif.kind_of(i).to_string())
+            .filter(|k| k.starts_with("bhk"))
+            .collect()
+    };
+    assert!(!kinds(&project.nif).is_empty());
+    assert_eq!(kinds(&merged.nif), kinds(&project.nif));
+
+    let mut made = project.clone();
+    made.shape_from(
+        &name,
+        "From outside",
+        &was.positions,
+        &was.uvs,
+        &was.triangles,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        read(&made, "From outside").positions.len(),
+        was.positions.len()
+    );
+}

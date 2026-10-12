@@ -81,6 +81,11 @@ Outfit Studio:
 - Shapes: merging shapes that keep different things for each vertex,
   removing skinning, the kind of shader a shape is drawn with and its
   switches (its textures, glow, shine, gloss and opacity are changed).
+- Meshes that move by themselves or hang together (animation controllers,
+  collision joined by constraints): their shapes are changed in place, but
+  not taken out, copied or merged. Other meshes that follow no bones
+  (weapons, clutter) take every change a skinned one does, measured over
+  2,160 of the game's own (`--example statics`).
 - Segments (Fallout 4): viewing and editing.
 - Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI
   go both ways).

@@ -1,0 +1,197 @@
+//! What can be done with meshes that follow no bones (weapons, clutter):
+//! each file opened as a project and each change tried on its first shape,
+//! with how many took it and why the first that did not refused.
+//!
+//!     cargo run --release -p apoc-bodyslide --example statics -- <file.nif>...
+
+use apoc_bodyslide::project::Project;
+use apoc_nif::{mesh, Nif};
+use std::collections::BTreeMap;
+
+fn main() {
+    let mut tally: BTreeMap<&str, (usize, usize, String)> = BTreeMap::new();
+    let mut note = |what: &'static str, done: Result<(), String>| {
+        let t = tally.entry(what).or_default();
+        match done {
+            Ok(()) => t.0 += 1,
+            Err(e) => {
+                t.1 += 1;
+                if t.2.is_empty() {
+                    t.2 = e;
+                }
+            }
+        }
+    };
+    for path in std::env::args().skip(1) {
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let nif = match Nif::read(&bytes) {
+            Ok(n) => n,
+            Err(e) => {
+                note("read", Err(format!("{path}: {e}")));
+                continue;
+            }
+        };
+        note("read", Ok(()));
+        note(
+            "write back the same",
+            (nif.write() == bytes).then_some(()).ok_or(path.clone()),
+        );
+        let project = match Project::from_mesh("Probe", "meshes/probe.nif", &bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                note("open as a project", Err(format!("{path}: {e}")));
+                continue;
+            }
+        };
+        let Some(shape) = project.set.shapes.first().map(|s| s.name.clone()) else {
+            note("open as a project", Err(format!("{path}: no shapes")));
+            continue;
+        };
+        note("open as a project", Ok(()));
+        let said = |e: apoc_bodyslide::Error| format!("{path}: {e}");
+        let block = mesh::shapes(&project.nif)
+            .into_iter()
+            .find(|at| mesh::name(&project.nif, *at).as_deref() == Some(shape.as_str()));
+        let count = block
+            .and_then(|b| mesh::read(&project.nif, b).ok())
+            .map_or(0, |m| m.positions.len());
+        note(
+            "read its vertices",
+            (count > 0).then_some(()).ok_or(path.clone()),
+        );
+        let half: Vec<u16> = (0..(count / 2) as u16).collect();
+        let mut p = project.clone();
+        note(
+            "move, turn, scale",
+            p.transform(&shape, [1.0, 0.0, 0.0], 1.1, [0.0, 0.0, 10.0])
+                .map_err(said),
+        );
+        let mut p = project.clone();
+        note("mirror", p.mirror_shape(&shape).map_err(said));
+        let mut p = project.clone();
+        note("flip texture", p.flip_uv(&shape, true).map_err(said));
+        let mut p = project.clone();
+        note(
+            "duplicate",
+            p.duplicate_shape(&shape, "Copy of it").map_err(said),
+        );
+        // Written and read again: as many vertices and triangles as it should then have.
+        let after = |p: &Project| -> Option<(usize, usize)> {
+            let nif = Nif::read(&p.nif.write()).ok()?;
+            let at = mesh::shapes(&nif)
+                .into_iter()
+                .find(|at| mesh::name(&nif, *at).as_deref() == Some(shape.as_str()))?;
+            let m = mesh::read(&nif, at).ok()?;
+            Some((m.positions.len(), m.triangles.len()))
+        };
+        let was = after(&project).unwrap_or_default();
+        let mut p = project.clone();
+        let refined = p.refine(&shape, &[]).map_err(said);
+        if let Ok(added) = &refined {
+            note(
+                "refined: four triangles for one, read back",
+                (after(&p) == Some((was.0 + added, was.1 * 4)))
+                    .then_some(())
+                    .ok_or(path.clone()),
+            );
+        }
+        note("refine", refined.map(drop));
+        let first = block
+            .and_then(|b| mesh::read(&project.nif, b).ok())
+            .and_then(|m| m.triangles.first().copied());
+        if let Some(t) = first {
+            use apoc_nif::weights::EdgeOp;
+            for (what, op, by) in [
+                ("split an edge", EdgeOp::Split, 1isize),
+                ("collapse an edge", EdgeOp::Collapse, -1),
+            ] {
+                let mut p = project.clone();
+                let done = p.edge(&shape, t[0], t[1], op).map_err(said);
+                if done.is_ok() {
+                    let now = after(&p).unwrap_or_default();
+                    note(
+                        "edge: one vertex more or fewer, read back",
+                        (now.0 as isize == was.0 as isize + by)
+                            .then_some(())
+                            .ok_or(format!("{path}: {was:?} to {now:?}")),
+                    );
+                }
+                note(what, done);
+            }
+        }
+        // The first shape taken out, where there is another: every block
+        // after it moves up, and what is written goes to STATICS_OUT for
+        // `--example havok` to check its links by.
+        if project.set.shapes.len() > 1 {
+            let mut p = project.clone();
+            let done = p.delete_shape(&shape).map_err(said);
+            if let (Ok(()), Ok(out)) = (&done, std::env::var("STATICS_OUT")) {
+                let name = path.replace('/', "_");
+                let bytes = p.nif.write();
+                note(
+                    "without its first shape: read back",
+                    Nif::read(&bytes)
+                        .map(drop)
+                        .map_err(|e| format!("{path}: {e}")),
+                );
+                std::fs::write(std::path::Path::new(&out).join(name), bytes).ok();
+            }
+            note("delete the first shape", done);
+        }
+        let mut p = project.clone();
+        note(
+            "duplicate and merge",
+            p.duplicate_shape(&shape, "Copy of it")
+                .and_then(|()| p.merge_shapes(&shape, "Copy of it"))
+                .map_err(said),
+        );
+        if let Some(m) = block.and_then(|b| mesh::read(&project.nif, b).ok()) {
+            let mut p = project.clone();
+            note(
+                "new shape from a mesh",
+                p.shape_from(
+                    &shape,
+                    "From outside",
+                    &m.positions,
+                    &m.uvs,
+                    &m.triangles,
+                    None,
+                )
+                .map_err(said),
+            );
+        }
+        let mut p = project.clone();
+        note("weld", p.weld(&shape).map(drop).map_err(said));
+        let mut p = project.clone();
+        note(
+            "delete vertices",
+            p.delete_vertices(&shape, &half).map_err(said),
+        );
+        let mut p = project.clone();
+        note(
+            "separate",
+            p.separate(&shape, "Part of it", &half).map_err(said),
+        );
+        let mut p = project.clone();
+        note(
+            "paint colour",
+            p.paint_colors(&shape, &[(0, [255, 0, 0, 255])])
+                .map_err(said),
+        );
+        let mut p = project.clone();
+        note("new slider", p.add_slider("Probe").map_err(said));
+        note("save", project.save("Probe").map(drop).map_err(said));
+    }
+    for (what, (ok, failed, why)) in tally {
+        println!(
+            "{what}: {ok} did, {failed} did not{}",
+            if why.is_empty() {
+                String::new()
+            } else {
+                format!(" ({why})")
+            }
+        );
+    }
+}
