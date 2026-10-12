@@ -228,6 +228,7 @@ impl Work {
             Change::ToPart { shape, to, part } => {
                 p.move_to_part(&shape, &numbers(data), to, part).map(drop)
             }
+            Change::ImportMorphs => p.import_morphs(data).map(drop),
             Change::ImportSlider { slider } => p.import_slider(&slider, data).map(drop),
             Change::AddBone { bone } => p.add_bone(&bone, data),
             Change::RemovePart { shape, index, into } => p.remove_part(&shape, index, into),
@@ -497,6 +498,8 @@ enum Change {
         #[serde(default)]
         part: u16,
     },
+    /// Take sliders from a morph file: the request's bytes.
+    ImportMorphs,
     /// Take what a slider does from a slider data file: the request's bytes.
     ImportSlider {
         slider: String,
@@ -597,6 +600,8 @@ enum Request {
     /// How much each vertex of a shape of the open project follows a bone:
     /// a number a vertex, after the answer.
     BoneWeights { shape: String, bone: String },
+    /// Every slider of the open project as a morph file, after the answer.
+    Morphs,
     /// What one slider of the open project does, as a slider data file
     /// after the answer.
     SliderData { slider: String },
@@ -1141,6 +1146,23 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 ),
                 Err(e) => Answer::failed(e),
             },
+            None => Answer::failed("No project is open."),
+        },
+        Request::Morphs => match &state.work {
+            Some(work) => {
+                let zeros = vec![0.0; work.set.sliders.len()];
+                let files = |path: &str| state.file_at_work(path);
+                match build::build_with(&work.set, &zeros, &zeros, &files, true) {
+                    Ok(built) => match built.morphs {
+                        Some(out) => Answer::with(
+                            json!({ "name": format!("{}.tri", work.set.output_file) }),
+                            out.bytes,
+                        ),
+                        None => Answer::failed("The project has no sliders to make morphs of."),
+                    },
+                    Err(e) => Answer::failed(e),
+                }
+            }
             None => Answer::failed("No project is open."),
         },
         Request::SliderData { slider } => match &state.work {

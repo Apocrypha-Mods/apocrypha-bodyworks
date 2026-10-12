@@ -80,7 +80,6 @@ Outfit Studio:
 
 - Brushes: the vertex tools (collapse, flip or split an edge, weld, move one
   vertex). Colour is painted only on a shape that already carries colours.
-- Brush settings: spacing.
 - Shapes: refining only part of a mesh (the whole of one is refined),
   merging shapes that keep different things for each vertex, removing
   skinning, shader properties other than the texture files, a shape from an
@@ -89,8 +88,8 @@ Outfit Studio:
 - Bones: custom bones (one made up, not taken from the game's skeleton),
   transferring selected weights between shapes.
 - Segments (Fallout 4): viewing and editing.
-- Sliders: combined sliders, importing and exporting slider data as BSD,
-  TRI or FBX (OSD goes both ways).
+- Sliders: combined sliders, importing and exporting slider data as BSD
+  or FBX (OSD and TRI go both ways).
 - Files: FBX in and out, head TRI files, physics data, packing projects for
   sharing, making a conversion reference.
 - View: bones drawn as more than a dot where each is, field of view and lighting

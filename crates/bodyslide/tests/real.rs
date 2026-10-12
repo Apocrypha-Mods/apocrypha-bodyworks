@@ -895,6 +895,41 @@ fn what_is_spared_keeps_its_sliders_and_its_bones() {
     );
     assert!(swapped.import_slider("Copy", b"not a file").is_err());
 
+    // Morphs out of a build and back in as sliders: what each does to the
+    // bra comes back as it went, to the fineness a morph file keeps.
+    let (saved, files) = project.save("A").unwrap();
+    let held: std::collections::HashMap<String, Vec<u8>> =
+        files.into_iter().map(|o| (o.path, o.bytes)).collect();
+    let zeros = vec![0.0; saved.sliders.len()];
+    let built = apoc_bodyslide::build::build_with(
+        &saved,
+        &zeros,
+        &zeros,
+        &|path: &str| held.get(path).cloned().or_else(|| on_disk(path)),
+        true,
+    )
+    .unwrap();
+    let tri = built.morphs.unwrap().bytes;
+    let mut bare = Project::from_mesh("Bare", "meshes/x_1.nif", &project.nif.write()).unwrap();
+    assert!(bare.set.sliders.is_empty());
+    let taken = bare.import_morphs(&tri).unwrap();
+    assert!(taken > 20 && !bare.set.sliders.is_empty());
+    let back = osd::SliderData::read(&bare.slider_data("Breasts").unwrap()).unwrap();
+    let went = osd::SliderData::read(&project.slider_data("Breasts").unwrap()).unwrap();
+    let of = |d: &osd::SliderData| -> Vec<osd::Diff> {
+        let mut l = d.list("BraBreasts").unwrap().to_vec();
+        l.retain(|x| x.offset.iter().any(|c| c.abs() >= 0.001));
+        l.sort_by_key(|x| x.vertex);
+        l
+    };
+    let (a, b) = (of(&went), of(&back));
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(&b) {
+        assert_eq!(x.vertex, y.vertex);
+        assert!((0..3).all(|k| (x.offset[k] - y.offset[k]).abs() < 0.001));
+    }
+    assert!(bare.import_morphs(b"not a file").is_err());
+
     // Sliders likewise: the spared keep the data the outfit came with.
     let (shipped, _) = project.save("A").unwrap();
     let mut conformed = project.clone();

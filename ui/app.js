@@ -89,6 +89,8 @@ const state = {
   size: Number(remembered.get("brush.size")) || 30,
   strength: Number(remembered.get("brush.strength")) || 40,
   mirror: remembered.get("brush.mirror") !== "0",
+  /** How far a brush goes between one dab and the next, 1 to 100 as a share of its reach. */
+  spacing: Number(remembered.get("brush.spacing")) || 25,
   /** How much of a brush's reach has its full strength, 1 to 100: a point, up to nearly all of it. */
   focus: Number(remembered.get("brush.focus")) || 50,
   /** The slider the brushes change (its place in the list), or -1 for the shape itself. */
@@ -1496,17 +1498,20 @@ function studioSliders() {
                 const on = state.shapes[state.picked];
                 const masked = [];
                 on?.mask.forEach((m, v) => m >= 0.5 && masked.push(v));
-                if (!masked.length) return newSlider();
                 menu(
                   e.currentTarget,
                   [
                     { name: "Slider…", value: "slider" },
-                    { name: "Zap of what is masked…", value: "zap" },
-                  ],
+                    masked.length > 0 && { name: "Zap of what is masked…", value: "zap" },
+                    { name: "Sliders from a morph file…", value: "in", rule: true },
+                    cur().sliders.length > 0 && { name: "Export morph file…", value: "out" },
+                  ].filter(Boolean),
                   (what) =>
                     what === "slider"
                       ? newSlider()
-                      : rename(
+                      : what === "in" || what === "out"
+                        ? morphFile(what === "in")
+                        : rename(
                           "New zap",
                           "",
                           (name) => {
@@ -1637,7 +1642,7 @@ function brushing(what, ray) {
       }
     }
     const far = stroke.last ? Math.hypot(...found.point.map((c, k) => c - stroke.last[k])) : Infinity;
-    if (far < r * 0.25) return true;
+    if (far < r * (state.spacing / 100)) return true;
     stroke.last = found.point;
     const reached = alive(s, brush.spared(brush.reach(found.point, r, s.now), s.mask));
     const by = (ray.alt ? -1 : 1) * (state.strength / 100) * 0.35;
@@ -1699,7 +1704,7 @@ function brushing(what, ray) {
   }
   // A dab each time the brush has gone a quarter of its reach.
   const far = stroke.last ? Math.hypot(...found.point.map((c, k) => c - stroke.last[k])) : Infinity;
-  if (far < r * 0.25) return true;
+  if (far < r * (state.spacing / 100)) return true;
   stroke.last = found.point;
   const strength = state.strength / 100;
   for (const point of state.mirror ? [found.point, brush.across(found.point)] : [found.point]) {
@@ -2018,6 +2023,7 @@ function brushBar() {
         knob("Size", "size"),
         state.tool !== "mask" && state.tool !== "move" && knob("Strength", "strength"),
         state.tool !== "mask" && state.tool !== "weights" && state.tool !== "colour" && knob("Focus", "focus"),
+        state.tool !== "mask" && state.tool !== "move" && state.tool !== "colour" && knob("Spacing", "spacing"),
         state.tool === "colour" &&
           h(
             "label.knob",
@@ -2432,6 +2438,23 @@ function texturesOf(sh) {
     h("div.fields", null, inputs.map((f) => f[0])),
     [said, h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"), go],
   );
+}
+
+/** Outfit Studio: every slider out as a morph file, or sliders in from one. */
+async function morphFile(into) {
+  try {
+    if (into) {
+      const picked = await host.request("disk.open", { extensions: ["tri"] });
+      if (!picked) return;
+      const [work] = core.ask({ op: "change", change: { do: "importMorphs" } }, new Uint8Array(picked.bytes));
+      return taken(work);
+    }
+    const [made, bytes] = core.ask({ op: "morphs" });
+    await host.request("disk.save", { name: made.name, bytes: bytes.slice(0) });
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
 }
 
 /** Outfit Studio: what a slider does, out to a slider data file or in from one. */

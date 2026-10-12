@@ -1465,6 +1465,74 @@ impl Project {
         done
     }
 
+    /// Take sliders from a morph file (`.tri`): each morph it has for a
+    /// shape of the project's own becomes what the slider of that name
+    /// does to the shape, a slider being added where there is none.
+    /// Returns how many morphs were taken.
+    pub fn import_morphs(&mut self, file: &[u8]) -> Result<usize, Error> {
+        let morphs = crate::tri::read(file)?;
+        let before = self.clone();
+        let mut taken = 0;
+        let done = (|| {
+            for of_shape in &morphs.shapes {
+                let Some(shape) = self
+                    .set
+                    .shapes
+                    .iter()
+                    .find(|s| s.name == of_shape.name && s.data_folder.is_none())
+                    .cloned()
+                else {
+                    continue;
+                };
+                let count = self
+                    .block(&shape.name)
+                    .and_then(|b| mesh::read(&self.nif, b).ok())
+                    .map_or(0, |m| m.positions.len());
+                for morph in &of_shape.morphs {
+                    if morph.offsets.iter().any(|(v, _)| *v as usize >= count) {
+                        return invalid(format!(
+                            "The file moves a vertex {} does not have: it is for another mesh.",
+                            shape.name
+                        ));
+                    }
+                    let index = match self.set.sliders.iter().position(|s| s.name == morph.name) {
+                        Some(i) => i,
+                        None => {
+                            self.add_slider(&morph.name)?;
+                            self.set.sliders.len() - 1
+                        }
+                    };
+                    if self.set.sliders[index].zap || self.set.sliders[index].uv {
+                        continue;
+                    }
+                    let diffs: Vec<Diff> = morph
+                        .offsets
+                        .iter()
+                        .map(|(vertex, o)| Diff {
+                            vertex: *vertex,
+                            offset: o.map(|c| c as f32 * morph.multiplier),
+                        })
+                        .collect();
+                    let own = &mut self.own[index];
+                    own.retain(|o| o.target != shape.target);
+                    own.push(Own {
+                        target: shape.target.clone(),
+                        diffs: Arc::new(diffs),
+                    });
+                    taken += 1;
+                }
+            }
+            if taken == 0 {
+                return invalid("Nothing in the file is for a shape of this project.");
+            }
+            Ok(())
+        })();
+        if done.is_err() {
+            *self = before;
+        }
+        done.map(|()| taken)
+    }
+
     /// Mirror a shape across the middle of the body: every vertex to the
     /// other side, its triangles turned to face out again, what sliders do
     /// to it mirrored too, and each bone it follows changed for its twin on
