@@ -2151,6 +2151,26 @@ impl Project {
         self.paint_weights(shape, bone, &painted)
     }
 
+    /// Make the outfit as it stands with each slider at `values` the base
+    /// shape, and a new slider that takes it back to what it was: a
+    /// reference for fitting what was made for the one to the other.
+    pub fn conversion(&mut self, name: &str, values: &[f32]) -> Result<(), Error> {
+        let before = self.clone();
+        let done = (|| {
+            self.combine(name, values)?;
+            // The new slider is last, and at nothing while the base is set.
+            let at = self.slider(name.trim())?;
+            let mut with = values.to_vec();
+            with.insert(at.min(with.len()), 0.0);
+            self.set_base(&with)?;
+            self.negate_slider(name.trim())
+        })();
+        if done.is_err() {
+            *self = before;
+        }
+        done
+    }
+
     /// A new slider that does at once what the others do together at
     /// `values` (percent, in the set's order): the outfit as it stands, as
     /// one slider. Only what the project's own shapes are moved by counts.

@@ -1625,6 +1625,7 @@ function studioSliders() {
                   [
                     { name: "Slider…", value: "slider" },
                     state.at.some((v, i) => v !== 0 && !cur().sliders[i]?.zap) && { name: "Slider of what is shown…", value: "combine" },
+                    state.at.some((v, i) => v !== 0 && !cur().sliders[i]?.zap) && { name: "Conversion slider…", value: "conversion" },
                     masked.length > 0 && { name: "Zap of what is masked…", value: "zap" },
                     { name: "Sliders from a morph file…", value: "in", rule: true },
                     cur().sliders.length > 0 && { name: "Export morph file…", value: "out" },
@@ -1642,6 +1643,20 @@ function studioSliders() {
                               state.at = state.at.map((v, i) => (cur().sliders[i].zap ? v : 0));
                               taken(work);
                               state.at[work.sliders.findIndex((sl) => sl.name === name.trim())] = 100;
+                              reshape();
+                              render();
+                            },
+                            "Add",
+                          )
+                      : what === "conversion"
+                        ? rename(
+                            "Conversion slider",
+                            "",
+                            (name) => {
+                              // What is shown becomes the base, and the new slider goes back to what was.
+                              const [work] = core.ask({ op: "change", change: { do: "conversion", name, values: state.at } });
+                              state.at = state.at.map((v, i) => (cur().sliders[i].zap ? v : 0));
+                              taken(work);
                               reshape();
                               render();
                             },

@@ -1869,6 +1869,45 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
     assert_eq!(moves(&turned), [-1.0, 2.0, -3.0]);
     assert!(turned.flip_slider(slider, 3).is_err());
 
+    // A conversion: the outfit as it stands with a slider up becomes the
+    // base, and a new slider takes it back to what it was.
+    let mut converted = project.clone();
+    converted.add_slider("Out").unwrap();
+    converted
+        .move_vertices(
+            "Bra",
+            Some("Out"),
+            &[apoc_bodyslide::osd::Diff {
+                vertex: 7,
+                offset: [0.0, 4.0, 0.0],
+            }],
+        )
+        .unwrap();
+    let at = converted
+        .set
+        .sliders
+        .iter()
+        .position(|s| s.name == "Out")
+        .unwrap();
+    let mut values = vec![0.0; converted.set.sliders.len()];
+    values[at] = 100.0;
+    let (start, _) = shape(&converted, "Bra");
+    converted.conversion("Way back", &values).unwrap();
+    let (based, _) = shape(&converted, "Bra");
+    assert!((based.positions[7][1] - start.positions[7][1] - 4.0).abs() < 1e-4);
+    let back =
+        apoc_bodyslide::osd::SliderData::read(&converted.slider_data("Way back").unwrap()).unwrap();
+    let moved = back
+        .lists
+        .iter()
+        .flat_map(|l| &l.1)
+        .find(|d| d.vertex == 7)
+        .unwrap();
+    assert!((moved.offset[1] + 4.0).abs() < 1e-4);
+    assert!(converted
+        .conversion("Way back", &vec![0.0; converted.set.sliders.len()])
+        .is_err());
+
     // A bone made up by hand: once, and where it was put.
     let mut boned = project.clone();
     boned

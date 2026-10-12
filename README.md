@@ -131,8 +131,7 @@ Outfit Studio:
   triangles moved between them).
 - Tools not here: a handle in the view to move, turn or scale by (a bone
   is turned to see how the shapes bend with it, from knobs), a slider that moves the texture
-  made here (one a set has is followed), and making a conversion reference
-  from two bodies.
+  made here (one a set has is followed).
 - Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI
   go both ways).
 - Files: FBX files written as text (the binary kind goes both ways:

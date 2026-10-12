@@ -317,6 +317,7 @@ impl Work {
                 p.move_to_part(&shape, &numbers(data), to, part).map(drop)
             }
             Change::Combine { name, values } => p.combine(&name, &values),
+            Change::Conversion { name, values } => p.conversion(&name, &values),
             Change::ImportMorphs => p.import_morphs(data).map(drop),
             Change::ImportSlider { slider } => p.import_slider(&slider, data).map(drop),
             Change::CopyBone { shape, body, bone } => {
@@ -680,6 +681,12 @@ enum Change {
         to: Option<usize>,
         #[serde(default)]
         part: u16,
+    },
+    /// Make the outfit as it stands at `values` the base shape, with a new
+    /// slider that takes it back to what it was.
+    Conversion {
+        name: String,
+        values: Vec<f32>,
     },
     /// A new slider that does what the others do together at `values`.
     Combine {
