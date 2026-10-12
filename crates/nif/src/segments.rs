@@ -234,7 +234,10 @@ impl Segments {
 mod tests {
     use super::Segments;
 
-    fn table(triangles: u32, segments: &[(u32, u32, &[(u32, u32)])]) -> Vec<u8> {
+    /// A segment as a test gives one: where it starts, how many, its runs.
+    type Given<'a> = (u32, u32, &'a [(u32, u32)]);
+
+    fn table(triangles: u32, segments: &[Given]) -> Vec<u8> {
         let total: usize = segments.iter().map(|s| 1 + s.2.len()).sum();
         let mut out = Vec::new();
         for w in [triangles, segments.len() as u32, total as u32] {
