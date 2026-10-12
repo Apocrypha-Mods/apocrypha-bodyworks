@@ -246,6 +246,13 @@ impl Partition {
                 "a part keeps its faces as strips, which this cannot change".into(),
             ));
         }
+        // Room is made below for this many weights a vertex: a file can
+        // state any number, and only a few are ever real.
+        if self.weights_per_vertex > 8 {
+            return Err(NifError::Unsupported(
+                "a part states more weights a vertex than a vertex has".into(),
+            ));
+        }
         let mut map: Vec<u16> = triangles.iter().flatten().copied().collect();
         map.sort_unstable();
         map.dedup();

@@ -685,7 +685,16 @@ pub fn merge(nif: &mut Nif, into: usize, from: usize) -> Result<usize, NifError>
         let Some(triangles) = &p.true_triangles else {
             return unsupported("a part keeps its triangles in a way this cannot change");
         };
-        let moved = triangles.iter().map(|t| t.map(|v| v + na as u16)).collect();
+        if triangles.iter().flatten().any(|v| *v as usize >= nb) {
+            return Err(NifError::Corrupt(
+                "a triangle names a vertex the shape does not have".into(),
+            ));
+        }
+        // Within what one shape can number: the two counts were added up above.
+        let moved = triangles
+            .iter()
+            .map(|t| t.map(|v| (v as usize + na) as u16))
+            .collect();
         let mut q = p.clone();
         q.retriangle(moved)?;
         pa.partitions.push(q);
@@ -769,6 +778,13 @@ pub fn rebuild(
     if skin.vertices.len() != count {
         return unsupported("the skin is for another number of vertices");
     }
+    if instance
+        .body_parts
+        .as_ref()
+        .is_some_and(|named| named.len() != partition.partitions.len())
+    {
+        return unsupported("the shape's parts and their names are out of step");
+    }
     partition.vertex_data = vertex_data;
     partition.partitions.truncate(parts.len());
     for (p, triangles) in partition.partitions.iter_mut().zip(parts) {
@@ -806,10 +822,25 @@ pub fn packed(nif: &Nif, block: usize) -> Result<Packed, NifError> {
     let Some(layout) = partition.vertex_desc.and_then(|d| Layout::of(d, stream)) else {
         return unsupported("the skin keeps no vertices this can read");
     };
+    // Whole vertices, no more of them than can be numbered, and no
+    // triangle naming one that is not there: checked once here, for all
+    // that goes on to index by them.
+    let stride = layout.stride.max(1);
+    let count = partition.vertex_data.len() / stride;
+    if !partition.vertex_data.len().is_multiple_of(stride) || count > u16::MAX as usize {
+        return Err(NifError::Corrupt(
+            "the skin's vertices are not a whole number a shape can hold".into(),
+        ));
+    }
     let mut parts = Vec::with_capacity(partition.partitions.len());
     for p in &partition.partitions {
         match &p.true_triangles {
-            Some(t) => parts.push(t.clone()),
+            Some(t) if t.iter().flatten().all(|v| (*v as usize) < count) => parts.push(t.clone()),
+            Some(_) => {
+                return Err(NifError::Corrupt(
+                    "a triangle names a vertex the shape does not have".into(),
+                ))
+            }
             None => return unsupported("a part keeps its triangles in a way this cannot change"),
         }
     }
@@ -827,6 +858,9 @@ pub fn refine(nif: &mut Nif, block: usize) -> Result<Vec<(u16, u16)>, NifError> 
     let stride = layout.stride.max(1);
     let had = bytes.len() / stride;
     let skin = read(nif, block)?;
+    if skin.vertices.len() != had {
+        return unsupported("the shape and its skin disagree about its vertices");
+    }
     let shape = TriShape::read(&nif.blocks[block].data, stream)?;
     let mut between: Vec<(u16, u16)> = Vec::new();
     let mut middle: std::collections::HashMap<(u16, u16), u16> = std::collections::HashMap::new();
@@ -923,6 +957,9 @@ pub fn weld(nif: &mut Nif, block: usize) -> Result<Vec<u16>, NifError> {
     let stride = layout.stride.max(1);
     let count = bytes.len() / stride;
     let skin = read(nif, block)?;
+    if skin.vertices.len() != count {
+        return unsupported("the shape and its skin disagree about its vertices");
+    }
     let mut view = TriShape::read(&nif.blocks[block].data, stream)?;
     view.vertex_data = bytes;
     // Told apart to a two-thousandth of a unit in place, and a

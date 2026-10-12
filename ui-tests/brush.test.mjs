@@ -179,3 +179,10 @@ test("an OBJ file becomes a mesh: seams split, faces fanned, textures the right 
   assert.deepEqual([...back.triangles], [...got.triangles]);
   assert.deepEqual([...back.uvs].map((x) => Math.round(x * 1000)), [...got.uvs].map((x) => Math.round(x * 1000)));
 });
+
+test("an OBJ file's odd numbers are refused or made safe", async () => {
+  const obj = await import("../ui/obj.js");
+  assert.throws(() => obj.mesh("v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nf 1/1.5 2/1 3/1"));
+  const got = obj.mesh("v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 1e100 0\nf 1/1 2/1 3/1");
+  assert.ok([...got.uvs].every(Number.isFinite));
+});

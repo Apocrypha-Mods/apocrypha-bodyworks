@@ -60,6 +60,7 @@ export function mesh(text) {
     const p = at(Number(v), places.length / 3);
     const t = vt ? at(Number(vt), textures.length / 2) : -1;
     if (!Number.isInteger(p) || p < 0 || p >= places.length / 3) throw new Error("The file has a face with a vertex it does not have.");
+    if (vt && !Number.isInteger(t)) throw new Error("The file has a face with a place in the texture that is not a whole number.");
     const key = `${p}/${t}`;
     let index = made.get(key);
     if (index === undefined) {
@@ -80,7 +81,9 @@ export function mesh(text) {
       places.push(x, y, z);
     } else if (words[0] === "vt") {
       const [u, v] = words.slice(1, 3).map(Number);
-      textures.push(Number.isFinite(u) ? u : 0, Number.isFinite(v) ? v : 0);
+      // As a mesh will hold them: a number too large for it is nowhere.
+      const held = (c) => (Number.isFinite(Math.fround(c)) ? c : 0);
+      textures.push(held(u), held(v));
     } else if (words[0] === "f") {
       const face = words.slice(1).map(corner);
       for (let k = 1; k + 1 < face.length; k++) triangles.push(face[0], face[k], face[k + 1]);

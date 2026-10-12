@@ -118,7 +118,7 @@ http
     }
     if (url.pathname.startsWith("/ui/")) {
       const name = url.pathname.slice(4);
-      const file = name === "bodyslide.wasm" ? wasm : path.join(root, "ui", path.normalize(name));
+      const file = name === "bodyworks.wasm" ? wasm : path.join(root, "ui", path.normalize(name));
       if (!file.startsWith(root) || !fs.existsSync(file)) return send(404, "missing");
       return send(200, fs.readFileSync(file), types[path.extname(file)]);
     }

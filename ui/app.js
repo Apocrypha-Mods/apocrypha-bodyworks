@@ -9,7 +9,7 @@ import * as obj from "./obj.js";
 
 const TOOLS = "Data/CalienteTools/BodySlide";
 /** The mod builds go into, unless another is chosen. */
-const OUTPUT = "BodySlide output";
+const OUTPUT = "Bodyworks output";
 const FOLDERS = ["SliderSets", "SliderPresets", "SliderGroups", "SliderCategories"];
 
 const CHEVRON =
@@ -39,7 +39,7 @@ const remembered = {
   get(key) {
     if (kept.has(key)) return kept.get(key);
     try {
-      return localStorage.getItem(`bodyslide.${key}`);
+      return localStorage.getItem(`bodyworks.${key}`);
     } catch {
       return null;
     }
@@ -47,7 +47,7 @@ const remembered = {
   set(key, value) {
     kept.set(key, value);
     try {
-      localStorage.setItem(`bodyslide.${key}`, value);
+      localStorage.setItem(`bodyworks.${key}`, value);
     } catch {
       // A frame with no storage of its own remembers for this visit only.
     }
@@ -1095,8 +1095,8 @@ function modes() {
   return h(
     "div.seg",
     { role: "group", "aria-label": "Tool" },
-    h("button" + (state.mode === "bodyslide" ? ".on" : ""), { type: "button", onclick: go("bodyslide") }, "BodySlide"),
-    h("button" + (state.mode === "studio" ? ".on" : ""), { type: "button", onclick: go("studio") }, "Outfit Studio"),
+    h("button" + (state.mode === "bodyslide" ? ".on" : ""), { type: "button", onclick: go("bodyslide") }, "Build"),
+    h("button" + (state.mode === "studio" ? ".on" : ""), { type: "button", onclick: go("studio") }, "Studio"),
   );
 }
 
@@ -2581,7 +2581,7 @@ function sliderSettings(sl) {
   const [smallField, small] = number("Low weight", sl.small);
   const [bigField, big] = number("High weight", sl.big);
   const [invert, inverted] = option("Inverted", sl.invert);
-  const [hide, hidden] = option("Hidden in BodySlide", sl.hidden);
+  const [hide, hidden] = option("Hidden when building", sl.hidden);
   const [clamp, clamped] = option("Kept between 0 and 100", sl.clamp);
   const [zap, zapped] = option("Removes what it marks", sl.zap);
   const go = h("button.btn.primary", { type: "button" }, "Done");
@@ -2951,7 +2951,7 @@ async function start() {
         document.fonts.add(await face.load());
       }
     }, () => {});
-    await core.start("bodyslide.wasm");
+    await core.start("bodyworks.wasm");
     // Started afresh, it is given the catalogue again, and the set on screen.
     core.onRestart(async () => {
       const said = "That stopped the add-on's engine, which has been started again.";

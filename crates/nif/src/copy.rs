@@ -155,7 +155,12 @@ pub fn parents(nif: &Nif) -> HashMap<usize, usize> {
 /// The transform that undoes `t`: what takes its results back to what it
 /// was given. None for one that scales to nothing.
 pub fn inverse(t: &Transform) -> Option<Transform> {
-    if t.scale == 0.0 || !t.scale.is_finite() {
+    let whole = t
+        .rotation
+        .iter()
+        .chain(&t.translation)
+        .all(|c| c.is_finite());
+    if t.scale == 0.0 || !t.scale.is_finite() || !(1.0 / t.scale).is_finite() || !whole {
         return None;
     }
     let m = &t.rotation;

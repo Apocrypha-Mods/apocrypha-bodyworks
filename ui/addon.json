@@ -1,7 +1,7 @@
 {
   "api": 1,
-  "id": "bodyslide",
-  "name": "BodySlide",
+  "id": "bodyworks",
+  "name": "Bodyworks",
   "version": "0.1.0",
   "about": "Bodies and outfits",
   "entry": "index.html",

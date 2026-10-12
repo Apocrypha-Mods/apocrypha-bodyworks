@@ -1,4 +1,4 @@
-# Body and outfit tools for Apocrypha
+# Apocrypha Bodyworks
 
 An add-on for the Apocrypha mod manager: build bodies and outfits from slider
 sets and presets, and edit outfits, inside the mod manager's own window. It
@@ -114,7 +114,7 @@ at all, and none has been checked against files the original built.
 rustup target add wasm32-unknown-unknown
 cargo build --release -p apoc-bodyslide-app --target wasm32-unknown-unknown
 node tools/dev.cjs /path/to/a/folder/laid/out/like/the/game   # then open the address it prints
-tools/pack.sh                                                 # dist/bodyslide-<version>.apocaddon
+tools/pack.sh                                                 # dist/bodyworks-<version>.apocaddon
 ```
 
 The interface is plain script with no build step and no dependencies. What it

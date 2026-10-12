@@ -1308,9 +1308,12 @@ impl Project {
                     continue;
                 };
                 let theirs = own.remove(at);
-                let moved = theirs.diffs.iter().map(|d| Diff {
-                    vertex: d.vertex + first as u16,
-                    offset: d.offset,
+                // Past what one shape can number, a slider moves nothing.
+                let moved = theirs.diffs.iter().filter_map(|d| {
+                    Some(Diff {
+                        vertex: u16::try_from(d.vertex as usize + first).ok()?,
+                        offset: d.offset,
+                    })
                 });
                 match own.iter_mut().find(|o| o.target == ta) {
                     Some(mine) => Arc::make_mut(&mut mine.diffs).extend(moved),
@@ -1362,8 +1365,15 @@ impl Project {
         // The sphere round it stays right: nothing is further out than it was.
         for own in &mut self.own {
             for o in own.iter_mut().filter(|o| o.target == target) {
-                let mut dense: HashMap<u16, [f32; 3]> =
-                    o.diffs.iter().map(|d| (d.vertex, d.offset)).collect();
+                // What it does to each vertex, records for one vertex added
+                // up as applying them adds them.
+                let mut dense: HashMap<u16, [f32; 3]> = HashMap::new();
+                for d in o.diffs.iter() {
+                    let sum = dense.entry(d.vertex).or_insert([0.0; 3]);
+                    for (c, by) in sum.iter_mut().zip(d.offset) {
+                        *c += by;
+                    }
+                }
                 let diffs = Arc::make_mut(&mut o.diffs);
                 for (i, (a, b)) in between.iter().enumerate() {
                     let (da, db) = (dense.get(a).copied(), dense.get(b).copied());
@@ -1372,7 +1382,9 @@ impl Project {
                     }
                     let (da, db) = (da.unwrap_or([0.0; 3]), db.unwrap_or([0.0; 3]));
                     let offset = [0, 1, 2].map(|k| (da[k] + db[k]) / 2.0);
-                    let vertex = (had + i) as u16;
+                    let Ok(vertex) = u16::try_from(had + i) else {
+                        break;
+                    };
                     dense.insert(vertex, offset);
                     diffs.push(Diff { vertex, offset });
                 }
@@ -1401,6 +1413,7 @@ impl Project {
             return invalid("The file has more vertices or triangles than one shape can hold.");
         }
         if positions.iter().flatten().any(|c| !c.is_finite())
+            || uvs.iter().flatten().any(|c| !c.is_finite())
             || triangles
                 .iter()
                 .flatten()
@@ -1419,6 +1432,23 @@ impl Project {
             let stride = layout.stride.max(1);
             let template = mesh::read(&self.nif, block).map_err(fail)?.positions;
             let skin = weights::read(&self.nif, block).map_err(fail)?;
+            if template.is_empty()
+                || template.len() != skin.vertices.len()
+                || template.len() * stride != bytes.len()
+            {
+                return invalid(format!(
+                    "{like} is not a shape another can be made in the likeness of."
+                ));
+            }
+            // The new shape is the project's own, whatever its likeness is:
+            // what sliders did to that, here or in another project, is not
+            // what they do to this.
+            if let Some(made) = self.set.shapes.iter_mut().find(|s| s.name == name) {
+                made.data_folder = None;
+            }
+            for slider in &mut self.set.sliders {
+                slider.data.retain(|d| d.target != name);
+            }
             // Each new vertex starts as the template's nearest, for what a
             // vertex carries besides its place: colour, and its bones.
             let ties = conform::tie(
@@ -1513,6 +1543,15 @@ impl Project {
                             offset: o.map(|c| c as f32 * morph.multiplier),
                         })
                         .collect();
+                    if diffs
+                        .iter()
+                        .any(|d| d.offset.iter().any(|c| !c.is_finite()))
+                    {
+                        return invalid(format!(
+                            "{} in the file moves a vertex further than a mesh can say.",
+                            morph.name
+                        ));
+                    }
                     let own = &mut self.own[index];
                     own.retain(|o| o.target != shape.target);
                     own.push(Own {
@@ -1670,21 +1709,31 @@ impl Project {
         if gone == 0 {
             return Ok(0);
         }
+        // Each vertex that is left is the first of those welded into it,
+        // and does what that one did: nothing, if it did nothing.
+        let mut first: Vec<Option<u16>> = vec![None; left];
+        for (old, new) in now.iter().enumerate() {
+            first[*new as usize].get_or_insert(old as u16);
+        }
         for own in &mut self.own {
             for o in own.iter_mut().filter(|o| o.target == target) {
-                let mut seen = vec![false; left];
-                let mut diffs: Vec<Diff> = o
-                    .diffs
+                let mut did: HashMap<u16, [f32; 3]> = HashMap::new();
+                for d in o.diffs.iter() {
+                    let sum = did.entry(d.vertex).or_insert([0.0; 3]);
+                    for (c, by) in sum.iter_mut().zip(d.offset) {
+                        *c += by;
+                    }
+                }
+                let diffs: Vec<Diff> = first
                     .iter()
-                    .filter_map(|d| {
-                        let vertex = *now.get(d.vertex as usize)?;
-                        (!std::mem::replace(&mut seen[vertex as usize], true)).then_some(Diff {
-                            vertex,
-                            offset: d.offset,
+                    .enumerate()
+                    .filter_map(|(new, old)| {
+                        did.get(&(*old)?).map(|offset| Diff {
+                            vertex: new as u16,
+                            offset: *offset,
                         })
                     })
                     .collect();
-                diffs.sort_by_key(|d| d.vertex);
                 o.diffs = Arc::new(diffs);
             }
         }
