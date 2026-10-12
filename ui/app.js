@@ -2698,7 +2698,6 @@ function material(sh) {
   const SWITCHES = [
     ["Two-sided", 1, 4],
     ["Shine", 0, 0],
-    ["Glow map", 1, 6],
     ["Own glow", 0, 22],
     ["Soft lighting", 1, 25],
     ["Rim lighting", 1, 26],
@@ -2707,7 +2706,6 @@ function material(sh) {
     ["Takes shadows", 0, 8],
     ["Vertex alpha", 0, 3],
     ["Decal", 0, 26],
-    ["Environment map", 0, 7],
   ].map(([label, set, bit]) => [...option(label, Boolean((look.switches[set] >>> bit) & 1)), set, bit]);
   const go = h("button.btn.primary", { type: "button" }, "Done");
   const said = h("span.sub.warn.grow.cut");

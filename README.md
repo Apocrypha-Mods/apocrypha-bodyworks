@@ -82,7 +82,7 @@ Outfit Studio:
   one, and it shares its lighting with no other shape.
 - Shapes: merging shapes that keep different things for each vertex,
   the kind of shader a shape is drawn with, and its
-  switches beyond the twelve most used (its textures, glow, shine, gloss
+  switches beyond the ten most used (its textures, glow, shine, gloss
   and opacity are changed).
 - Meshes that move by themselves or hang together (animation controllers,
   collision joined by constraints): their shapes are changed in place, but

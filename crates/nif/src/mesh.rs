@@ -69,10 +69,14 @@ pub struct Look {
     pub switches: [u32; 2],
 }
 
-/// The switches that say what the shape itself is (that it follows bones,
-/// that its vertices carry colours): the shape's to keep in step, and not
-/// changed as a look is.
-pub const KEPT_SWITCHES: [u32; 2] = [1 << 1, 1 << 5];
+/// The switches that are not a look's to change. Two say what the shape
+/// itself is (that it follows bones, that its vertices carry colours) and
+/// are the shape's to keep in step. Two go with the kind of lighting, which
+/// keeps more or less after its numbers by its kind: every lighting of the
+/// kind with an environment map has the first set's switch 7 on and no
+/// other has (`--example envflag`), and the glow map's switch goes with
+/// its kind the same way.
+pub const KEPT_SWITCHES: [u32; 2] = [(1 << 1) | (1 << 7), (1 << 5) | (1 << 6)];
 
 /// Where in a lighting shader's kept bytes each number of a [`Look`] is.
 const LOOK_BYTES: usize = 48;
