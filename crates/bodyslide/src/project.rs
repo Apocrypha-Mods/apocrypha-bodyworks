@@ -813,6 +813,157 @@ impl Project {
         weights::write(&mut self.nif, block, &skin, like).map_err(fail)
     }
 
+    /// Take away what a slider does to one shape, where that is the
+    /// project's own.
+    pub fn clear_slider(&mut self, slider: &str, shape: &str) -> Result<(), Error> {
+        let (index, at) = (self.slider(slider)?, self.shape(shape)?);
+        let target = &self.set.shapes[at].target;
+        if self.set.sliders[index]
+            .data
+            .iter()
+            .any(|d| &d.target == target)
+        {
+            return invalid(format!(
+                "What {slider} does to {shape} is another project's, and is not changed from here."
+            ));
+        }
+        self.own[index].retain(|o| &o.target != target);
+        Ok(())
+    }
+
+    /// Turn what a slider does round: every vertex it moves goes as far the
+    /// other way, on every shape where that is the project's own.
+    pub fn negate_slider(&mut self, slider: &str) -> Result<(), Error> {
+        let index = self.slider(slider)?;
+        for own in &mut self.own[index] {
+            for d in &mut own.diffs {
+                d.offset = d.offset.map(|c| -c);
+            }
+        }
+        Ok(())
+    }
+
+    /// Conform every shape that is the project's own to `body` (see
+    /// [`Project::conform`]). Returns how many shapes were.
+    pub fn conform_all(
+        &mut self,
+        body: &str,
+        files: &dyn Files,
+        options: conform::Options,
+    ) -> Result<usize, Error> {
+        self.shape(body)?;
+        let shapes: Vec<String> = self
+            .set
+            .shapes
+            .iter()
+            .filter(|s| s.name != body && s.data_folder.is_none())
+            .map(|s| s.name.clone())
+            .collect();
+        for shape in &shapes {
+            self.conform(shape, body, files, options)?;
+        }
+        Ok(shapes.len())
+    }
+
+    /// Make the outfit as it stands with each slider at `values` (percent,
+    /// in the set's order) the shape every slider starts from: the base
+    /// shape. Only the project's own shapes move; what sliders do from
+    /// there is as it was.
+    pub fn set_base(&mut self, values: &[f32]) -> Result<(), Error> {
+        if values.len() != self.set.sliders.len() {
+            return invalid(format!(
+                "{} sliders, and {} values",
+                self.set.sliders.len(),
+                values.len()
+            ));
+        }
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        for shape in self.set.shapes.clone() {
+            let Some(block) = self.block(&shape.name) else {
+                continue;
+            };
+            let mut positions = mesh::read(&self.nif, block).map_err(fail)?.positions;
+            let before = positions.clone();
+            for ((slider, own), value) in self.set.sliders.iter().zip(&self.own).zip(values) {
+                if slider.zap || slider.uv {
+                    continue;
+                }
+                let amount = crate::morph::applied(slider, *value);
+                for o in own.iter().filter(|o| o.target == shape.target) {
+                    crate::morph::add(&mut positions, &o.diffs, amount);
+                }
+            }
+            if positions != before {
+                mesh::set_positions(&mut self.nif, block, &positions).map_err(fail)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Take vertices out of a shape, with every triangle that had one of
+    /// them, and with what sliders did to them.
+    pub fn delete_vertices(&mut self, shape: &str, vertices: &[u16]) -> Result<(), Error> {
+        let at = self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let count = mesh::read(&self.nif, block).map_err(fail)?.positions.len();
+        let mut gone = vec![false; count];
+        for v in vertices {
+            match gone.get_mut(*v as usize) {
+                Some(g) => *g = true,
+                None => return invalid(format!("{shape} has {count} vertices.")),
+            }
+        }
+        if !gone.contains(&true) {
+            return Ok(());
+        }
+        let target = self.set.shapes[at].target.clone();
+        if self
+            .set
+            .sliders
+            .iter()
+            .any(|s| s.data.iter().any(|d| d.target == target))
+        {
+            return invalid(format!(
+                "What sliders do to {shape} is another project's, which counts on every vertex of it."
+            ));
+        }
+        let left = edit::remove_vertices(&mut self.nif, block, &gone).map_err(fail)?;
+        if left == 0 {
+            return invalid("That would leave nothing of the shape. Delete the shape instead.");
+        }
+        let mut next = 0u16;
+        let now: Vec<Option<u16>> = gone
+            .iter()
+            .map(|g| {
+                (!g).then(|| {
+                    next += 1;
+                    next - 1
+                })
+            })
+            .collect();
+        for own in &mut self.own {
+            for o in own.iter_mut().filter(|o| o.target == target) {
+                o.diffs = o
+                    .diffs
+                    .iter()
+                    .filter_map(|d| {
+                        now.get(d.vertex as usize)
+                            .copied()
+                            .flatten()
+                            .map(|vertex| Diff {
+                                vertex,
+                                offset: d.offset,
+                            })
+                    })
+                    .collect();
+            }
+        }
+        Ok(())
+    }
+
     /// Where a build of the project goes, and whether as two meshes.
     pub fn output(&mut self, folder: &str, file: &str, weights: bool) -> Result<(), Error> {
         let file = file_name(file.trim().trim_end_matches(".nif"));

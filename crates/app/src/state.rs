@@ -124,6 +124,21 @@ impl Work {
             Change::Weights { shape, body } => {
                 p.copy_weights(&shape, &body, Default::default()).map(drop)
             }
+            Change::ClearSlider { slider, shape } => p.clear_slider(&slider, &shape),
+            Change::NegateSlider { slider } => p.negate_slider(&slider),
+            Change::ConformAll { body } => {
+                p.conform_all(&body, files, Default::default()).map(drop)
+            }
+            Change::SetBase { values } => p.set_base(&values),
+            Change::DeleteVertices { shape } => {
+                let vertices: Vec<u16> = data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter_map(|c| u16::try_from(u32::from_le_bytes(*c)).ok())
+                    .collect();
+                p.delete_vertices(&shape, &vertices)
+            }
             Change::Paint { shape, bone } => {
                 let painted: Vec<(u16, f32)> = data
                     .as_chunks::<8>()
@@ -258,6 +273,29 @@ enum Change {
     Weights {
         shape: String,
         body: String,
+    },
+    /// Take away what a slider does to one shape.
+    ClearSlider {
+        slider: String,
+        shape: String,
+    },
+    /// Turn what a slider does round.
+    NegateSlider {
+        slider: String,
+    },
+    /// Conform every shape of the project's own to a body.
+    ConformAll {
+        body: String,
+    },
+    /// Make the outfit as it stands, each slider at `values`, the shape
+    /// every slider starts from.
+    SetBase {
+        values: Vec<f32>,
+    },
+    /// Take vertices out of a shape: the request's bytes are their numbers,
+    /// four bytes each.
+    DeleteVertices {
+        shape: String,
     },
     /// Set how much vertices of a shape follow a bone. The request's bytes
     /// are, for each vertex, its number and the weight, four bytes each.

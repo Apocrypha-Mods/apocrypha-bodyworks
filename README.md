@@ -52,6 +52,43 @@ Edition:
 Rules found this way are written where they are used, each with what it was
 found from.
 
+## What is not here yet
+
+Held against what the original two programs offer, from using them and from
+their documentation. Each line is something they do that this does not.
+
+BodySlide:
+
+- Filtering the outfit list by group, and the group manager.
+- Deleting a preset or a project.
+- Choosing which mod a build goes into (it is always "BodySlide output").
+- Building to a folder outside the mod manager.
+
+Outfit Studio:
+
+- Brushes: taking a slider's effect back off with a brush, painting vertex
+  colour and alpha, and the vertex tools (collapse, flip or split an edge,
+  weld, move one vertex).
+- Brush settings: focus and spacing, working only on connected vertices,
+  mirroring a weight stroke onto the opposite bone.
+- Shapes: refining (subdividing) a mesh, mirroring a shape, separating or
+  merging shapes, inverting texture coordinates, removing skinning, editing
+  shader and texture properties, making a shape from an OBJ or FBX file.
+- Bones: adding and deleting bones, custom bones, transferring selected
+  weights between shapes, masking by weight.
+- Partitions (Skyrim) and segments (Fallout 4): viewing and editing.
+- Sliders: zap sliders made from a mask in one step, combined sliders,
+  importing and exporting slider data as BSD, OSD, TRI or FBX.
+- Files: FBX in and out, head TRI files, physics data, packing projects for
+  sharing, making a conversion reference.
+- View: showing the skeleton, ghosting a shape, field of view and lighting
+  settings, recalculating or locking normals by hand.
+- Keyboard shortcuts beyond undo and redo.
+
+Games: only Skyrim Special Edition has been measured. Skyrim (2011),
+Fallout 4, Fallout 3, New Vegas and Oblivion meshes are read in part or not
+at all, and none has been checked against files the original built.
+
 ## Layout
 
 | Path | What |

@@ -425,6 +425,9 @@ function close(el) {
 /** A list to pick one of, dropped from `anchor`. Items: `{ name, note, on, value }`. */
 function menu(anchor, items, onPick, placeholder, above) {
   const box = anchor.getBoundingClientRect();
+  // Where there is no room for it below, it opens above.
+  const tall = Math.min(480, innerHeight * 0.7, items.length * 30 + (items.length > 8 ? 60 : 16));
+  if (box.bottom + 6 + tall > innerHeight && box.top > innerHeight - box.bottom) above = true;
   const rows = h("div.rows");
   const fill = (query) => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -935,7 +938,9 @@ function studioSide() {
                     { name: sh.hidden ? "Show" : "Hide", value: "hide" },
                     { name: "Export OBJ…", value: "export", rule: true },
                     state.work && { name: "Import OBJ…", value: "import" },
-                    state.work && state.shapes.length > 1 && { name: "Delete", value: "delete", danger: true, rule: true },
+                    state.work && sh.reference && { name: "Conform all to this", value: "conformAll" },
+                    state.work && sh.mask.some((m) => m >= 0.5) && { name: "Delete masked points", value: "cut", danger: true, rule: true },
+                    state.work && state.shapes.length > 1 && { name: "Delete", value: "delete", danger: true, rule: !sh.mask.some((m) => m >= 0.5) },
                   ].filter(Boolean),
                   (what) => {
                     if (what === "rename") {
@@ -945,6 +950,19 @@ function studioSide() {
                       return rename("Duplicate shape", `${sh.name} copy`, (to) => change({ do: "duplicate", name: sh.name, to }), "Duplicate");
                     }
                     if (what === "transform") return transform(sh);
+                    if (what === "conformAll") return attempt({ do: "conformAll", body: sh.name });
+                    if (what === "cut") {
+                      const gone = [];
+                      sh.mask.forEach((m, v) => m >= 0.5 && gone.push(v));
+                      try {
+                        const [work] = core.ask({ op: "change", change: { do: "deleteVertices", shape: sh.name } }, new Uint8Array(Uint32Array.from(gone).buffer));
+                        taken(work);
+                      } catch (e) {
+                        state.problem = e.message;
+                        render();
+                      }
+                      return;
+                    }
                     if (what === "export") return exportObj(sh);
                     if (what === "import") return importObj(sh);
                     if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
@@ -1007,9 +1025,22 @@ function studioSliders() {
           [
             { name: "Rename…", value: "rename" },
             { name: "Settings…", value: "settings" },
+            state.shapes[state.picked] && { name: `Clear for ${state.shapes[state.picked].name}`, value: "clear", rule: true },
+            state.shapes[state.picked] && { name: "Mask what it moves", value: "mask" },
+            { name: "Invert", value: "negate" },
             { name: "Delete", value: "delete", danger: true, rule: true },
-          ],
+          ].filter(Boolean),
           (what) => {
+            const on = state.shapes[state.picked];
+            if (what === "clear") return attempt({ do: "clearSlider", slider: sl.name, shape: on.name });
+            if (what === "negate") return attempt({ do: "negateSlider", slider: sl.name });
+            if (what === "mask") {
+              // Covered: the vertices of the picked shape this slider moves.
+              const at = cur().sliders.indexOf(sl);
+              for (const d of on.sliders.filter((x) => x.slider === at)) d.vertices.forEach((v) => (on.mask[v] = 1));
+              if (!state.heat) view.mask(state.picked, on.mask);
+              return render();
+            }
             if (what === "rename") rename("Rename slider", sl.name, (to) => change({ do: "renameSlider", from: sl.name, to }, [sl.name, to.trim()]));
             else if (what === "settings") sliderSettings(sl);
             else attempt({ do: "deleteSlider", name: sl.name });
@@ -1066,10 +1097,18 @@ function studioSliders() {
       h("span", null, `${rows.length} ${rows.length === 1 ? "slider" : "sliders"}`),
       state.work
         ? h(
+            "span",
+            { style: "display: flex; justify-content: flex-end; gap: 2px" },
+            cur().sliders.length > 0 &&
+              h(
+                "button.btn.ghost.small",
+                { type: "button", title: "The outfit as it stands becomes the shape every slider starts from", onclick: () => setBase() },
+                "Set base shape",
+              ),
+            h(
             "button.btn.ghost.small",
             {
               type: "button",
-              style: "justify-self: end",
               onclick: () =>
                 rename("New slider", "", (name) => {
                   change({ do: "addSlider", name });
@@ -1081,6 +1120,7 @@ function studioSliders() {
                 }, "Add"),
             },
             "New…",
+            ),
           )
         : h("span", null, "Shown at"),
     ),
@@ -1385,6 +1425,20 @@ function brushBar() {
             },
             "Clear mask",
           ),
+        state.tool === "mask" &&
+          h(
+            "button.btn.ghost.small",
+            {
+              type: "button",
+              onclick: () => {
+                const sh = state.shapes[state.picked];
+                sh.mask.forEach((m, v) => (sh.mask[v] = 1 - m));
+                view.mask(state.picked, sh.mask);
+                render();
+              },
+            },
+            "Invert mask",
+          ),
       ),
     h("div.seg", { role: "group", "aria-label": "Tool" }, tool(null, "Orbit"), ...BRUSHES.map(([id, label]) => tool(id, label))),
   );
@@ -1542,6 +1596,18 @@ function leaving(then) {
     h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
     h("button.btn", { type: "button", onclick: () => (close(el), then()) }, "Discard"),
   ]);
+}
+
+/** Outfit Studio: the outfit as it stands becomes the base shape, and the sliders go back to nothing. */
+function setBase() {
+  try {
+    const [work] = core.ask({ op: "change", change: { do: "setBase", values: state.at } });
+    state.at = work.sliders.map((sl) => (sl.zap ? state.at[work.sliders.indexOf(sl)] : 0));
+    taken(work);
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
 }
 
 /** A sheet asking for one name. `done` throws what is wrong with it. */

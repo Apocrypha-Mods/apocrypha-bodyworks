@@ -528,6 +528,65 @@ fn a_mesh_becomes_a_project_fitted_to_a_body() {
         assert!(moving > 20, "{shape}: {moving}");
     }
 
+    // The same, of every shape at once; and a slider cleared, and turned.
+    let mut all = project.clone();
+    assert_eq!(
+        all.conform_all(&reference.name, &on_disk, conform::Options::default())
+            .unwrap(),
+        3
+    );
+    let (with, _) = all.save("All").unwrap();
+    let does = |set: &set::SliderSet, slider: &str, target: &str| {
+        set.sliders
+            .iter()
+            .find(|s| s.name == slider)
+            .unwrap()
+            .data
+            .iter()
+            .any(|d| d.target == target)
+    };
+    assert!(does(&with, "Breasts", "Bra") && does(&with, "Breasts", "Bra again"));
+    all.clear_slider("Breasts", "Bra").unwrap();
+    assert!(all.clear_slider("Breasts", &reference.name).is_err());
+    let (without, _) = all.save("All").unwrap();
+    assert!(!does(&without, "Breasts", "Bra") && does(&without, "Breasts", "Bra again"));
+    all.negate_slider("Breasts").unwrap();
+
+    // The outfit as it stands at some sliders made its base shape: the
+    // bra is where Breasts at full had it, and the body is where it was.
+    let mut based = project.clone();
+    let mut at = vec![0.0; based.set.sliders.len()];
+    at[based
+        .set
+        .sliders
+        .iter()
+        .position(|s| s.name == "Breasts")
+        .unwrap()] = 100.0;
+    let (bra, body_was) = (place(&based, "Bra"), place(&based, &reference.name));
+    based.set_base(&at).unwrap();
+    assert_ne!(place(&based, "Bra"), bra);
+    assert_eq!(place(&based, &reference.name), body_was);
+    assert!(based.set_base(&[0.0]).is_err());
+
+    // Vertices taken out of a shape, and out of what sliders do to it.
+    let mut cut = project.clone();
+    let had = place(&cut, "Bra").len();
+    cut.delete_vertices("Bra", &[0, 1, 2, 3, 4, 5, 6, 7])
+        .unwrap();
+    assert_eq!(place(&cut, "Bra").len(), had - 8);
+    assert!(cut.delete_vertices("Bra", &[60000]).is_err());
+    assert!(cut.delete_vertices(&reference.name, &[0]).is_err());
+    let (cut_set, cut_files) = cut.save("Cut").unwrap();
+    let cut_held: HashMap<String, Vec<u8>> =
+        cut_files.into_iter().map(|o| (o.path, o.bytes)).collect();
+    let values = vec![100.0; cut_set.sliders.len()];
+    let out = build::build_at(&cut_set, &values, &values, &|path: &str| {
+        cut_held.get(path).cloned().or_else(|| on_disk(path))
+    })
+    .unwrap();
+    assert_eq!(out.notes, Vec::<String>::new());
+    assert!(apoc_nif::Nif::read(&out.outputs[0].bytes).is_ok());
+
     let (saved, files) = project.save("Mine").unwrap();
     let held: HashMap<String, Vec<u8>> = files.into_iter().map(|o| (o.path, o.bytes)).collect();
     let files = |path: &str| held.get(path).cloned().or_else(|| on_disk(path));
