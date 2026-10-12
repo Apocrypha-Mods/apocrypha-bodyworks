@@ -53,6 +53,33 @@ fn textures_of(nif: &Nif, shader: i32) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Name the texture files of the shape at `block`, slot by slot: as many
+/// as it has slots for, no more and no fewer.
+pub fn set_textures(nif: &mut Nif, block: usize, textures: &[String]) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    let shader = if nif.kind_of(block) == "NiTriShape" {
+        NiTriShape::read(&nif.blocks[block].data, stream)?
+            .shader
+            .unwrap_or(-1)
+    } else {
+        TriShape::read(&nif.blocks[block].data, stream)?.shader
+    };
+    let at = block_of(nif, shader, &["BSLightingShaderProperty"])
+        .and_then(|at| LightingShader::read(&nif.blocks[at].data, stream).ok())
+        .and_then(|s| block_of(nif, s.texture_set, &["BSShaderTextureSet"]))
+        .ok_or_else(|| NifError::Unsupported("the shape names no textures".into()))?;
+    let mut set = TextureSet::read(&nif.blocks[at].data)?;
+    if set.textures.len() != textures.len() {
+        return Err(NifError::Unsupported(format!(
+            "the shape has {} texture slots",
+            set.textures.len()
+        )));
+    }
+    set.textures = textures.iter().map(|t| t.as_bytes().to_vec()).collect();
+    nif.blocks[at].data = set.write();
+    Ok(())
+}
+
 fn name_of(nif: &Nif, index: i32) -> String {
     nif.string(index)
         .map(|s| String::from_utf8_lossy(s).into_owned())

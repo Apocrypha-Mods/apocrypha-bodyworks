@@ -149,6 +149,17 @@ impl Work {
                     .collect();
                 p.add_zap(&name, &shape, &vertices)
             }
+            Change::Textures { shape, textures } => p.set_textures(&shape, &textures),
+            Change::Separate { shape, to } => {
+                let vertices: Vec<u16> = data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter_map(|c| u16::try_from(u32::from_le_bytes(*c)).ok())
+                    .collect();
+                p.separate(&shape, &to, &vertices)
+            }
+            Change::DropBone { shape, bone } => p.drop_bone(&shape, &bone),
             Change::Paint { shape, bone } => {
                 let painted: Vec<(u16, f32)> = data
                     .as_chunks::<8>()
@@ -317,6 +328,22 @@ enum Change {
     AddZap {
         name: String,
         shape: String,
+    },
+    /// Name the texture files a shape is drawn with, slot by slot.
+    Textures {
+        shape: String,
+        textures: Vec<String>,
+    },
+    /// Part vertices of a shape off as a shape named `to`: the request's
+    /// bytes are their numbers, four bytes each.
+    Separate {
+        shape: String,
+        to: String,
+    },
+    /// Stop a shape following a bone.
+    DropBone {
+        shape: String,
+        bone: String,
     },
     /// Set how much vertices of a shape follow a bone. The request's bytes
     /// are, for each vertex, its number and the weight, four bytes each.

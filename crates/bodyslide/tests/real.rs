@@ -611,6 +611,50 @@ fn a_mesh_becomes_a_project_fitted_to_a_body() {
         .zip(&now_uv)
         .all(|(a, b)| (a[0] + b[0] - 1.0).abs() < 0.002 && (a[1] - b[1]).abs() < 0.002));
 
+    // Part of a shape made a shape of its own; textures named; a bone let go.
+    let mut parted = project.clone();
+    let whole = place(&parted, "Bra").len();
+    parted
+        .separate("Bra", "Straps", &[0, 1, 2, 3, 4, 5, 6, 7, 8])
+        .unwrap();
+    assert_eq!(place(&parted, "Bra").len(), whole - 9);
+    assert_eq!(place(&parted, "Straps").len(), 9);
+    assert!(parted.separate("Bra", "None", &[]).is_err());
+    assert!(parted.separate("Bra", "Panty", &[0]).is_err());
+    assert_eq!(place(&parted, "Bra").len(), whole - 9);
+    let textures = |p: &Project| {
+        let at = apoc_nif::mesh::shapes(&p.nif)
+            .into_iter()
+            .find(|at| apoc_nif::mesh::name(&p.nif, *at).as_deref() == Some("Bra"))
+            .unwrap();
+        apoc_nif::mesh::read(&p.nif, at).unwrap().textures
+    };
+    let mut named = textures(&parted);
+    assert!(parted.set_textures("Bra", &named[1..]).is_err());
+    named[0] = "textures\\mine\\bra.dds".to_string();
+    parted.set_textures("Bra", &named).unwrap();
+    assert_eq!(textures(&parted), named);
+    assert_ne!(textures(&project)[0], named[0]);
+    let skin = |p: &Project| {
+        let at = apoc_nif::mesh::shapes(&p.nif)
+            .into_iter()
+            .find(|at| apoc_nif::mesh::name(&p.nif, *at).as_deref() == Some("Panty"))
+            .unwrap();
+        apoc_nif::weights::read(&p.nif, at).unwrap()
+    };
+    let had = skin(&parted);
+    let let_go = had.bones[1].clone();
+    parted.drop_bone("Panty", &let_go).unwrap();
+    let has = skin(&parted);
+    assert_eq!(has.bones.len(), had.bones.len() - 1);
+    assert!(!has.bones.contains(&let_go));
+    assert!(has
+        .vertices
+        .iter()
+        .all(|v| (v.iter().map(|x| x.1).sum::<f32>() - 1.0).abs() < 0.01));
+    assert!(parted.drop_bone("Panty", &let_go).is_err());
+    assert!(apoc_nif::Nif::read(&parted.nif.write()).is_ok());
+
     // Vertices taken out of a shape, and out of what sliders do to it.
     let mut cut = project.clone();
     let had = place(&cut, "Bra").len();

@@ -139,6 +139,7 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bo
 .field > span { font-weight: 500; }
 .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .pair.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.fields { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; padding: 4px; margin: -4px; }
 .checks { display: flex; flex-direction: column; margin: 0 -12px; }
 .checks .check { border-radius: 8px; }
 .input { height: 32px; padding: 0 10px; border: 0; outline: 0; border-radius: 8px; background: var(--bg-sunken); box-shadow: inset 0 0 0 1px var(--border-field); user-select: text; }

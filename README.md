@@ -70,11 +70,11 @@ Outfit Studio:
   flip or split an edge, weld, move one vertex).
 - Brush settings: focus and spacing, mirroring a weight stroke onto the
   opposite bone.
-- Shapes: refining (subdividing) a mesh, mirroring a shape, separating or
-  merging shapes, removing skinning, editing shader and texture properties,
-  making a shape from an OBJ or FBX file.
-- Bones: adding and deleting bones, custom bones, transferring selected
-  weights between shapes.
+- Shapes: refining (subdividing) a mesh, mirroring a shape, merging shapes,
+  removing skinning, shader properties other than the texture files, making
+  a shape from an OBJ or FBX file.
+- Bones: adding a bone no shape of the mesh follows, custom bones,
+  transferring selected weights between shapes.
 - Partitions (Skyrim) and segments (Fallout 4): viewing and editing.
 - Sliders: combined sliders, importing and exporting slider data as BSD,
   OSD, TRI or FBX.

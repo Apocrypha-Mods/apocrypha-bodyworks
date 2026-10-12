@@ -1014,6 +1014,107 @@ impl Project {
         done
     }
 
+    /// Name the texture files a shape is drawn with, slot by slot.
+    pub fn set_textures(&mut self, shape: &str, textures: &[String]) -> Result<(), Error> {
+        self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        if textures
+            .iter()
+            .any(|t| t.len() > 260 || t.chars().any(char::is_control))
+        {
+            return invalid("A texture is named by a path, of 260 letters at most.");
+        }
+        mesh::set_textures(&mut self.nif, block, textures)
+            .map_err(|e| Error::Invalid(e.to_string()))
+    }
+
+    /// Part some vertices of a shape off as a shape of their own, named
+    /// `to`: the first keeps the rest. Both keep what sliders did to them.
+    pub fn separate(&mut self, shape: &str, to: &str, vertices: &[u16]) -> Result<(), Error> {
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let count = mesh::read(&self.nif, block)
+            .map_err(|e| Error::Invalid(e.to_string()))?
+            .positions
+            .len();
+        let mut parted = vec![false; count];
+        for v in vertices {
+            match parted.get_mut(*v as usize) {
+                Some(p) => *p = true,
+                None => return invalid(format!("{shape} has {count} vertices.")),
+            }
+        }
+        let rest: Vec<u16> = (0..count as u32)
+            .filter(|v| !parted[*v as usize])
+            .map(|v| v as u16)
+            .collect();
+        if rest.is_empty() || rest.len() == count {
+            return invalid("Mask the part of the shape that is to be its own shape.");
+        }
+        let taken: Vec<u16> = (0..count as u32)
+            .filter(|v| parted[*v as usize])
+            .map(|v| v as u16)
+            .collect();
+        let before = self.clone();
+        let done = (|| {
+            self.duplicate_shape(shape, to)?;
+            let to = to.trim().to_string();
+            self.delete_vertices(shape, &taken)?;
+            self.delete_vertices(&to, &rest)
+        })();
+        if done.is_err() {
+            *self = before;
+        }
+        done
+    }
+
+    /// Stop a shape following a bone: what each vertex followed of it goes
+    /// to its other bones, in their shares. A vertex that followed nothing
+    /// else keeps the bone, and then so does the shape.
+    pub fn drop_bone(&mut self, shape: &str, bone: &str) -> Result<(), Error> {
+        self.shape(shape)?;
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let skin = weights::read(&self.nif, block).map_err(fail)?;
+        let Some(at) = skin.bones.iter().position(|b| b == bone) else {
+            return invalid(format!("{shape} does not follow a bone named {bone}."));
+        };
+        let follows: Vec<(u16, f32)> = skin
+            .vertices
+            .iter()
+            .enumerate()
+            .filter(|(_, slots)| slots.iter().any(|(b, w)| *b as usize == at && *w > 0.0))
+            .map(|(v, _)| (v as u16, 0.0))
+            .collect();
+        self.paint_weights(shape, bone, &follows)?;
+        // Out of the shape's list of bones, when nothing follows it now.
+        let mut skin = weights::read(&self.nif, block).map_err(fail)?;
+        if skin
+            .vertices
+            .iter()
+            .flatten()
+            .any(|(b, w)| *b as usize == at && *w > 0.0)
+        {
+            return invalid(format!(
+                "Some of {shape} follows {bone} and nothing else, and has to follow something."
+            ));
+        }
+        skin.bones.remove(at);
+        for slots in &mut skin.vertices {
+            for (b, w) in slots.iter_mut() {
+                if *w > 0.0 && *b as usize > at {
+                    *b -= 1;
+                }
+            }
+        }
+        weights::write(&mut self.nif, block, &skin, None).map_err(fail)
+    }
+
     /// Where a build of the project goes, and whether as two meshes.
     pub fn output(&mut self, folder: &str, file: &str, weights: bool) -> Result<(), Error> {
         let file = file_name(file.trim().trim_end_matches(".nif"));

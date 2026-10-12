@@ -263,6 +263,7 @@ function showShapes(frame) {
       hidden: hidden.has(s.name),
       uvs: f32.slice(s.uvs[0], s.uvs[0] + s.uvs[1]),
       texture: (s.textures || [])[0] || null,
+      textures: s.textures || [],
       shown: null,
       zapped: "",
       zaps: (s.zaps || []).map((z) => ({
@@ -991,6 +992,11 @@ function studioSide() {
                 heat();
                 render();
               },
+              oncontextmenu: (e) => {
+                e.preventDefault();
+                if (!state.work || !picked?.bones.includes(b)) return;
+                menu(e.currentTarget, [{ name: `Remove from ${picked.name}`, value: 1, danger: true }], () => attempt({ do: "dropBone", shape: picked.name, bone: b }));
+              },
             },
             h("span.nm.cut", null, b || "Unnamed"),
           ),
@@ -1025,12 +1031,14 @@ function studioSide() {
                     ...(state.work ? bodies.map((o) => ({ name: `Copy weights from ${o.name}`, value: ["weights", o.name] })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
                     { name: sh.hidden ? "Show" : "Hide", value: "hide" },
+                    state.work && sh.textures.length > 0 && { name: "Textures…", value: "textures" },
                     state.work && { name: "Flip texture left to right", value: "flipU" },
                     state.work && { name: "Flip texture top to bottom", value: "flipV" },
                     { name: "Export OBJ…", value: "export", rule: true },
                     state.work && { name: "Import OBJ…", value: "import" },
                     state.work && sh.reference && { name: "Conform all to this", value: "conformAll" },
-                    state.work && sh.mask.some((m) => m >= 0.5) && { name: "Delete masked points", value: "cut", danger: true, rule: true },
+                    state.work && sh.mask.some((m) => m >= 0.5) && { name: "Separate masked points…", value: "part", rule: true },
+                    state.work && sh.mask.some((m) => m >= 0.5) && { name: "Delete masked points", value: "cut", danger: true },
                     state.work && state.shapes.length > 1 && { name: "Delete", value: "delete", danger: true, rule: !sh.mask.some((m) => m >= 0.5) },
                   ].filter(Boolean),
                   (what) => {
@@ -1042,6 +1050,21 @@ function studioSide() {
                     }
                     if (what === "transform") return transform(sh);
                     if (what === "conformAll") return attempt({ do: "conformAll", body: sh.name });
+                    if (what === "textures") return texturesOf(sh);
+                    if (what === "part") {
+                      const parted = [];
+                      sh.mask.forEach((m, v) => m >= 0.5 && parted.push(v));
+                      return rename(
+                        "Separate masked points",
+                        `${sh.name} part`,
+                        (to) => {
+                          const [work] = core.ask({ op: "change", change: { do: "separate", shape: sh.name, to } }, new Uint8Array(Uint32Array.from(parted).buffer));
+                          sh.mask.fill(0);
+                          taken(work);
+                        },
+                        "Separate",
+                      );
+                    }
                     if (what === "cut") {
                       const gone = [];
                       sh.mask.forEach((m, v) => m >= 0.5 && gone.push(v));
@@ -1858,6 +1881,32 @@ function transform(sh) {
     sh.name,
     null,
     [h("div.pair.three", null, move.map((f) => f[0])), h("div.pair.three", null, turn.map((f) => f[0])), h("div.pair.three", null, scaleField)],
+    [said, h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"), go],
+  );
+}
+
+/** Outfit Studio: the texture files a shape is drawn with. */
+function texturesOf(sh) {
+  const SLOTS = ["Colour", "Normal", "Glow or skin tint", "Height", "Environment", "Environment mask", "Inner layer", "Specular or backlight"];
+  const inputs = sh.textures.map((t, i) => {
+    const input = h("input.input", { type: "text", value: t, "aria-label": SLOTS[i] || `Slot ${i + 1}`, spellcheck: false, maxLength: 260 });
+    return [h("label.field", null, h("span", null, SLOTS[i] || `Slot ${i + 1}`), input), input];
+  });
+  const go = h("button.btn.primary", { type: "button" }, "Done");
+  const said = h("span.sub.warn.grow.cut");
+  go.addEventListener("click", () => {
+    try {
+      pictures.clear();
+      change({ do: "textures", shape: sh.name, textures: inputs.map(([, input]) => input.value.trim()) });
+      close(el);
+    } catch (e) {
+      said.textContent = e.message;
+    }
+  });
+  const el = sheet(
+    `${sh.name} textures`,
+    null,
+    h("div.fields", null, inputs.map((f) => f[0])),
     [said, h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"), go],
   );
 }
