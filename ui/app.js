@@ -2573,7 +2573,10 @@ function pose() {
   state.shapes.forEach((s, i) => {
     if (!pivot || !bone || state.pose.every((d) => d === 0)) return view.move(i, s.now, s.normals);
     const w = goesWith(s, bone);
-    const out = new Float32Array(s.now);
+    // Room for the bent shape, kept from one turn of a knob to the next.
+    if (!s.posed || s.posed.out.length !== s.now.length) s.posed = { out: new Float32Array(s.now.length), normals: new Float32Array(s.normals.length), sum: new Float32Array(s.sum.length) };
+    const out = s.posed.out;
+    out.set(s.now);
     for (let v = 0; v < w.length; v++) {
       const share = Math.min(1, w[v]);
       if (share <= 0) continue;
@@ -2582,9 +2585,8 @@ function pose() {
       out[v * 3 + 1] += (m[3] * x + m[4] * y + m[5] * z - y) * share;
       out[v * 3 + 2] += (m[6] * x + m[7] * y + m[8] * z - z) * share;
     }
-    const normals = new Float32Array(s.normals.length);
-    shade(out, s.shown, s.weld, normals, new Float32Array(s.sum.length));
-    view.move(i, out, normals);
+    shade(out, s.shown, s.weld, s.posed.normals, s.posed.sum);
+    view.move(i, out, s.posed.normals);
   });
 }
 
