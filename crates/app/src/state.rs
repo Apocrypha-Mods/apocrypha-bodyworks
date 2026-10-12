@@ -45,8 +45,12 @@ fn numbers(data: &[u8]) -> Vec<u16> {
         .collect()
 }
 
-/// How many changes can be taken back.
+/// How many changes can be taken back, at most.
 const UNDO: usize = 24;
+
+/// And how many bytes of mesh the copies kept for that may add up to: a
+/// large mesh keeps fewer steps, and always one.
+const UNDO_BYTES: usize = 192 * 1024 * 1024;
 
 impl Work {
     fn of(project: Project) -> Result<Work, String> {
@@ -217,13 +221,22 @@ impl Work {
         }
         if self.project != before {
             self.undo.push(before);
-            if self.undo.len() > UNDO {
-                self.undo.remove(0);
-            }
+            self.trim();
             self.redo.clear();
             self.changed = true;
         }
         Ok(())
+    }
+
+    /// Let the oldest steps go while there are too many, or too much.
+    fn trim(&mut self) {
+        let each = self.project.mesh_bytes().max(1);
+        let most = (UNDO_BYTES / each).clamp(1, UNDO);
+        for list in [&mut self.undo, &mut self.redo] {
+            while list.len() > most {
+                list.remove(0);
+            }
+        }
     }
 
     /// Step back (`back`) or forward again through the changes.

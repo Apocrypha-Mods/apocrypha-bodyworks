@@ -8,12 +8,15 @@ use crate::set::{DataRef, Shape, Slider, SliderSet};
 use crate::Error;
 use apoc_nif::{copy, edit, mesh, weights, Nif};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// What one slider does to one of the project's own shapes.
 #[derive(Debug, Clone, PartialEq)]
 struct Own {
     target: String,
-    diffs: Vec<Diff>,
+    /// Shared with the copies of a project kept to step back to: a list is
+    /// only copied when it is the one being changed.
+    diffs: Arc<Vec<Diff>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,7 +111,7 @@ impl Project {
                 match diffs {
                     Some(diffs) => mine.push(Own {
                         target: d.target,
-                        diffs,
+                        diffs: Arc::new(diffs),
                     }),
                     None => notes.push(format!(
                         "{} has nothing for {} in {at}.",
@@ -125,6 +128,12 @@ impl Project {
             own,
             notes,
         })
+    }
+
+    /// How many bytes the project's mesh is: what a copy of the project
+    /// kept to step back to costs, its slider lists being shared.
+    pub fn mesh_bytes(&self) -> usize {
+        self.nif.blocks.iter().map(|b| b.data.len()).sum()
     }
 
     /// A project begun from a mesh alone: its shapes, and no sliders yet.
@@ -492,13 +501,13 @@ impl Project {
         }
         let own = &mut self.own[index];
         let list = match own.iter().position(|o| o.target == target) {
-            Some(i) => &mut own[i].diffs,
+            Some(i) => Arc::make_mut(&mut own[i].diffs),
             None => {
                 own.push(Own {
                     target,
-                    diffs: Vec::new(),
+                    diffs: Arc::default(),
                 });
-                &mut own.last_mut().expect("just pushed").diffs
+                Arc::make_mut(&mut own.last_mut().expect("just pushed").diffs)
             }
         };
         // Only what the stroke touched changes: the rest of the list stays
@@ -540,7 +549,7 @@ impl Project {
     fn list(&self, slider: usize, shape: usize, files: &dyn Files) -> Option<Vec<Diff>> {
         let of = &self.set.shapes[shape];
         if let Some(own) = self.own[slider].iter().find(|o| o.target == of.target) {
-            return Some(own.diffs.clone());
+            return Some(own.diffs.to_vec());
         }
         let d = self.set.sliders[slider]
             .data
@@ -612,7 +621,7 @@ impl Project {
                 moving += 1;
                 own.push(Own {
                     target: target.clone(),
-                    diffs,
+                    diffs: Arc::new(diffs),
                 });
             }
         }
@@ -656,7 +665,7 @@ impl Project {
         let target = &self.set.shapes[at].target;
         for own in &mut self.own {
             for o in own.iter_mut().filter(|o| &o.target == target) {
-                for d in &mut o.diffs {
+                for d in Arc::make_mut(&mut o.diffs) {
                     d.offset = turned(d.offset);
                 }
             }
@@ -874,7 +883,7 @@ impl Project {
     pub fn negate_slider(&mut self, slider: &str) -> Result<(), Error> {
         let index = self.slider(slider)?;
         for own in &mut self.own[index] {
-            for d in &mut own.diffs {
+            for d in Arc::make_mut(&mut own.diffs) {
                 d.offset = d.offset.map(|c| -c);
             }
         }
@@ -984,19 +993,20 @@ impl Project {
             .collect();
         for own in &mut self.own {
             for o in own.iter_mut().filter(|o| o.target == target) {
-                o.diffs = o
-                    .diffs
-                    .iter()
-                    .filter_map(|d| {
-                        now.get(d.vertex as usize)
-                            .copied()
-                            .flatten()
-                            .map(|vertex| Diff {
-                                vertex,
-                                offset: d.offset,
-                            })
-                    })
-                    .collect();
+                o.diffs = Arc::new(
+                    o.diffs
+                        .iter()
+                        .filter_map(|d| {
+                            now.get(d.vertex as usize)
+                                .copied()
+                                .flatten()
+                                .map(|vertex| Diff {
+                                    vertex,
+                                    offset: d.offset,
+                                })
+                        })
+                        .collect(),
+                );
             }
         }
         Ok(())
@@ -1264,7 +1274,7 @@ impl Project {
         }
         for own in &mut self.own {
             for o in own.iter_mut().filter(|o| o.target == target) {
-                for d in &mut o.diffs {
+                for d in Arc::make_mut(&mut o.diffs) {
                     d.offset[0] = -d.offset[0];
                 }
             }
@@ -1278,7 +1288,7 @@ impl Project {
         let index = self.slider(slider)?;
         let lists: Vec<(String, Vec<Diff>)> = self.own[index]
             .iter()
-            .map(|o| (format!("{}{slider}", o.target), o.diffs.clone()))
+            .map(|o| (format!("{}{slider}", o.target), o.diffs.to_vec()))
             .collect();
         if lists.is_empty() {
             return invalid(format!(
@@ -1332,7 +1342,7 @@ impl Project {
             own.retain(|o| o.target != shape.target);
             own.push(Own {
                 target: shape.target.clone(),
-                diffs: diffs.clone(),
+                diffs: Arc::new(diffs.clone()),
             });
             given += 1;
         }
@@ -1386,7 +1396,7 @@ impl Project {
                     file: data_file.clone(),
                     list: list.clone(),
                 });
-                data.lists.push((list, o.diffs.clone()));
+                data.lists.push((list, o.diffs.to_vec()));
             }
         }
         let files = vec![
