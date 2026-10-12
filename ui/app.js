@@ -2057,6 +2057,33 @@ function brushBar() {
             },
             "Mask it",
           ),
+        ...(state.tool === "weights" && state.bone
+          ? state.shapes
+              .filter((o, i) => i !== state.picked && o.bones.includes(state.bone))
+              .slice(0, 1)
+              .map((o) =>
+                h(
+                  "button.btn.ghost.small",
+                  {
+                    type: "button",
+                    title: `Follow ${state.bone} as ${o.name} under it does; what a mask covers is left`,
+                    onclick: () => {
+                      const sh = state.shapes[state.picked];
+                      const spared = [];
+                      sh.mask.forEach((m, v) => m >= 0.5 && spared.push(v));
+                      try {
+                        const [work] = core.ask({ op: "change", change: { do: "copyBone", shape: sh.name, body: o.name, bone: state.bone } }, new Uint8Array(Uint32Array.from(spared).buffer));
+                        taken(work);
+                      } catch (e) {
+                        state.problem = e.message;
+                        render();
+                      }
+                    },
+                  },
+                  `Copy from ${o.name}`,
+                ),
+              )
+          : []),
         state.tool === "mask" ? h("span.sub.quiet", null, "Alt uncovers") : state.tool === "weights" ? h("span.sub.quiet.cut", null, `${state.bone || "No bone"} · Alt takes away`) : state.tool === "colour" ? h("span.sub.quiet", null, "Alt picks a colour up") : target,
         state.shapes[state.picked]?.mask.some((m) => m > 0) &&
           h(

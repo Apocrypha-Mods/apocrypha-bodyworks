@@ -786,6 +786,37 @@ fn an_outfit_given_its_bodys_bones_bends_much_as_it_did() {
     assert!(project
         .copy_weights("Bra", "Bra", conform::Options::default(), &[])
         .is_err());
+    // One bone of the body's alone: the bra follows it as the body under
+    // it does, and still follows the bones it did, each making room.
+    let mut one = Project::open(set, &on_disk).unwrap();
+    let had = skin_of(&one.nif, "Bra");
+    let bone = had.bones[0].clone();
+    let was = one.bone_weights("Bra", &bone).unwrap();
+    one.copy_bone(
+        "Bra",
+        "CBBE",
+        &bone,
+        conform::Options::default(),
+        &[0, 1, 2],
+    )
+    .unwrap();
+    let now = one.bone_weights("Bra", &bone).unwrap();
+    assert_eq!(&now[..3], &was[..3]);
+    assert!(now.iter().zip(&was).any(|(a, b)| (a - b).abs() > 0.001));
+    let after = skin_of(&Nif::read(&one.nif.write()).unwrap(), "Bra");
+    assert!(had.bones.iter().all(|b| after.bones.contains(b)));
+    for v in &after.vertices {
+        assert!((v.iter().map(|x| x.1).sum::<f32>() - 1.0).abs() < 0.01);
+    }
+    assert!(one
+        .copy_bone(
+            "Bra",
+            "CBBE",
+            "No such bone",
+            conform::Options::default(),
+            &[]
+        )
+        .is_err());
     // Painted: vertex 3 follows a bone of the body's that the bra did not,
     // by half, and what it followed before by the other half between them.
     let fresh = body

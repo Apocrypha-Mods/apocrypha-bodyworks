@@ -1533,6 +1533,55 @@ impl Project {
         done.map(|()| taken)
     }
 
+    /// Give `shape` one bone of `body`'s: how much each of its vertices
+    /// follows `bone` is what the body's vertices nearest it do, and what
+    /// it follows of its other bones makes room. The vertices in `spared`
+    /// are left as they are.
+    pub fn copy_bone(
+        &mut self,
+        shape: &str,
+        body: &str,
+        bone: &str,
+        options: conform::Options,
+        spared: &[u16],
+    ) -> Result<(), Error> {
+        if shape == body {
+            return invalid("A shape takes its weights from another shape.");
+        }
+        self.shape(shape)?;
+        self.shape(body)?;
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let block = |name: &str| {
+            self.block(name)
+                .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {name}.")))
+        };
+        let (to, from) = (block(shape)?, block(body)?);
+        let theirs = self.bone_weights(body, bone)?;
+        if theirs.iter().all(|w| *w == 0.0) {
+            return invalid(format!("{body} does not follow {bone}."));
+        }
+        let ours = mesh::read(&self.nif, to).map_err(fail)?.positions;
+        let on = mesh::read(&self.nif, from).map_err(fail)?.positions;
+        let ties = conform::tie(&on, &ours, options);
+        let mut is_spared = vec![false; ours.len()];
+        for v in spared {
+            if let Some(s) = is_spared.get_mut(*v as usize) {
+                *s = true;
+            }
+        }
+        let painted: Vec<(u16, f32)> = (0..ours.len())
+            .filter(|v| !is_spared[*v])
+            .map(|v| {
+                let weight: f32 = ties
+                    .of(v)
+                    .map(|(near, share)| theirs.get(near as usize).copied().unwrap_or(0.0) * share)
+                    .sum();
+                (v as u16, weight)
+            })
+            .collect();
+        self.paint_weights(shape, bone, &painted)
+    }
+
     /// Mirror a shape across the middle of the body: every vertex to the
     /// other side, its triangles turned to face out again, what sliders do
     /// to it mirrored too, and each bone it follows changed for its twin on

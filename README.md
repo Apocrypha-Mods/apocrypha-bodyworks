@@ -85,8 +85,7 @@ Outfit Studio:
   skinning, shader properties other than the texture files, a shape from an
   FBX file (one is made from an OBJ file, in the likeness of a shape already
   there).
-- Bones: custom bones (one made up, not taken from the game's skeleton),
-  transferring selected weights between shapes.
+- Bones: custom bones (one made up, not taken from the game's skeleton).
 - Segments (Fallout 4): viewing and editing.
 - Sliders: combined sliders, importing and exporting slider data as BSD
   or FBX (OSD and TRI go both ways).

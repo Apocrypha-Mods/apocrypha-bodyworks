@@ -230,6 +230,9 @@ impl Work {
             }
             Change::ImportMorphs => p.import_morphs(data).map(drop),
             Change::ImportSlider { slider } => p.import_slider(&slider, data).map(drop),
+            Change::CopyBone { shape, body, bone } => {
+                p.copy_bone(&shape, &body, &bone, Default::default(), &numbers(data))
+            }
             Change::AddBone { bone } => p.add_bone(&bone, data),
             Change::RemovePart { shape, index, into } => p.remove_part(&shape, index, into),
             Change::Colour { shape } => {
@@ -503,6 +506,14 @@ enum Change {
     /// Take what a slider does from a slider data file: the request's bytes.
     ImportSlider {
         slider: String,
+    },
+    /// Give a shape one bone of a body's, as the body's vertices nearest
+    /// each of its own follow it. The request's bytes name vertices to
+    /// leave as they are.
+    CopyBone {
+        shape: String,
+        body: String,
+        bone: String,
     },
     /// Bring a bone into the mesh from a skeleton: the request's bytes.
     AddBone {
