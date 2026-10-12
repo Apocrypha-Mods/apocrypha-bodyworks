@@ -1741,6 +1741,7 @@ const BRUSHES = [
   ["weights", "Weights"],
   ["colour", "Colour"],
   ["edge", "Edges"],
+  ["place", "Place"],
   ["pose", "Pose"],
 ];
 
@@ -1758,6 +1759,35 @@ function brushing(what, ray) {
   if (what === "out" || !s || s.hidden || !state.tool) {
     if (!stroke) view.reach(null);
     return false;
+  }
+  if (state.tool === "place") {
+    // The whole shape, dragged across the view: taken hold of where the pointer is on it.
+    if (what === "up") {
+      const held = stroke?.tool === "place" ? stroke : null;
+      stroke = null;
+      if (!held) return false;
+      s.now.set(held.from);
+      if (held.by.some((c) => Math.abs(c) > 1e-4)) attempt({ do: "transform", shape: s.name, by: held.by, scale: 1, turn: [0, 0, 0] });
+      else redraw(s);
+      return true;
+    }
+    if (what === "drag" && stroke?.tool === "place") {
+      const { origin, dir, back } = ray;
+      const along = (k) => stroke.at[k] - origin[k];
+      const t = (along(0) * back[0] + along(1) * back[1] + along(2) * back[2]) / (dir[0] * back[0] + dir[1] * back[1] + dir[2] * back[2]);
+      stroke.by = [0, 1, 2].map((k) => origin[k] + dir[k] * t - stroke.at[k]);
+      for (let v = 0; v < s.now.length; v += 3) {
+        s.now[v] = stroke.from[v] + stroke.by[0];
+        s.now[v + 1] = stroke.from[v + 1] + stroke.by[1];
+        s.now[v + 2] = stroke.from[v + 2] + stroke.by[2];
+      }
+      return redraw(s);
+    }
+    if (what !== "down" || !state.work || s.reference) return false;
+    const held = brush.hit(ray.origin, ray.dir, s.now, s.shown);
+    if (!held) return false;
+    stroke = { tool: "place", at: held.point, from: new Float32Array(s.now), by: [0, 0, 0] };
+    return true;
   }
   if (what === "up") return endStroke();
   const r = radius();
@@ -2329,9 +2359,11 @@ function brushBar() {
           "Reset",
         ),
       ),
+    state.tool === "place" && h("div.brush", null, h("span.sub.quiet", null, "Drag the shape")),
     state.tool &&
       state.tool !== "edge" &&
       state.tool !== "pose" &&
+      state.tool !== "place" &&
       h(
         "div.brush",
         null,
