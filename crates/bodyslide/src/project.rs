@@ -1535,7 +1535,9 @@ impl Project {
                                 i
                             }
                         };
-                        all.push((index, *weight));
+                        // No more than all of it: weights that add up past
+                        // what a number can hold would leave it nothing.
+                        all.push((index, weight.min(1.0)));
                     }
                     if !all.is_empty() {
                         vertices[v] = weights::settled(&all);

@@ -109,3 +109,25 @@ test("a shape's bones and what follows them are written", async () => {
   // The bones are objects of the file, not meshes of it.
   assert.equal((await read(write([{ ...square, rig: { bones, slots } }]))).length, 1);
 });
+
+test("a bone a file names twice counts once among a vertex's four", () => {
+  const cluster = (bone, weight) => ({ bone, points: Int32Array.of(0), weights: Float32Array.of(weight) });
+  const mesh = { points: new Float32Array(3), from: Uint32Array.of(0), followed: [cluster("A", 0.2), cluster("A", 0.2), cluster("A", 0.2), cluster("B", 0.3), cluster("C", 0.25), cluster("D", 0.1), cluster("E", 0.05)] };
+  const sent = follows(mesh);
+  const got = new DataView(sent.bytes.buffer);
+  const pairs = [0, 1, 2, 3].map((k) => [sent.bones[got.getUint32(k * 8, true)], Math.round(got.getFloat32(k * 8 + 4, true) * 100)]).sort((x, y) => y[1] - x[1]);
+  assert.deepEqual(pairs, [["A", 60], ["B", 30], ["C", 25], ["D", 10]]);
+});
+
+test("bones two shapes follow stand in one place for both", async () => {
+  const slots = new Uint8Array(4 * 32);
+  new DataView(slots.buffer).setFloat32(4, 1, true);
+  const bone = (x) => [{ name: "Spine", turn: [1, 0, 0, 0, 1, 0, 0, 0, 1], at: [x, 0, 0], scale: 1 }];
+  const bytes = write([{ ...square, name: "One", rig: { bones: bone(0), slots } }, { ...square, name: "Two", rig: { bones: bone(10), slots } }]);
+  // Every cluster's last four numbers but one are where its bone stands: all the first shape's.
+  const text = new TextDecoder("latin1").decode(bytes);
+  let at = -1;
+  const stands = [];
+  while ((at = text.indexOf("TransformLink", at + 1)) >= 0) stands.push(new DataView(bytes.buffer, bytes.byteOffset).getFloat64(at + 13 + 13 + 12 * 8, true));
+  assert.deepEqual(stands, [0, 0]);
+});

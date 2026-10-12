@@ -122,7 +122,7 @@ function undone({ turn: m, at, scale }) {
 function degrees(m) {
   const y = Math.asin(Math.max(-1, Math.min(1, -m[6])));
   // Looking straight along Z, the turns about X and Z are one turn: all of it is given to Z.
-  const [x, z] = Math.abs(m[6]) > 0.999999 ? [0, Math.atan2(-m[1], m[4])] : [Math.atan2(m[7], m[8]), Math.atan2(m[3], m[0])];
+  const [x, z] = Math.abs(m[6]) > 1 - 1e-12 ? [0, Math.atan2(-m[1], m[4])] : [Math.atan2(m[7], m[8]), Math.atan2(m[3], m[0])];
   return [x, y, z].map((r) => (r * 180) / Math.PI);
 }
 
@@ -154,7 +154,7 @@ export function write(shapes) {
         joins.push(["C", ["OO", 99_999n, 0n]]);
       }
       const [model, kind] = [BigInt(next++), BigInt(next++)];
-      bones.set(b.name, model);
+      bones.set(b.name, { model, placed: b });
       const name = b.name.replace(/\0/g, "");
       objects.push(["NodeAttribute", [kind, `${name}\0\x01NodeAttribute`, "LimbNode"], [["TypeFlags", ["Skeleton"]]]]);
       objects.push([
@@ -221,7 +221,10 @@ export function write(shapes) {
     const skin = BigInt(next++);
     objects.push(["Deformer", [skin, `${name}\0\x01Deformer`, "Skin"], [["Version", [101]], ["Link_DeformAcuracy", [real(50)]]]]);
     joins.push(["C", ["OO", skin, geometry]]);
-    s.rig.bones.forEach((b, at) => {
+    s.rig.bones.forEach((own, at) => {
+      // Where the bone stands is said once for every shape that follows it:
+      // a program reading the file keeps one standing place a bone.
+      const { model: bone, placed: b } = bones.get(own.name);
       const cluster = BigInt(next++);
       objects.push([
         "Deformer",
@@ -237,7 +240,7 @@ export function write(shapes) {
         ],
       ]);
       joins.push(["C", ["OO", cluster, skin]]);
-      joins.push(["C", ["OO", bones.get(b.name), cluster]]);
+      joins.push(["C", ["OO", bone, cluster]]);
     });
   });
   const tree = [
@@ -276,15 +279,17 @@ const SHORT = "The file ends before its contents do.";
 
 /** The first `want` bytes of what compressed bytes hold, and no more of it than that. */
 async function inflated(bytes, want) {
+  // Nothing compresses to less than a thousandth of itself: a claim of more is not believed.
+  if (want > bytes.length * 1100 + 64) throw new Error(SHORT);
   const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate")).getReader();
-  const out = new Uint8Array(want);
+  const parts = [];
   let had = 0;
   try {
     while (had < want) {
       const { done, value } = await reader.read();
       if (done) break;
       const take = Math.min(value.length, want - had);
-      out.set(value.subarray(0, take), had);
+      parts.push(value.subarray(0, take));
       had += take;
     }
   } catch {
@@ -293,6 +298,12 @@ async function inflated(bytes, want) {
     reader.cancel().catch(() => {});
   }
   if (had < want) throw new Error(SHORT);
+  const out = new Uint8Array(want);
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
   return out;
 }
 
@@ -308,11 +319,11 @@ async function records(bytes) {
   // No file is let to make more work than its own size accounts for.
   let left = 4_000_000;
   let room = 1 << 29;
-  const array = async (at, size, make) => {
+  const array = async (at, end, size, make) => {
     const [count, packed, length] = [view.getUint32(at, true), view.getUint32(at + 4, true), view.getUint32(at + 8, true)];
     const want = count * size;
     room -= want;
-    if (at + 12 + length > bytes.length || room < 0) throw new Error(SHORT);
+    if (at + 12 + length > end || room < 0) throw new Error(SHORT);
     let data = bytes.subarray(at + 12, at + 12 + length);
     if (packed) data = await inflated(data, want);
     else if (data.length < want) throw new Error(SHORT);
@@ -348,11 +359,11 @@ async function records(bytes) {
       else if (kind === "F") (values.push(view.getFloat32(p, true)), (p += 4));
       else if (kind === "Y") (values.push(view.getInt16(p, true)), (p += 2));
       else if (kind === "C") (values.push(bytes[p] !== 0), (p += 1));
-      else if (kind === "d") [values[i], p] = await array(p, 8, (b) => new Float64Array(b));
-      else if (kind === "f") [values[i], p] = await array(p, 4, (b) => new Float32Array(b));
-      else if (kind === "i") [values[i], p] = await array(p, 4, (b) => new Int32Array(b));
-      else if (kind === "l") [values[i], p] = await array(p, 8, (b) => Array.from(new BigInt64Array(b), Number));
-      else if (kind === "b") [values[i], p] = await array(p, 1, (b) => new Uint8Array(b));
+      else if (kind === "d") [values[i], p] = await array(p, end, 8, (b) => new Float64Array(b));
+      else if (kind === "f") [values[i], p] = await array(p, end, 4, (b) => new Float32Array(b));
+      else if (kind === "i") [values[i], p] = await array(p, end, 4, (b) => new Int32Array(b));
+      else if (kind === "l") [values[i], p] = await array(p, end, 8, (b) => Array.from(new BigInt64Array(b), Number));
+      else if (kind === "b") [values[i], p] = await array(p, end, 1, (b) => new Uint8Array(b));
       else throw new Error("The file has a kind of value this cannot read.");
       if (p > end) throw new Error(SHORT);
     }
@@ -492,6 +503,7 @@ async function meshes(bytes) {
     if (!within.has(from)) within.set(from, []);
     within.get(from).push(to);
   }
+  let budget = 8_000_000;
   const deformers = new Map(objects.filter((o) => o.name === "Deformer").map((o) => [o.values[0], o]));
   const out = [];
   for (const g of objects.filter((o) => o.name === "Geometry" && o.values[2] === "Mesh")) {
@@ -522,7 +534,7 @@ async function meshes(bytes) {
       }
     }
     // Once for each object that places it, or once where it lies if none does.
-    const holders = (within.get(g.values[0]) || []).filter((id) => placed.has(id));
+    const holders = [...new Set(within.get(g.values[0]) || [])].filter((id) => placed.has(id));
     for (const first of holders.length ? holders : [null]) {
       // Where the mesh ends up: its own object's placement, inside each object that holds that one.
       let m = IDENTITY;
@@ -533,6 +545,9 @@ async function meshes(bytes) {
         seen.add(id);
       }
       const mirrored = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[1] * (m[4] * m[10] - m[6] * m[8]) + m[2] * (m[4] * m[9] - m[5] * m[8]) < 0 !== flipped;
+      // Every placing of a mesh is the mesh again: no file is let to ask for more than a budget of them.
+      budget -= count + corners.length;
+      if (budget < 0) throw new Error("The file places its meshes more times than this will make of them.");
       const points = new Float32Array(count * 3);
       for (let v = 0; v < count; v++) {
         const [px, py, pz] = [places[v * 3], places[v * 3 + 1], places[v * 3 + 2]];
@@ -590,26 +605,52 @@ async function meshes(bytes) {
  */
 export function follows(mesh) {
   const count = mesh.points.length / 3;
-  // For each of the file's own vertices, its heaviest four so far.
-  const bone = new Uint32Array(count * 4);
-  const much = new Float32Array(count * 4);
-  mesh.followed.forEach((f, b) => {
+  // One number a bone, however many times the file names it.
+  const bones = [...new Set(mesh.followed.map((f) => f.bone))];
+  const number = new Map(bones.map((b, i) => [b, i]));
+  // Everything each of the file's own vertices follows, a vertex after another.
+  const starts = new Uint32Array(count + 1);
+  const good = (v, w) => v >= 0 && v < count && w > 0 && Number.isFinite(w);
+  for (const f of mesh.followed) for (let i = 0; i < f.points.length; i++) if (good(f.points[i], f.weights[i])) starts[f.points[i] + 1] += 1;
+  for (let v = 0; v < count; v++) starts[v + 1] += starts[v];
+  const [which, much, filled] = [new Uint32Array(starts[count]), new Float32Array(starts[count]), starts.slice(0, count)];
+  for (const f of mesh.followed) {
+    const b = number.get(f.bone);
     for (let i = 0; i < f.points.length; i++) {
-      const [v, w] = [f.points[i], f.weights[i]];
-      if (v < 0 || v >= count || !(w > 0) || !Number.isFinite(w)) continue;
+      const v = f.points[i];
+      if (!good(v, f.weights[i])) continue;
+      which[filled[v]] = b;
+      much[filled[v]++] = Math.min(f.weights[i], 1);
+    }
+  }
+  // For each, a bone named twice counted once, then its heaviest four.
+  const bone = new Uint32Array(count * 4);
+  const most = new Float32Array(count * 4);
+  for (let v = 0; v < count; v++) {
+    for (let i = starts[v]; i < starts[v + 1]; i++) {
+      for (let j = starts[v]; j < i; j++) {
+        if (which[j] === which[i] && much[j] > 0) {
+          much[j] += much[i];
+          much[i] = 0;
+          break;
+        }
+      }
+    }
+    for (let i = starts[v]; i < starts[v + 1]; i++) {
+      if (!(much[i] > 0)) continue;
       // In place of the lightest of the four, where it is heavier.
       let least = v * 4;
-      for (let k = v * 4 + 1; k < v * 4 + 4; k++) if (much[k] < much[least]) least = k;
-      if (w > much[least]) [bone[least], much[least]] = [b, w];
+      for (let k = v * 4 + 1; k < v * 4 + 4; k++) if (most[k] < most[least]) least = k;
+      if (much[i] > most[least]) [bone[least], most[least]] = [which[i], much[i]];
     }
-  });
+  }
   const bytes = new Uint8Array(mesh.from.length * 32);
   const view = new DataView(bytes.buffer);
   mesh.from.forEach((v, i) => {
     for (let k = 0; k < 4; k++) {
       view.setUint32(i * 32 + k * 8, bone[v * 4 + k], true);
-      view.setFloat32(i * 32 + k * 8 + 4, much[v * 4 + k], true);
+      view.setFloat32(i * 32 + k * 8 + 4, most[v * 4 + k], true);
     }
   });
-  return { bones: mesh.followed.map((f) => f.bone), bytes };
+  return { bones, bytes };
 }
