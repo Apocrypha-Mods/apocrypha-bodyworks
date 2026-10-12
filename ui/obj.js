@@ -27,16 +27,48 @@ export function write(shapes) {
   return out.join("\n") + "\n";
 }
 
-/** The places in the texture an OBJ file lists, in the file's order, as a flat array: a mesh's start at the top, a file's at the bottom. */
+/**
+ * The place in the texture of each of an OBJ file's vertices, in the order of
+ * the vertices, as a flat array: a mesh's start at the top, a file's at the
+ * bottom. A face says which place goes with which vertex; a file without
+ * faces has them in step. A vertex no face gives a place is not a number
+ * here, and one given two is refused: it would have to be two vertices.
+ */
 export function uvs(text) {
-  const out = [];
+  const listed = [];
+  const faces = [];
+  let vertices = 0;
   for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith("vt") || (line[2] !== " " && line[2] !== "\t")) continue;
-    const [u, v] = line.slice(3).trim().split(/\s+/).map(Number);
-    if (![u, v].every((c) => Number.isFinite(Math.fround(c)))) throw new Error("The file has a place in the texture that is not two numbers.");
-    out.push(u, 1 - v);
+    const blank = line[1] === " " || line[1] === "\t";
+    if (line[0] === "v" && blank) vertices++;
+    else if (line[0] === "f" && blank) faces.push(line.slice(2).trim().split(/\s+/));
+    else if (line.startsWith("vt") && (line[2] === " " || line[2] === "\t")) {
+      const [u, v] = line.slice(3).trim().split(/\s+/).map(Number);
+      if (![u, v].every((c) => Number.isFinite(Math.fround(c)))) throw new Error("The file has a place in the texture that is not two numbers.");
+      listed.push(u, 1 - v);
+    }
   }
-  return Float32Array.from(out);
+  if (!faces.length) return Float32Array.from(listed);
+  const out = new Float32Array(vertices * 2).fill(NaN);
+  // Counted from one; a number below nothing counts back from the last.
+  const at = (word, count) => {
+    const n = Number(word);
+    const i = n < 0 ? count + n : n - 1;
+    if (!Number.isInteger(i) || i < 0 || i >= count) throw new Error("The file has a face that names something it does not list.");
+    return i;
+  };
+  for (const face of faces) {
+    for (const word of face) {
+      const [v, vt] = word.split("/");
+      if (!vt) continue;
+      const [to, from] = [at(v, vertices) * 2, at(vt, listed.length / 2) * 2];
+      if (Number.isNaN(out[to])) out.set(listed.slice(from, from + 2), to);
+      else if (Math.abs(out[to] - Math.fround(listed[from])) > 1e-6 || Math.abs(out[to + 1] - Math.fround(listed[from + 1])) > 1e-6) {
+        throw new Error("The file has a vertex with two places in the texture.");
+      }
+    }
+  }
+  return out;
 }
 
 /** The vertices of an OBJ file, in the file's order, as a flat array. */

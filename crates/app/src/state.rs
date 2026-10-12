@@ -319,11 +319,12 @@ impl Work {
             Change::Combine { name, values } => p.combine(&name, &values),
             Change::UvMoves { shape, slider } => {
                 // A vertex's number, then how far across and how far down.
-                let moves: Vec<(u16, [f32; 2])> = data
-                    .as_chunks::<12>()
-                    .0
+                // One that is cut short or names a vertex no shape can have
+                // is refused: left out, it would clear what was there.
+                let (rows, rest) = data.as_chunks::<12>();
+                let moves: Option<Vec<(u16, [f32; 2])>> = rows
                     .iter()
-                    .filter_map(|c| {
+                    .map(|c| {
                         Some((
                             u16::try_from(u32::from_le_bytes([c[0], c[1], c[2], c[3]])).ok()?,
                             [
@@ -333,6 +334,9 @@ impl Work {
                         ))
                     })
                     .collect();
+                let Some(moves) = moves.filter(|_| rest.is_empty()) else {
+                    return Err("The texture places could not be read.".into());
+                };
                 p.set_uv_moves(&shape, &slider, &moves)
             }
             Change::Conversion { name, values } => p.conversion(&name, &values),

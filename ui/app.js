@@ -217,6 +217,18 @@ function remaining(s, values) {
   return kept.subarray(0, n);
 }
 
+/**
+ * The sliders at rest, for when what they did has been taken into something
+ * else: one that moves vertices where it does nothing, which for an inverted
+ * one is in full. One that removes or moves the texture stays as it is.
+ */
+function rested(values) {
+  return values.map((v, i) => {
+    const sl = cur().sliders[i];
+    return sl.zap || sl.uv ? v : sl.invert ? 100 : 0;
+  });
+}
+
 /** Move every shape to where the sliders put it, and show it. */
 function reshape() {
   const values = state.mode === "studio" ? state.at : state.heavy ? state.big : state.small;
@@ -266,7 +278,7 @@ function reshape() {
     view.move(i, s.now, s.normals);
   });
   // Bent by a bone, the shapes are shown bent: what they are is not changed.
-  if (state.tool === "pose") pose();
+  if (bending) pose();
 }
 
 function presetValues(set, preset) {
@@ -1665,7 +1677,7 @@ function studioSliders() {
                             (name) => {
                               const [work] = core.ask({ op: "change", change: { do: "combine", name, values: state.at } });
                               // The others go back to nothing and the new one stands in full: the outfit looks as it did.
-                              state.at = state.at.map((v, i) => (cur().sliders[i].zap ? v : 0));
+                              state.at = rested(state.at);
                               taken(work);
                               state.at[work.sliders.findIndex((sl) => sl.name === name.trim())] = 100;
                               reshape();
@@ -1680,7 +1692,7 @@ function studioSliders() {
                             (name) => {
                               // What is shown becomes the base, and the new slider goes back to what was.
                               const [work] = core.ask({ op: "change", change: { do: "conversion", name, values: state.at } });
-                              state.at = state.at.map((v, i) => (cur().sliders[i].zap ? v : 0));
+                              state.at = rested(state.at);
                               taken(work);
                               reshape();
                               render();
@@ -1760,17 +1772,10 @@ function brushing(what, ray) {
     if (!stroke) view.reach(null);
     return false;
   }
+  // Let go: the stroke ends as what it began as, whatever is in hand by now.
+  if (what === "up") return finish();
   if (state.tool === "place") {
     // The whole shape, dragged across the view: taken hold of where the pointer is on it.
-    if (what === "up") {
-      const held = stroke?.tool === "place" ? stroke : null;
-      stroke = null;
-      if (!held) return false;
-      s.now.set(held.from);
-      if (held.by.some((c) => Math.abs(c) > 1e-4)) attempt({ do: "transform", shape: s.name, by: held.by, scale: 1, turn: [0, 0, 0] });
-      else redraw(s);
-      return true;
-    }
     if (what === "drag" && stroke?.tool === "place") {
       const { origin, dir, back } = ray;
       const along = (k) => stroke.at[k] - origin[k];
@@ -1786,10 +1791,11 @@ function brushing(what, ray) {
     if (what !== "down" || !state.work || s.reference) return false;
     const held = brush.hit(ray.origin, ray.dir, s.now, s.shown);
     if (!held) return false;
-    stroke = { tool: "place", at: held.point, from: new Float32Array(s.now), by: [0, 0, 0] };
+    stroke = { tool: "place", shape: s, at: held.point, from: new Float32Array(s.now), by: [0, 0, 0] };
     return true;
   }
-  if (what === "up") return endStroke();
+  // A shape still held by its drag is not brushed.
+  if (stroke?.tool === "place") return false;
   const r = radius();
   if (what === "drag" && stroke?.tool === "move") {
     // The middle of the brush follows the pointer, across the view.
@@ -1982,6 +1988,19 @@ function near(s) {
 function redraw(s) {
   shade(s.now, s.shown, s.weld, s.normals, s.sum);
   view.move(state.picked, s.now, s.normals);
+  return true;
+}
+
+/** Whatever stroke is under way is over: a held shape is put down, a brush stroke becomes a change. */
+function finish() {
+  if (stroke?.tool !== "place") return endStroke();
+  const held = stroke;
+  stroke = null;
+  const s = held.shape;
+  s.now.set(held.from);
+  if (state.shapes[state.picked] !== s) return false;
+  if (held.by.some((c) => Math.abs(c) > 1e-4)) attempt({ do: "transform", shape: s.name, by: held.by, scale: 1, turn: [0, 0, 0] });
+  else redraw(s);
   return true;
 }
 
@@ -2533,6 +2552,8 @@ function lens(anchor) {
 
 /** Take a brush in hand, or with null put it down. */
 function hold(tool) {
+  // A stroke under way ends with the brush it began with.
+  if (stroke) finish();
   const posed = state.tool === "pose";
   state.tool = tool;
   // The weight brush paints one bone, and a pose turns one: the list shows which.
@@ -3237,6 +3258,7 @@ async function importUvs(sl, sh) {
         if (Number.isNaN(to[p * 2])) to.set(m.uvs.subarray(v * 2, v * 2 + 2), p * 2);
       });
     } else to = obj.uvs(new TextDecoder().decode(picked.bytes));
+    if (to.some(Number.isNaN)) throw new Error(`${picked.name} leaves some of its vertices without a place in the texture.`);
     if (to.length !== count * 2 || sh.uvs.length !== count * 2) {
       const places = (n) => `${n.toLocaleString()} ${n === 1 ? "place" : "places"}`;
       throw new Error(`${picked.name} has ${places(to.length / 2)} in the texture, and ${sh.name} ${places(sh.uvs.length / 2)}.`);
