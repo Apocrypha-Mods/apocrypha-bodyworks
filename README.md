@@ -60,8 +60,9 @@ and writes back, 298 sets build (the last names a mesh its package does not
 have), and one project file shipped broken (a set closed twice) is refused
 as it is not XML. Its heads' parts (brows, eyes) showed two faults since
 mended: a part of a head left unreadable when vertices were taken out of
-it, and changes that give one other vertices altogether, which are now
-refused for a part of a head rather than leaving it out of step.
+it, and changes that give one other vertices altogether, which left its
+places out of step with the rest of each vertex (they are kept apart) and
+now take them along. Two parts of a head are not merged.
 
 ### Fallout 4
 

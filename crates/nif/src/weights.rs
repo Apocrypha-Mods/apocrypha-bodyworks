@@ -1193,9 +1193,56 @@ pub fn rebuild(
     like: Option<usize>,
 ) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
-    if nif.kind_of(block) == "BSDynamicTriShape" {
-        return unsupported("a face part's vertices and triangles are not changed here");
+    if nif.kind_of(block) != "BSDynamicTriShape" {
+        return rebuild_plain(nif, block, vertex_data, parts, skin, like);
     }
+    // A face part: each vertex's place goes back after the shape, and the
+    // rest of it to the skin. Worked out on a copy, so one that cannot be
+    // finished is left as it was.
+    let (_, layout, _) = packed_plain(nif, block)?;
+    let Some(whole) = layout.with_place_first() else {
+        return unsupported("the face part does not keep its places as others were found to");
+    };
+    let count = vertex_data.len() / whole.stride;
+    if !vertex_data.len().is_multiple_of(whole.stride) || count == 0 || count > u16::MAX as usize {
+        return unsupported("that is not a number of vertices one shape can hold");
+    }
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let Some(had) = shape
+        .rest
+        .get(..4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+        .filter(|size| shape.rest.len() >= 4 + size)
+    else {
+        return unsupported("the face part does not keep its places as others were found to");
+    };
+    let mut places = Vec::with_capacity(count * 16);
+    let mut others = Vec::with_capacity(count * layout.stride);
+    for row in vertex_data.chunks_exact(whole.stride) {
+        places.extend_from_slice(&row[..16]);
+        others.extend_from_slice(&row[16..]);
+    }
+    let mut rest = (places.len() as u32).to_le_bytes().to_vec();
+    rest.extend(places);
+    rest.extend_from_slice(&shape.rest[4 + had..]);
+    shape.rest = rest;
+    shape.vertex_count = count as u16;
+    let mut staged = nif.clone();
+    staged.blocks[block].data = shape.write(stream);
+    rebuild_plain(&mut staged, block, others, parts, skin, like)?;
+    *nif = staged;
+    Ok(())
+}
+
+fn rebuild_plain(
+    nif: &mut Nif,
+    block: usize,
+    vertex_data: Vec<u8>,
+    parts: Vec<Vec<[u16; 3]>>,
+    skin: &Skin,
+    like: Option<usize>,
+) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
     if let Some(at) = fo4(nif, block)? {
         // Fallout 4: vertices and triangles in the shape itself, the
         // triangles laid down group after group for its segments, and
@@ -1434,12 +1481,39 @@ pub type Packed = (Vec<u8>, Layout, Vec<Vec<[u16; 3]>>);
 /// by part: what [`rebuild`] takes back.
 pub fn packed(nif: &Nif, block: usize) -> Result<Packed, NifError> {
     let stream = nif.header.stream.version;
-    // A face part keeps its places after the shape, apart from the rest of
-    // each vertex: giving it other vertices is not done here, and would
-    // leave the two out of step.
-    if nif.kind_of(block) == "BSDynamicTriShape" {
-        return unsupported("a face part's vertices and triangles are not changed here");
+    if nif.kind_of(block) != "BSDynamicTriShape" {
+        return packed_plain(nif, block);
     }
+    // A face part keeps its places after the shape and the rest of each
+    // vertex in its skin: here the two are one, the place first.
+    let (rest, layout, parts) = packed_plain(nif, block)?;
+    let shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let stride = layout.stride.max(1);
+    let count = rest.len() / stride;
+    let places = shape
+        .rest
+        .get(..4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+        .filter(|size| *size == count * 16)
+        .and_then(|size| shape.rest.get(4..4 + size));
+    let (Some(places), Some(whole)) = (places, layout.with_place_first()) else {
+        return unsupported("the face part does not keep its places as others were found to");
+    };
+    let mut data = Vec::with_capacity(count * whole.stride);
+    for (place, row) in places
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .zip(rest.chunks_exact(stride))
+    {
+        data.extend_from_slice(place);
+        data.extend_from_slice(row);
+    }
+    Ok((data, whole, parts))
+}
+
+fn packed_plain(nif: &Nif, block: usize) -> Result<Packed, NifError> {
+    let stream = nif.header.stream.version;
     if fo4(nif, block)?.is_some() {
         // Fallout 4: the vertices are the shape's own, and its triangles
         // are dealt into the groups its segments make of them.

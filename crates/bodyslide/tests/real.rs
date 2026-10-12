@@ -2219,10 +2219,33 @@ fn a_face_part_loses_vertices_and_still_reads() {
     assert_eq!(now.positions.len(), was.positions.len() - half.len());
     assert_eq!(now.positions[..], was.positions[half.len()..]);
     assert_eq!(now.uvs.len(), now.positions.len());
-    // What would give it other vertices altogether is refused, and leaves it be.
+    // Refined: its places, kept apart from the rest of each vertex, are
+    // refined with them. The vertices it had are where they were, each new
+    // one halfway between two of them, and every triangle made four.
+    let added = project.refine(&name, &[]).unwrap();
+    let nif = Nif::read(&project.nif.write()).unwrap();
+    let fine = mesh::read(&nif, mesh::shapes(&nif)[0]).unwrap();
+    assert_eq!(fine.positions.len(), now.positions.len() + added);
+    assert_eq!(fine.triangles.len(), now.triangles.len() * 4);
+    assert_eq!(fine.positions[..now.positions.len()], now.positions[..]);
+    assert_eq!(fine.uvs.len(), fine.positions.len());
+    let [a, m1, m2] = fine.triangles[0];
+    let [_, b, c] = now.triangles[0];
+    let mid = |p: [f32; 3], q: [f32; 3]| [0, 1, 2].map(|k| (p[k] + q[k]) / 2.0);
+    let near = |p: [f32; 3], q: [f32; 3]| (0..3).all(|k| (p[k] - q[k]).abs() < 1e-4);
+    assert_eq!(a, now.triangles[0][0]);
+    assert!(near(
+        fine.positions[m1 as usize],
+        mid(now.positions[a as usize], now.positions[b as usize])
+    ));
+    assert!(near(
+        fine.positions[m2 as usize],
+        mid(now.positions[a as usize], now.positions[c as usize])
+    ));
+    // Two of them are still not made one.
+    project.duplicate_shape(&name, "Copy").unwrap();
     let before = project.nif.write();
-    assert!(project.refine(&name, &[]).is_err());
-    assert!(project.weld(&name).is_err());
+    assert!(project.merge_shapes(&name, "Copy").is_err());
     assert_eq!(project.nif.write(), before);
 }
 

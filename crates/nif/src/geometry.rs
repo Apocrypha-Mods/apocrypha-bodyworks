@@ -140,6 +140,28 @@ impl Layout {
         self.attributes & a != 0
     }
 
+    /// The layout of the same vertex with a place put before the rest of
+    /// it: four floats, as a face part keeps them after its shape. For
+    /// working on such a part's vertices whole. Nothing for a layout that
+    /// has a place already.
+    pub fn with_place_first(&self) -> Option<Layout> {
+        if self.position.is_some() {
+            return None;
+        }
+        let after = |at: Option<usize>| at.map(|a| a + 16);
+        Some(Layout {
+            stride: self.stride + 16,
+            attributes: self.attributes | attr::POSITION,
+            full_precision: true,
+            position: Some(0),
+            uv: after(self.uv),
+            normal: after(self.normal),
+            tangent: after(self.tangent),
+            color: after(self.color),
+            skin: after(self.skin),
+        })
+    }
+
     /// The description of the same vertex following no bones, and where in
     /// its bytes what it followed was (twelve of them). Only for the
     /// descriptions real files were found to pair this way.
