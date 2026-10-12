@@ -335,3 +335,16 @@ fn a_real_shapes_colours_are_read_and_one_is_changed() {
     }
     eprintln!("{seen} shapes with colours");
 }
+
+#[test]
+fn a_number_halfway_between_two_half_floats_goes_to_the_even_one() {
+    use crate::geometry::f32_to_half;
+    // Among ordinary numbers, and among the smallest a half float holds.
+    assert_eq!(f32_to_half(1.0 + 1.0 / 2048.0), 0x3c00);
+    assert_eq!(f32_to_half(1.0 + 3.0 / 2048.0), 0x3c02);
+    assert_eq!(f32_to_half(2f32.powi(-25)), 0x0000);
+    assert_eq!(f32_to_half(3.0 * 2f32.powi(-25)), 0x0002);
+    assert_eq!(f32_to_half(5.0 * 2f32.powi(-25)), 0x0002);
+    // A shade past halfway goes up.
+    assert_eq!(f32_to_half(2f32.powi(-25) * 1.0001), 0x0001);
+}

@@ -979,7 +979,22 @@ pub fn merge(nif: &mut Nif, into: usize, from: usize) -> Result<usize, NifError>
         let (sa, sb) = (read(nif, into)?, read(nif, from)?);
         data.extend_from_slice(&theirs);
         let moved = |t: &[u16; 3]| t.map(|v| (v as usize + na) as u16);
-        if parts.len() == their_parts.len() {
+        // Group for group only where the two are segmented alike: as many
+        // groups is not the same groups.
+        let segmented =
+            |nif: &Nif, block: usize| -> Result<Option<crate::segments::Segments>, NifError> {
+                if nif.kind_of(block) != "BSSubIndexTriShape" {
+                    return Ok(None);
+                }
+                let shape = TriShape::read(&nif.blocks[block].data, stream)?;
+                crate::segments::Segments::read(&shape.rest, shape.triangles.len()).map(Some)
+            };
+        let alike = match (segmented(nif, into)?, segmented(nif, from)?) {
+            (Some(a), Some(b)) => a.alike(&b),
+            (None, None) => true,
+            _ => false,
+        };
+        if alike && parts.len() == their_parts.len() {
             for (mine, more) in parts.iter_mut().zip(&their_parts) {
                 mine.extend(more.iter().map(moved));
             }
@@ -998,9 +1013,6 @@ pub fn merge(nif: &mut Nif, into: usize, from: usize) -> Result<usize, NifError>
                 return unsupported("the shape has no group to put the other's triangles in");
             };
             mine.extend(their_parts.iter().flatten().map(moved));
-        }
-        if parts.iter().map(Vec::len).sum::<usize>() > u16::MAX as usize * 3 {
-            return unsupported("together they have more triangles than one shape can hold");
         }
         let mut bones = sa.bones.clone();
         let place: Vec<u16> = sb

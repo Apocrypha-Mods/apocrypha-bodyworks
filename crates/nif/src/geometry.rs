@@ -55,9 +55,14 @@ pub fn f32_to_half(v: f32) -> u16 {
         if exp < -10 {
             return sign;
         }
-        // Too small for a normal half: kept as a denormal, rounded.
+        // Too small for a normal half: kept as a denormal, rounded as the
+        // rest are, one exactly between two going to the even one.
         let m = (frac | 0x0080_0000) >> (1 - exp);
-        return sign | ((m + 0x1000) >> 13) as u16;
+        let (half, rest) = (m >> 13, m & 0x1fff);
+        // What the shift itself dropped counts as more than nothing.
+        let sticky = (frac | 0x0080_0000) & ((1u32 << (1 - exp)) - 1) != 0;
+        let up = rest > 0x1000 || (rest == 0x1000 && (sticky || half & 1 == 1));
+        return sign | (half + up as u32) as u16;
     }
     // Rounded to nearest, and one exactly between two to the even one, as
     // the original's files were found to be; a carry out of the fraction

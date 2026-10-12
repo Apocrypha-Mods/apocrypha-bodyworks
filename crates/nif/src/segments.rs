@@ -59,6 +59,11 @@ impl Segments {
         for _ in 0..count {
             let (start, n, parent) = (r.u32()? as usize, r.u32()? as usize, r.u32()?);
             let inner = r.count(16)?;
+            // No more triangles than the shape has left to give: counted
+            // without letting a number too large come round to a small one.
+            if n > triangles - next {
+                return odd("a segment holds more triangles than there are");
+            }
             if parent != u32::MAX || (n != 0 && start != next * 3) {
                 return odd("a segment does not follow the one before");
             }
@@ -75,7 +80,9 @@ impl Segments {
                     return odd("a run is not its segment's");
                 }
                 let begin = if m == 0 { reached } else { a / 3 };
-                if m != 0 && (a % 3 != 0 || begin < reached || begin + m > next + n) {
+                if m != 0
+                    && (a % 3 != 0 || begin < reached || begin > next + n || m > next + n - begin)
+                {
                     return odd("a run is not inside its segment");
                 }
                 reached = begin + m;
@@ -190,6 +197,19 @@ impl Segments {
         Some(out)
     }
 
+    /// Whether another shape's segments are these over again: as many, with
+    /// as many runs each, and the same said of each after them. Only then
+    /// is a group of one the same thing as that group of the other.
+    pub fn alike(&self, other: &Segments) -> bool {
+        self.after == other.after
+            && self.segments.len() == other.segments.len()
+            && self
+                .segments
+                .iter()
+                .zip(&other.segments)
+                .all(|(a, b)| a.runs.len() == b.runs.len())
+    }
+
     /// A shape's triangles as its groups hold them: one list for each of
     /// [`Segments::groups`].
     pub fn dealt(&self, triangles: &[[u16; 3]]) -> Vec<Vec<[u16; 3]>> {
@@ -207,5 +227,68 @@ impl Segments {
         let counts: Vec<usize> = parts.iter().map(Vec::len).collect();
         let segments = self.regrouped(&counts)?;
         Some((parts.into_iter().flatten().collect(), segments))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Segments;
+
+    fn table(triangles: u32, segments: &[(u32, u32, &[(u32, u32)])]) -> Vec<u8> {
+        let total: usize = segments.iter().map(|s| 1 + s.2.len()).sum();
+        let mut out = Vec::new();
+        for w in [triangles, segments.len() as u32, total as u32] {
+            out.extend(w.to_le_bytes());
+        }
+        let mut place = 0u32;
+        for (start, count, runs) in segments {
+            for w in [*start, *count, u32::MAX, runs.len() as u32] {
+                out.extend(w.to_le_bytes());
+            }
+            for (a, n) in *runs {
+                for w in [*a, *n, place, 0] {
+                    out.extend(w.to_le_bytes());
+                }
+            }
+            place += 1 + runs.len() as u32;
+        }
+        out
+    }
+
+    #[test]
+    fn a_table_reads_and_writes_back() {
+        let bytes = table(5, &[(0, 2, &[]), (6, 3, &[(6, 1), (12, 1)])]);
+        let read = Segments::read(&bytes, 5).unwrap();
+        assert_eq!(read.write(), bytes);
+        assert_eq!(read.groups(), 4);
+        assert_eq!(read.group_of(), vec![0, 0, 1, 3, 2]);
+    }
+
+    #[test]
+    fn counts_that_come_round_are_refused() {
+        // Two segments whose counts add up, past what a number holds, to
+        // the one triangle there is.
+        let wrapped = table(1, &[(0, u32::MAX, &[]), (u32::MAX.wrapping_mul(3), 2, &[])]);
+        assert!(Segments::read(&wrapped, 1).is_err());
+        // A run whose end comes round to before its start.
+        let run = table(2, &[(0, 2, &[(3, u32::MAX)])]);
+        assert!(Segments::read(&run, 2).is_err());
+        // One that says more triangles than the shape has.
+        assert!(Segments::read(&table(1, &[(0, 2, &[])]), 1).is_err());
+    }
+
+    #[test]
+    fn two_tables_are_alike_only_when_segmented_the_same() {
+        let four = Segments::read(
+            &table(4, &[(0, 1, &[]), (3, 1, &[]), (6, 1, &[]), (9, 1, &[])]),
+            4,
+        )
+        .unwrap();
+        let three =
+            Segments::read(&table(4, &[(0, 1, &[]), (3, 2, &[(3, 1)]), (9, 1, &[])]), 4).unwrap();
+        // As many groups, and not the same groups.
+        assert_eq!(four.groups(), three.groups());
+        assert!(!four.alike(&three));
+        assert!(four.alike(&four.clone()));
     }
 }
