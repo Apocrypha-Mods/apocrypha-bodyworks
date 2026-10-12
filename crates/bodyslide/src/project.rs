@@ -1308,6 +1308,35 @@ impl Project {
         done.map_err(|e| Error::Invalid(e.to_string()))
     }
 
+    /// Part a shape from its bones: it follows none, and is as a shape that
+    /// never did.
+    pub fn remove_skinning(&mut self, shape: &str) -> Result<(), Error> {
+        self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let before = self.nif.clone();
+        let was = mesh::read(&self.nif, block).map_err(|e| Error::Invalid(e.to_string()))?;
+        let done = weights::unskin(&mut self.nif, block).and_then(|()| {
+            // Read back as a check: the same vertices, and no bones.
+            let at = mesh::shapes(&self.nif)
+                .into_iter()
+                .find(|at| mesh::name(&self.nif, *at).as_deref() == Some(was.name.as_str()));
+            let now = at.map(|at| mesh::read(&self.nif, at)).transpose()?;
+            if now.is_some_and(|n| n.positions == was.positions && n.uvs == was.uvs && !n.skinned) {
+                Ok(())
+            } else {
+                Err(apoc_nif::NifError::Unsupported(
+                    "the shape could not be parted from its bones".into(),
+                ))
+            }
+        });
+        if done.is_err() {
+            self.nif = before;
+        }
+        done.map_err(|e| Error::Invalid(e.to_string()))
+    }
+
     /// Give a shape's vertices colours to carry, all white and solid, where
     /// they carry none.
     pub fn add_colors(&mut self, shape: &str) -> Result<(), Error> {

@@ -70,7 +70,7 @@ pub struct Look {
 /// Where in a lighting shader's kept bytes each number of a [`Look`] is.
 const LOOK_BYTES: usize = 48;
 
-fn shader_of(nif: &Nif, block: usize) -> Option<usize> {
+pub(crate) fn shader_of(nif: &Nif, block: usize) -> Option<usize> {
     let stream = nif.header.stream.version;
     // The layout is the one Skyrim and Special Edition write.
     if !(83..=100).contains(&stream) {

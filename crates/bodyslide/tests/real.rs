@@ -1702,6 +1702,22 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
         assert_eq!(tinted.nif.write(), again.nif.write());
     }
 
+    // Parted from its bones: the shape as it was but for them, built as it
+    // was, and the file without its skin.
+    let mut loose = project.clone();
+    loose.remove_skinning("Bra").unwrap();
+    let at = mesh::shapes(&loose.nif)
+        .into_iter()
+        .find(|at| mesh::name(&loose.nif, *at).as_deref() == Some("Bra"))
+        .unwrap();
+    let now = mesh::read(&loose.nif, at).unwrap();
+    assert!(!now.skinned);
+    assert_eq!((&now.positions, &now.uvs), (&was.positions, &was.uvs));
+    assert_eq!(now.triangles.len(), was.triangles.len());
+    assert_eq!(loose.nif.blocks.len(), project.nif.blocks.len() - 3);
+    assert!(loose.remove_skinning("Bra").is_err());
+    assert_eq!(built(&loose, "Bra").positions, was_built.positions);
+
     // A bone made up by hand: once, and where it was put.
     let mut boned = project.clone();
     boned

@@ -223,6 +223,7 @@ impl Work {
             }
             Change::Textures { shape, textures } => p.set_textures(&shape, &textures),
             Change::AddColours { shape } => p.add_colors(&shape),
+            Change::RemoveSkinning { shape } => p.remove_skinning(&shape),
             Change::Look {
                 shape,
                 glow,
@@ -542,6 +543,10 @@ enum Change {
         gloss: f32,
         shine: [f32; 3],
         shine_strength: f32,
+    },
+    /// Part a shape from its bones.
+    RemoveSkinning {
+        shape: String,
     },
     /// Give a shape's vertices colours to carry, where they carry none.
     AddColours {

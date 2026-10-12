@@ -221,6 +221,45 @@ fn main() {
                 note("give colours", done);
             }
         }
+        // Parted from its bones: the same vertices and triangles, read back
+        // as a shape that follows none, and every change still taken.
+        if let Some(m) = block
+            .and_then(|b| mesh::read(&project.nif, b).ok())
+            .filter(|m| m.skinned)
+        {
+            let mut p = project.clone();
+            let done = p.remove_skinning(&shape).map_err(said);
+            if done.is_ok() {
+                let nif = Nif::read(&p.nif.write()).unwrap();
+                let now = mesh::shapes(&nif)
+                    .into_iter()
+                    .find(|at| mesh::name(&nif, *at).as_deref() == Some(shape.as_str()))
+                    .and_then(|a| mesh::read(&nif, a).ok());
+                let mut tris = (
+                    m.triangles.clone(),
+                    now.as_ref()
+                        .map(|n| n.triangles.clone())
+                        .unwrap_or_default(),
+                );
+                tris.0.sort();
+                tris.1.sort();
+                let same = now.is_some_and(|n| {
+                    !n.skinned
+                        && n.positions == m.positions
+                        && n.uvs == m.uvs
+                        && n.normals == m.normals
+                }) && tris.0 == tris.1;
+                note(
+                    "parted from its bones: the rest as it was, read back",
+                    same.then_some(()).ok_or(path.clone()),
+                );
+                note(
+                    "parted, then refined",
+                    p.refine(&shape, &[]).map(drop).map_err(said),
+                );
+            }
+            note("part from its bones", done);
+        }
         let mut p = project.clone();
         note("new slider", p.add_slider("Probe").map_err(said));
         note("save", project.save("Probe").map(drop).map_err(said));

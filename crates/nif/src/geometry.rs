@@ -132,6 +132,20 @@ impl Layout {
         self.attributes & a != 0
     }
 
+    /// The description of the same vertex following no bones, and where in
+    /// its bytes what it followed was (twelve of them). Only for the
+    /// descriptions real files were found to pair this way.
+    pub fn without_skin(desc: u64, stream: u32) -> Option<(u64, usize)> {
+        let to = match desc {
+            0x0005_b000_7065_040a => 0x0001_b000_0065_0407,
+            0x0007_b000_8765_040b => 0x0003_b000_0765_0408,
+            _ => return None,
+        };
+        let at = Layout::of(desc, stream)?.skin?;
+        Layout::of(to, stream)?;
+        Some((to, at))
+    }
+
     /// The description of the same vertex carrying a colour as well, and
     /// where in its bytes the colour goes. Only for the descriptions real
     /// files were found to pair this way (`--example descs`): each is
@@ -388,6 +402,28 @@ impl TriShape {
     }
 
     /// Whether the vertices are here to be read (not in a skin partition).
+    /// Give the shape vertices and triangles to keep in itself, in place of
+    /// whatever it kept: what the file stated about the old ones no longer
+    /// holds, and what the editor keeps for particles (positions and
+    /// triangles again) is dropped, not kept wrong.
+    pub fn hold(
+        &mut self,
+        vertex_desc: u64,
+        vertex_data: Vec<u8>,
+        count: u16,
+        triangles: Vec<[u16; 3]>,
+    ) {
+        self.vertex_desc = vertex_desc;
+        self.vertex_data = vertex_data;
+        self.vertex_count = count;
+        self.triangles = triangles;
+        self.stated_size = None;
+        self.stated_triangles = self.triangles.len() as u32;
+        if let Some(p) = &mut self.particle {
+            *p = 0u32.to_le_bytes().to_vec();
+        }
+    }
+
     pub fn has_vertices(&self) -> bool {
         !self.vertex_data.is_empty()
     }

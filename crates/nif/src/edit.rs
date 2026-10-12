@@ -429,6 +429,32 @@ pub fn remove_shapes(nif: &mut Nif, shapes: &[usize]) -> Result<(), NifError> {
     remove_blocks(nif, &gone)
 }
 
+/// Take out those of `blocks` that nothing left in the file links to, and
+/// what only they kept in, short of nodes.
+pub(crate) fn remove_unlinked(nif: &mut Nif, blocks: &[usize]) -> Result<(), NifError> {
+    let links = links_of(nif)?;
+    let mut gone: BTreeSet<usize> = blocks.iter().copied().collect();
+    loop {
+        let kept: Vec<usize> = gone
+            .iter()
+            .copied()
+            .filter(|g| {
+                links
+                    .iter()
+                    .enumerate()
+                    .any(|(from, to)| !gone.contains(&from) && to.contains(g))
+            })
+            .collect();
+        if kept.is_empty() {
+            break;
+        }
+        for k in kept {
+            gone.remove(&k);
+        }
+    }
+    remove_blocks(nif, &gone)
+}
+
 /// Take vertices out of the shape at `block`: `gone[v]` says vertex `v`
 /// goes. Every triangle with one of them goes too, and so does a part of
 /// the skin left with no triangle. Returns how many triangles the shape

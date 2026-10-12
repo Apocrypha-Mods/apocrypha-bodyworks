@@ -818,9 +818,7 @@ pub fn rebuild(
         {
             return unsupported("a triangle names a vertex the shape would not have");
         }
-        shape.vertex_data = vertex_data;
-        shape.vertex_count = count as u16;
-        shape.triangles = triangles;
+        shape.hold(shape.vertex_desc, vertex_data, count as u16, triangles);
         nif.blocks[block].data = shape.write(stream);
         return Ok(());
     }
@@ -882,6 +880,64 @@ pub fn rebuild(
         nif.blocks[at.partition].data = was_partition;
     }
     done
+}
+
+/// Let the shape at `block` follow no bones: its vertices and triangles
+/// kept in itself as a shape that never followed any keeps them, its skin
+/// taken out of the file, and the switch on its lighting that every shape
+/// following bones was found to have on and none other
+/// (`--example skinflag`) put off. The bones themselves stay.
+pub fn unskin(nif: &mut Nif, block: usize) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    if nif.kind_of(block) != "BSTriShape" {
+        return unsupported("this kind of shape is not parted from its bones");
+    }
+    owned(nif, block)?;
+    let at = blocks(nif, block)?;
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    if shape.has_vertices() {
+        return unsupported("the shape keeps its vertices in a way this cannot change");
+    }
+    let (bytes, layout, parts) = packed(nif, block)?;
+    let partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
+    let Some((desc, skin_at)) = partition
+        .vertex_desc
+        .filter(|d| *d == shape.vertex_desc)
+        .and_then(|d| Layout::without_skin(d, stream))
+    else {
+        return unsupported(
+            "the shape's vertices are laid out a way no shape without bones was found to be",
+        );
+    };
+    let stride = layout.stride.max(1);
+    let count = bytes.len() / stride;
+    let triangles: Vec<[u16; 3]> = parts.into_iter().flatten().collect();
+    if skin_at + 12 > stride || triangles.len() > u16::MAX as usize {
+        return unsupported("the shape has more triangles than one without bones can count");
+    }
+    let mut data = Vec::with_capacity(count * (stride - 12));
+    for row in bytes.chunks_exact(stride) {
+        data.extend_from_slice(&row[..skin_at]);
+        data.extend_from_slice(&row[skin_at + 12..]);
+    }
+    // The switch is the lighting's: no other shape drawn by it may go on
+    // following bones.
+    let lighting = mesh::shader_of(nif, block);
+    if let Some(l) = lighting {
+        let shared = mesh::shapes(nif)
+            .into_iter()
+            .any(|other| other != block && mesh::shader_of(nif, other) == Some(l));
+        if shared {
+            return unsupported("the shape shares its lighting with another");
+        }
+        let mut lit = crate::shader::LightingShader::read(&nif.blocks[l].data, stream)?;
+        lit.flags1 &= !(1 << 1);
+        nif.blocks[l].data = lit.write();
+    }
+    shape.hold(desc, data, count as u16, triangles);
+    shape.skin = -1;
+    nif.blocks[block].data = shape.write(stream);
+    crate::edit::remove_unlinked(nif, &[at.instance, at.data, at.partition])
 }
 
 /// The shape at `block` where it follows no bones and keeps its vertices

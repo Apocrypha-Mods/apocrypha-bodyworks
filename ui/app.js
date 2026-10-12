@@ -1304,6 +1304,7 @@ function studioSide() {
                     state.work && sh.textures.length > 0 && { name: "Textures…", value: "textures" },
                     state.work && sh.look && { name: "Material…", value: "material" },
                     state.work && !sh.reference && !sh.colors.length && { name: "Add colours", value: "addColours" },
+                    state.work && !sh.reference && sh.bones.length > 0 && { name: "Remove skinning", value: "unskin" },
                     state.work && { name: "Flip texture left to right", value: "flipU" },
                     state.work && { name: "Flip texture top to bottom", value: "flipV" },
                     { name: "Export OBJ…", value: "export", rule: true },
@@ -1325,6 +1326,7 @@ function studioSide() {
                     if (what === "transform") return transform(sh);
                     if (what === "material") return material(sh);
                     if (what === "addColours") return attempt({ do: "addColours", shape: sh.name });
+                    if (what === "unskin") return attempt({ do: "removeSkinning", shape: sh.name });
                     if (what === "mirror") return attempt({ do: "mirror", shape: sh.name });
                     if (what === "refine") {
                       // Masked points, and the edges they end, stay as they are.
