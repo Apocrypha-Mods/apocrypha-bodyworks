@@ -62,6 +62,7 @@ const answers = {
   "disk.save": async (a) => { await fetch("/write?path=" + encodeURIComponent("disk/" + a.name), { method: "POST", body: a.bytes }); window.saved = a.name; return { saved: true }; },
   "disk.open": async () => window.toOpen || null,
   "disk.folder": async (a) => { for (const f of a.files) await fetch("/write?path=" + encodeURIComponent("folder/" + f.path), { method: "POST", body: f.bytes }); window.foldered = a.files.map((f) => f.path); return { saved: a.files.length }; },
+  "output.open": async (a) => { window.opened = a.name; return null; },
   "output.remove": async (a) => { const had = window.written || []; const gone = a.paths.filter((p) => had.includes(p)); window.written = had.filter((p) => !gone.includes(p)); window.removed = (window.removed || []).concat(gone); return { removed: gone.length }; },
   "apply.review": async () => { window.reviewed = true; },
 };

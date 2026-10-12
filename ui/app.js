@@ -1129,6 +1129,19 @@ function foot() {
       { type: "button", disabled: !ready, title: "Build into a folder you pick, outside the mods", onclick: buildToFolder },
       "To a folder…",
     ),
+    h(
+      "button.btn.ghost",
+      {
+        type: "button",
+        title: `What is built into ${state.output}`,
+        onclick: () =>
+          host.request("output.open", { name: state.output }).catch((e) => {
+            state.problem = e.message;
+            render();
+          }),
+      },
+      "Open folder",
+    ),
     h("button.btn", { type: "button", disabled: !ready, onclick: several }, "Build several…"),
     state.built !== null && !state.problem
       ? h("button.btn.primary", { type: "button", onclick: () => host.request("apply.review").catch(() => {}) }, "Apply")
