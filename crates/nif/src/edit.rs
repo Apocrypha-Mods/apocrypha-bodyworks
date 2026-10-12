@@ -51,6 +51,8 @@ fn has_no_links(kind: &str) -> bool {
             | "bhkCapsuleShape"
             | "bhkConvexVerticesShape"
             | "bhkCompressedMeshShapeData"
+            // The keys a node is moved by.
+            | "NiTransformData"
     )
 }
 
@@ -80,6 +82,11 @@ fn collision_links(kind: &str, data: &[u8]) -> Option<Vec<usize>> {
             (data.len() == after.checked_add(4)?.checked_add(m.checked_mul(4)?)?)
                 .then(|| (0..n).map(|i| 4 + i * 4).collect())
         }
+        // What moves a node by itself: the next of its kind, 18 bytes of
+        // numbers, the node it moves, and what says how.
+        "NiTransformController" => (data.len() == 30).then(|| vec![0, 22, 26]),
+        // A place, a turn and a scale, then its keys.
+        "NiTransformInterpolator" => (data.len() == 36).then(|| vec![32]),
         // Fallout 4's skin: the skeleton's root, its bone data, how many
         // bones, those, and how many scales with three numbers each.
         "BSSkin::Instance" => {
@@ -138,6 +145,8 @@ pub fn links_known(kind: &str) -> bool {
         || matches!(
             kind,
             "BSSkin::Instance"
+                | "NiTransformController"
+                | "NiTransformInterpolator"
                 | "bhkCollisionObject"
                 | "bhkSPCollisionObject"
                 | "bhkConvexTransformShape"
@@ -385,7 +394,21 @@ pub fn add_text(nif: &mut Nif, block: usize, name: &str, value: &str) -> Result<
     let mut w = Writer::default();
     w.i32(nif.intern(name.as_bytes()));
     w.i32(nif.intern(value.as_bytes()));
-    let at = insert_block(nif, block + 1, "NiStringExtraData", w.out) as i32;
+    // After the block itself; on a node, after what it already carries
+    // (the original's Fallout 4 files have it there, `--example kindsdiff`).
+    let after = if is_node(&kind) {
+        Node::read(&nif.blocks[block].data, stream)?
+            .av
+            .extra_data
+            .iter()
+            .filter_map(|l| usize::try_from(*l).ok())
+            .filter(|l| *l > block && *l < nif.blocks.len())
+            .max()
+            .unwrap_or(block)
+    } else {
+        block
+    };
+    let at = insert_block(nif, after + 1, "NiStringExtraData", w.out) as i32;
     if kind == "NiTriShape" {
         let mut shape = NiTriShape::read(&nif.blocks[block].data, stream)?;
         shape.av.extra_data.push(at);

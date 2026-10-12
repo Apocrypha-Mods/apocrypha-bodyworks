@@ -68,6 +68,21 @@ fn main() {
                 | "bhkCapsuleShape"
                 | "bhkConvexVerticesShape"
                 | "bhkCompressedMeshShapeData" => true,
+                // What moves a node by itself: the next of its kind, then
+                // 18 bytes of numbers, what it moves, and what says how.
+                "NiTransformController" => {
+                    d.len() == 30
+                        && names(word(d, 0), &["Ni", "BS"])
+                        && names(word(d, 22), &["Ni", "BS"])
+                        && names(
+                            word(d, 26),
+                            &["NiTransformInterpolator", "NiBlend", "NiBSpline"],
+                        )
+                }
+                // A place, a turn and a scale (32 bytes), then its keys.
+                "NiTransformInterpolator" => {
+                    d.len() == 36 && names(word(d, 32), &["NiTransformData"])
+                }
                 k if k.starts_with("bhk") => false,
                 _ => continue,
             };

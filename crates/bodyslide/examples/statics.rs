@@ -150,12 +150,19 @@ fn main() {
             note("delete the first shape", done);
         }
         let mut p = project.clone();
-        note(
-            "duplicate and merge",
-            p.duplicate_shape(&shape, "Copy of it")
-                .and_then(|()| p.merge_shapes(&shape, "Copy of it"))
-                .map_err(said),
-        );
+        let merged = p
+            .duplicate_shape(&shape, "Copy of it")
+            .and_then(|()| p.merge_shapes(&shape, "Copy of it"))
+            .map_err(said);
+        if merged.is_ok() {
+            note(
+                "merged: twice the shape, read back",
+                (after(&p) == Some((was.0 * 2, was.1 * 2)))
+                    .then_some(())
+                    .ok_or(path.clone()),
+            );
+        }
+        note("duplicate and merge", merged);
         if let Some(m) = block.and_then(|b| mesh::read(&project.nif, b).ok()) {
             let mut p = project.clone();
             note(

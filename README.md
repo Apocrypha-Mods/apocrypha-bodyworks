@@ -56,18 +56,17 @@ found from.
 
 Held against CBBE for Fallout 4's own shipped meshes (348 sets, the "Curvy"
 option's files), with `TOOLS=data/tools/bodyslide/` for the same examples:
-344 sets build the same shapes, vertices and triangles, and 136 of them are
+344 sets build the same shapes, vertices and triangles, and 176 of them are
 the original's file byte for byte. The rest differ by a few bytes each: a
-handful of vertices with no direction to face, and where the reference to
-the morph file sits among a mesh's other extra data. Building, the preview
+handful of vertices with no direction to face. Building, the preview
 and saving presets work. In the Studio its skins (bones, weights, where
 each bone stands; all 3,253 read and write back as they were,
 `--example skinsame`) and its segments (all 3,195 likewise,
 `--example segback`) are understood, so shapes are refined, welded, cut,
 separated, duplicated, mirrored, made from files, and have weights
 painted and copied, their segments holding every triangle afterwards
-(`--example statics` over 1,643 meshes). Not yet for Fallout 4: merging two
-shapes, giving a shape colours or parting it from its bones, changing its
+(`--example statics` over 1,643 meshes), and two are merged. Not yet for
+Fallout 4: giving a shape colours or parting it from its bones, changing its
 lighting (it is drawn from material files), editing which triangles are in
 which segment, and a bone no shape of the mesh follows yet (nothing in
 these files says where one stands).
@@ -105,8 +104,8 @@ Outfit Studio:
   environment map, glow map, skin), and lighting switches beyond the ten
   most used (its textures, glow, shine, gloss
   and opacity are changed).
-- Meshes that move by themselves or hang together (animation controllers,
-  collision joined by constraints): their shapes are changed in place, but
+- Meshes that hang together or move in the rarer ways (collision joined by
+  constraints, animation other than a node's own moving): their shapes are changed in place, but
   not taken out, copied or merged. Other meshes that follow no bones
   (weapons, clutter) take every change a skinned one does, measured over
   2,160 of the game's own (`--example statics`).

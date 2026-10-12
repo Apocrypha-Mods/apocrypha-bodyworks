@@ -899,6 +899,81 @@ pub fn remove_part(nif: &mut Nif, block: usize, index: usize, into: usize) -> Re
 /// other's now begin.
 pub fn merge(nif: &mut Nif, into: usize, from: usize) -> Result<usize, NifError> {
     let stream = nif.header.stream.version;
+    // Two of Fallout 4's shapes: one's vertices after the other's, each
+    // group of the second's triangles joining the same group of the
+    // first's where they are grouped alike, and the first segment where
+    // they are not; one list of bones, the first's and then any only the
+    // second follows.
+    if fo4(nif, into)?.is_some() && fo4(nif, from)?.is_some() {
+        let (mut data, layout, mut parts) = packed(nif, into)?;
+        let (theirs, their_layout, their_parts) = packed(nif, from)?;
+        if layout != their_layout {
+            return unsupported(
+                "the two shapes keep different things for each vertex, and cannot be one shape",
+            );
+        }
+        let stride = layout.stride.max(1);
+        let (na, nb) = (data.len() / stride, theirs.len() / stride);
+        if na + nb > u16::MAX as usize {
+            return unsupported("together they have more vertices than one shape can number");
+        }
+        let (sa, sb) = (read(nif, into)?, read(nif, from)?);
+        data.extend_from_slice(&theirs);
+        let moved = |t: &[u16; 3]| t.map(|v| (v as usize + na) as u16);
+        if parts.len() == their_parts.len() {
+            for (mine, more) in parts.iter_mut().zip(&their_parts) {
+                mine.extend(more.iter().map(moved));
+            }
+        } else {
+            // In the first segment, in none of its runs.
+            let first = if nif.kind_of(into) == "BSSubIndexTriShape" {
+                let shape = TriShape::read(&nif.blocks[into].data, stream)?;
+                crate::segments::Segments::read(&shape.rest, shape.triangles.len())?
+                    .segments
+                    .first()
+                    .map_or(0, |s| s.runs.len())
+            } else {
+                0
+            };
+            let Some(mine) = parts.get_mut(first) else {
+                return unsupported("the shape has no group to put the other's triangles in");
+            };
+            mine.extend(their_parts.iter().flatten().map(moved));
+        }
+        if parts.iter().map(Vec::len).sum::<usize>() > u16::MAX as usize * 3 {
+            return unsupported("together they have more triangles than one shape can hold");
+        }
+        let mut bones = sa.bones.clone();
+        let place: Vec<u16> = sb
+            .bones
+            .iter()
+            .map(|name| {
+                bones.iter().position(|b| b == name).unwrap_or_else(|| {
+                    bones.push(name.clone());
+                    bones.len() - 1
+                }) as u16
+            })
+            .collect();
+        let mut vertices = sa.vertices;
+        vertices.extend(sb.vertices.iter().map(|slots| {
+            slots.map(|(bone, w)| {
+                if w > 0.0 {
+                    (place[bone as usize], w)
+                } else {
+                    (0, 0.0)
+                }
+            })
+        }));
+        rebuild(
+            nif,
+            into,
+            data,
+            parts,
+            &Skin { bones, vertices },
+            Some(from),
+        )?;
+        return Ok(na);
+    }
     // Two shapes that follow no bones: one's vertices and triangles after
     // the other's, in the shape itself.
     if let (Some(mut a), Some(b)) = (bare(nif, into)?, bare(nif, from)?) {
