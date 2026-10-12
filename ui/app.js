@@ -176,6 +176,9 @@ async function readCatalog() {
     if (done % 24 === 0) busy(`Reading ${done} of ${projects.length}`);
   });
   [state.catalog] = core.ask({ op: "load" });
+  // A file of the mods' that could not be read is said, not passed over: what it held is not offered.
+  const unread = (state.catalog.problems || []).map((p) => (state.paths.get(p.split(": ")[0]) || p.split(": ")[0]).split("/").pop());
+  state.unread = !unread.length ? null : unread.length === 1 ? `${unread[0]} could not be read.` : `${unread.length} files could not be read (${unread.slice(0, 2).join(", ")}${unread.length > 2 ? "…" : ""}).`;
 }
 
 // ── Sliders and the shape ──────────────────────────────────────────────────
@@ -1027,7 +1030,9 @@ function foot() {
   el.replaceChildren(
     state.problem
       ? h("span.sub.warn.cut", null, state.problem)
-      : state.built !== null
+      : state.unread && state.built === null
+        ? h("span.sub.warn.cut", null, state.unread)
+        : state.built !== null
         ? h("span.sub.cut", null, `${state.built} ${state.built === 1 ? "file" : "files"} built into ${state.output}`)
         : state.note
           ? h("span.sub.cut", null, state.note)
