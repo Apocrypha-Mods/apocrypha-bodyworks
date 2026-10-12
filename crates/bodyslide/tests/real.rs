@@ -2114,6 +2114,62 @@ fn a_fallout_4_shape_keeps_its_segments_and_skin_through_changes() {
     assert_eq!(kept_skin, was_skin);
     assert!(moved.move_to_part(name, &marked, None, 32).is_err());
 
+    // How it takes light: Fallout 4 keeps its numbers in other places, and
+    // a change to them changes its lighting and nothing else.
+    let lit = |p: &Project| {
+        let at = mesh::shapes(&p.nif)
+            .into_iter()
+            .find(|at| mesh::name(&p.nif, *at).as_deref() == Some(name))
+            .unwrap();
+        mesh::look(&p.nif, at).unwrap()
+    };
+    let mut look = lit(&project);
+    assert!(look.smooth && (0.0..=1.0).contains(&look.gloss) && look.alpha == 1.0);
+    look.gloss = 0.25;
+    look.glow = [0.5, 0.25, 1.0];
+    let mut shiny = project.clone();
+    shiny.set_look(name, &look).unwrap();
+    assert_eq!(lit(&shiny), look);
+    let changed = shiny
+        .nif
+        .blocks
+        .iter()
+        .zip(&project.nif.blocks)
+        .filter(|(a, b)| a.data != b.data)
+        .count();
+    assert_eq!(changed, 1);
+    assert!(shiny
+        .set_look(
+            name,
+            &mesh::Look {
+                gloss: 30.0,
+                ..look
+            }
+        )
+        .is_err());
+    assert!(shiny
+        .set_look(
+            name,
+            &mesh::Look {
+                kind: Some(5),
+                ..look
+            }
+        )
+        .is_err());
+
+    // Colours for one that carries none: white, the rest as it was.
+    let mut tinted = project.clone();
+    tinted.add_colors(name).unwrap();
+    let (now, now_skin, now_segments) = read(&tinted);
+    assert_eq!(
+        (&now.positions, &now.uvs, &now.triangles),
+        (&was.positions, &was.uvs, &was.triangles)
+    );
+    assert_eq!(
+        (now_skin, now_segments),
+        (was_skin.clone(), was_segments.clone())
+    );
+
     // A weight painted, and every other vertex as the file had it.
     let mut painted = project.clone();
     painted

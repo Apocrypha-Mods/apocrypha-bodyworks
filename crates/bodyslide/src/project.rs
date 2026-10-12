@@ -1165,6 +1165,9 @@ impl Project {
                 "Colours run from 0 to 1; opacity, strengths and gloss from 0 to 1000.",
             );
         }
+        if look.smooth && look.gloss > 1.0 {
+            return invalid("Smoothness runs from 0 to 1.");
+        }
         mesh::set_look(&mut self.nif, block, look).map_err(|e| Error::Invalid(e.to_string()))
     }
 

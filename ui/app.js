@@ -2709,7 +2709,8 @@ function material(sh) {
   const look = sh.look;
   const [glow, glowStrength] = [colour("Glow", look.glow), number("Glow strength", look.glowStrength)];
   const [shine, shineStrength] = [colour("Shine", look.shine), number("Shine strength", look.shineStrength)];
-  const [gloss, alpha] = [number("Gloss", look.gloss), number("Opacity, percent", look.alpha, 100)];
+  // Fallout 4 has a smoothness from nothing to all where Skyrim has a gloss.
+  const [gloss, alpha] = [look.smooth ? number("Smoothness, percent", look.gloss, 100) : number("Gloss", look.gloss), number("Opacity, percent", look.alpha, 100)];
   // The switches worth a person's while: which set each is in, and which of its thirty-two.
   const SWITCHES = [
     ["Two-sided", 1, 4],
@@ -2731,7 +2732,7 @@ function material(sh) {
     ["Skin", 5],
   ];
   let kind = look.kind;
-  const kinds = KINDS.some(([, n]) => n === look.kind)
+  const kinds = !look.smooth && KINDS.some(([, n]) => n === look.kind)
     ? h(
         "div.seg",
         { role: "radiogroup", "aria-label": "Kind" },
@@ -2760,12 +2761,14 @@ function material(sh) {
   go.addEventListener("click", () => {
     try {
       const switches = [...look.switches];
-      for (const [, on, set, bit] of SWITCHES) switches[set] = (on() ? switches[set] | (1 << bit) : switches[set] & ~(1 << bit)) >>> 0;
+      // Fallout 4's switches mean other things, and are left as they are.
+      if (!look.smooth) for (const [, on, set, bit] of SWITCHES) switches[set] = (on() ? switches[set] | (1 << bit) : switches[set] & ~(1 << bit)) >>> 0;
       const kept = (input, was) => (input.value === hex(was) ? was : rgb(input.value));
       const amount = ([, input], was, by = 1) => {
         if (input.value === shown(was, by)) return was;
         const n = Number(input.value);
-        if (input.value.trim() === "" || !(n >= 0 && n <= 1000 * by)) throw new Error(`${input.getAttribute("aria-label").replace(", percent", "")} is 0 to ${(1000 * by).toLocaleString()}.`);
+        const most = look.smooth && input === gloss[1] ? 100 : 1000 * by;
+        if (input.value.trim() === "" || !(n >= 0 && n <= most)) throw new Error(`${input.getAttribute("aria-label").replace(", percent", "")} is 0 to ${most.toLocaleString()}.`);
         return n / by;
       };
       change({
@@ -2774,7 +2777,8 @@ function material(sh) {
         glow: kept(glow[1], look.glow),
         glowStrength: amount(glowStrength, look.glowStrength),
         alpha: amount(alpha, look.alpha, 100),
-        gloss: amount(gloss, look.gloss),
+        gloss: amount(gloss, look.gloss, look.smooth ? 100 : 1),
+        smooth: Boolean(look.smooth),
         shine: kept(shine[1], look.shine),
         shineStrength: amount(shineStrength, look.shineStrength),
         switches,
@@ -2788,7 +2792,7 @@ function material(sh) {
   const pair = (a, b) => h("div.pair", null, [a[0], b[0]]);
   // What else is drawn by the same lighting changes with it.
   const also = sh.lookShared?.length ? [h("span.sub", null, `Shared with ${sh.lookShared.join(", ")}`)] : [];
-  const el = sheet(sh.name, null, [...(kinds ? [kinds] : []), pair(glow, glowStrength), pair(shine, shineStrength), pair(gloss, alpha), h("div.pair", null, SWITCHES.map((sw) => sw[0])), ...also], [
+  const el = sheet(sh.name, null, [...(kinds ? [kinds] : []), pair(glow, glowStrength), pair(shine, shineStrength), pair(gloss, alpha), ...(look.smooth ? [] : [h("div.pair", null, SWITCHES.map((sw) => sw[0]))]), ...also], [
     said,
     h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
     go,

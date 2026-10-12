@@ -67,11 +67,14 @@ each bone stands; all 3,253 read and write back as they were,
 `--example segback`) are understood, so shapes are refined, welded, cut,
 separated, duplicated, mirrored, made from files, and have weights
 painted and copied, their segments holding every triangle afterwards
-(`--example statics` over 1,643 meshes), and two are merged. Not yet for
-Fallout 4: giving a shape colours or parting it from its bones, changing its
-lighting (it is drawn from material files), adding or removing a segment
-(triangles are moved between those a shape has), and a bone no shape of the mesh follows yet (nothing in
-these files says where one stands).
+(`--example statics` over 1,643 meshes), two are merged, a shape with no
+colours is given them, and its glow, shine, smoothness and opacity are
+changed (the numbers a mesh keeps; a material file it names has its own,
+which this does not read). Not yet for Fallout 4: parting a shape from its
+bones (two unskinned shapes are too few to learn the rule from), the kind
+and switches of its lighting, adding or removing a segment (triangles are
+moved between those a shape has), and a bone no shape of the mesh follows
+yet (nothing in these files says where one stands).
 
 ## How fast it is
 

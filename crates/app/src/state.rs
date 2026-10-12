@@ -234,6 +234,7 @@ impl Work {
                 shine_strength,
                 switches,
                 kind,
+                smooth,
             } => p.set_look(
                 &shape,
                 &mesh::Look {
@@ -245,6 +246,7 @@ impl Work {
                     shine_strength,
                     switches,
                     kind,
+                    smooth: smooth.unwrap_or(false),
                 },
             ),
             Change::Separate { shape, to } => {
@@ -553,6 +555,9 @@ enum Change {
         /// Which kind of lighting, by the number files give it.
         #[serde(default)]
         kind: Option<u32>,
+        /// Whether it is Fallout 4's, as the look read of it said.
+        #[serde(default)]
+        smooth: Option<bool>,
     },
     /// Part a shape from its bones.
     RemoveSkinning {
@@ -1168,7 +1173,7 @@ impl State {
                     .collect::<Vec<_>>(),
                 "look": mesh::look(&nif, m.block).map(|l| json!({
                     "glow": l.glow, "glowStrength": l.glow_strength, "alpha": l.alpha,
-                    "gloss": l.gloss, "shine": l.shine, "shineStrength": l.shine_strength, "switches": l.switches, "kind": l.kind,
+                    "gloss": l.gloss, "shine": l.shine, "shineStrength": l.shine_strength, "switches": l.switches, "kind": l.kind, "smooth": l.smooth,
                 })),
                 "sliders": sliders,
                 "zaps": zaps,

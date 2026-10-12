@@ -165,6 +165,9 @@ impl Layout {
             0x0005_b000_7065_040a => 0x0007_b000_8765_040b,
             // Place and texture with bones, lit from a normal map.
             0x0004_3000_5000_0408 => 0x0006_3000_6500_0409,
+            // Fallout 4's, its numbers half the size: place, texture,
+            // normal and tangent with bones.
+            0x0005_b000_5043_0208 => 0x0007_b000_6543_0209,
             _ => return None,
         };
         let at = Layout::of(to, stream)?.color?;

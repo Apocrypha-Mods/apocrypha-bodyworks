@@ -70,6 +70,9 @@ pub struct Look {
     /// Which kind of lighting it is, by the number files give it; nothing
     /// where the file does not say.
     pub kind: Option<u32>,
+    /// Fallout 4's: its gloss is a smoothness from nothing to one, and its
+    /// switches and kinds are its own, not changed here.
+    pub smooth: bool,
 }
 
 /// The switches that are not a look's to change. Two say what the shape
@@ -126,43 +129,84 @@ pub(crate) fn shader_of(nif: &Nif, block: usize) -> Option<usize> {
 /// The other shapes of the file drawn by the same lighting as the shape at
 /// `block`: a change to how it takes light is a change to theirs.
 pub fn look_shared(nif: &Nif, block: usize) -> Vec<usize> {
-    let Some(at) = shader_of(nif, block) else {
+    let Some((at, _)) = lighting_of(nif, block) else {
         return Vec::new();
     };
     shapes(nif)
         .into_iter()
-        .filter(|other| *other != block && shader_of(nif, *other) == Some(at))
+        .filter(|other| *other != block && lighting_of(nif, *other).map(|l| l.0) == Some(at))
         .collect()
 }
 
 /// How the shape at `block` takes light; nothing for one drawn another way.
 pub fn look(nif: &Nif, block: usize) -> Option<Look> {
-    let at = shader_of(nif, block)?;
+    let (at, places) = lighting_of(nif, block)?;
     let s = LightingShader::read(&nif.blocks[at].data, nif.header.stream.version).ok()?;
-    if s.rest.len() < LOOK_BYTES {
+    if s.rest.len() < places.bytes {
         return None;
     }
     let f = |i: usize| f32::from_le_bytes([0, 1, 2, 3].map(|k| s.rest[i * 4 + k]));
     Some(Look {
         glow: [f(0), f(1), f(2)],
         glow_strength: f(3),
-        alpha: f(5),
-        gloss: f(7),
-        shine: [f(8), f(9), f(10)],
-        shine_strength: f(11),
+        alpha: f(places.alpha),
+        gloss: f(places.gloss),
+        shine: [f(places.shine), f(places.shine + 1), f(places.shine + 2)],
+        shine_strength: f(places.shine + 3),
         switches: [s.flags1, s.flags2],
         kind: s.shader_type,
+        smooth: places.smooth,
     })
+}
+
+/// Where a game's lighting keeps each number of a [`Look`], counted in
+/// numbers after its link to its textures; its glow and how strong come
+/// first in both.
+struct LookPlaces {
+    alpha: usize,
+    gloss: usize,
+    shine: usize,
+    bytes: usize,
+    smooth: bool,
+}
+
+/// The lighting of the shape at `block` and where it keeps its numbers:
+/// Skyrim's and Special Edition's (`--example look`), or Fallout 4's, which
+/// has a text and a bending of light among them (`--example fo4look`).
+fn lighting_of(nif: &Nif, block: usize) -> Option<(usize, LookPlaces)> {
+    let stream = nif.header.stream.version;
+    if (83..=100).contains(&stream) {
+        let places = LookPlaces {
+            alpha: 5,
+            gloss: 7,
+            shine: 8,
+            bytes: LOOK_BYTES,
+            smooth: false,
+        };
+        return Some((shader_of(nif, block)?, places));
+    }
+    if !(130..=139).contains(&stream) || !geometry::is_tri_shape(nif.kind_of(block)) {
+        return None;
+    }
+    let link = TriShape::read(&nif.blocks[block].data, stream).ok()?.shader;
+    let places = LookPlaces {
+        alpha: 6,
+        gloss: 8,
+        shine: 9,
+        bytes: 52,
+        smooth: true,
+    };
+    Some((block_of(nif, link, &["BSLightingShaderProperty"])?, places))
 }
 
 /// Change how the shape at `block` takes light. Everything else its shader
 /// keeps stays as it was.
 pub fn set_look(nif: &mut Nif, block: usize, look: &Look) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
-    let at = shader_of(nif, block)
+    let (at, places) = lighting_of(nif, block)
         .ok_or_else(|| NifError::Unsupported("the shape has no lighting to change".into()))?;
     let mut s = LightingShader::read(&nif.blocks[at].data, stream)?;
-    if s.rest.len() < LOOK_BYTES {
+    if s.rest.len() < places.bytes {
         return Err(NifError::Unsupported(
             "the shape has no lighting to change".into(),
         ));
@@ -170,12 +214,22 @@ pub fn set_look(nif: &mut Nif, block: usize, look: &Look) -> Result<(), NifError
     let mut put = |i: usize, v: f32| s.rest[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
     for k in 0..3 {
         put(k, look.glow[k]);
-        put(8 + k, look.shine[k]);
+        put(places.shine + k, look.shine[k]);
     }
     put(3, look.glow_strength);
-    put(5, look.alpha);
-    put(7, look.gloss);
-    put(11, look.shine_strength);
+    put(places.alpha, look.alpha);
+    put(places.gloss, look.gloss);
+    put(places.shine + 3, look.shine_strength);
+    if places.smooth {
+        // Fallout 4's switches and kinds mean other things, and are left.
+        if look.kind != s.shader_type {
+            return Err(NifError::Unsupported(
+                "the kind of Fallout 4's lighting is not changed here".into(),
+            ));
+        }
+        nif.blocks[at].data = s.write();
+        return Ok(());
+    }
     s.flags1 = (look.switches[0] & !KEPT_SWITCHES[0]) | (s.flags1 & KEPT_SWITCHES[0]);
     s.flags2 = (look.switches[1] & !KEPT_SWITCHES[1]) | (s.flags2 & KEPT_SWITCHES[1]);
     if look.kind != s.shader_type {
@@ -726,6 +780,10 @@ pub fn set_colors(nif: &mut Nif, block: usize, colors: &[(u16, [u8; 4])]) -> Res
     Ok(())
 }
 
+fn is_plain_shape(kind: &str) -> bool {
+    geometry::is_tri_shape(kind)
+}
+
 /// Give the vertices of the shape at `block` colours to carry, all white
 /// and solid, where they carry none: in every place the file keeps them,
 /// and with the switch on its lighting that every shape with colours was
@@ -734,7 +792,10 @@ pub fn set_colors(nif: &mut Nif, block: usize, colors: &[(u16, [u8; 4])]) -> Res
 pub fn add_colors(nif: &mut Nif, block: usize) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
     let none = || NifError::Unsupported("this kind of shape cannot be given colours".into());
-    if nif.kind_of(block) != "BSTriShape" {
+    // Special Edition's plain shapes, and Fallout 4's with their segments
+    // (which say nothing of what a vertex carries).
+    let kind = nif.kind_of(block);
+    if kind != "BSTriShape" && !(kind == "BSSubIndexTriShape" && (130..=139).contains(&stream)) {
         return Err(none());
     }
     let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
@@ -743,12 +804,17 @@ pub fn add_colors(nif: &mut Nif, block: usize) -> Result<(), NifError> {
         return Ok(());
     }
     let (desc, at) = Layout::with_color(shape.vertex_desc, stream).ok_or_else(none)?;
-    let lighting = shader_of(nif, block).ok_or_else(none)?;
+    // Its lighting, of either game: the switch is in the same place in both
+    // (on for every coloured shape of each, `--example colourflag`).
+    let lit_by = |nif: &Nif, shape: usize| {
+        let link = TriShape::read(&nif.blocks[shape].data, stream).ok()?.shader;
+        block_of(nif, link, &["BSLightingShaderProperty"])
+    };
+    let lighting = lit_by(nif, block).ok_or_else(none)?;
     // The switch is the lighting's, and so every shape's that is drawn by it.
-    if shapes(nif)
-        .into_iter()
-        .any(|other| other != block && shader_of(nif, other) == Some(lighting))
-    {
+    if shapes(nif).into_iter().any(|other| {
+        other != block && is_plain_shape(nif.kind_of(other)) && lit_by(nif, other) == Some(lighting)
+    }) {
         return Err(NifError::Unsupported(
             "the shape shares its lighting with another, which carries no colours".into(),
         ));
