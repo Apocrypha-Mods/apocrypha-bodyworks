@@ -609,6 +609,51 @@ impl Project {
         Ok(moving)
     }
 
+    /// Move, turn and scale a whole shape about the middle of the mesh's
+    /// space: scaled first, then turned about X, Y and Z in that order (in
+    /// degrees), then moved. What sliders do to the shape is scaled and
+    /// turned with it, where it is the project's own.
+    pub fn transform(
+        &mut self,
+        shape: &str,
+        by: [f32; 3],
+        scale: f32,
+        turn: [f32; 3],
+    ) -> Result<(), Error> {
+        let at = self.shape(shape)?;
+        if !(scale.is_finite() && scale > 0.0) || by.iter().chain(&turn).any(|c| !c.is_finite()) {
+            return invalid(
+                "A shape is scaled by more than nothing, and moved and turned by numbers.",
+            );
+        }
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let [(sx, cx), (sy, cy), (sz, cz)] = turn.map(|d| d.to_radians().sin_cos());
+        let turned = |p: [f32; 3]| {
+            let p = p.map(|c| c * scale);
+            let p = [p[0], p[1] * cx - p[2] * sx, p[1] * sx + p[2] * cx];
+            let p = [p[0] * cy + p[2] * sy, p[1], -p[0] * sy + p[2] * cy];
+            [p[0] * cz - p[1] * sz, p[0] * sz + p[1] * cz, p[2]]
+        };
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let mut positions = mesh::read(&self.nif, block).map_err(fail)?.positions;
+        for p in &mut positions {
+            let t = turned(*p);
+            *p = [t[0] + by[0], t[1] + by[1], t[2] + by[2]];
+        }
+        mesh::set_positions(&mut self.nif, block, &positions).map_err(fail)?;
+        let target = &self.set.shapes[at].target;
+        for own in &mut self.own {
+            for o in own.iter_mut().filter(|o| &o.target == target) {
+                for d in &mut o.diffs {
+                    d.offset = turned(d.offset);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Give `shape` the bones of `body`, so that it bends as the body does:
     /// each of its vertices follows the bones the body's vertices nearest
     /// it follow, the nearer the more, and the heaviest four of them. The

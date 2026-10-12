@@ -488,6 +488,34 @@ fn a_mesh_becomes_a_project_fitted_to_a_body() {
 
     project.duplicate_shape("Bra", "Bra again").unwrap();
     assert!(project.duplicate_shape("Bra", "Panty").is_err());
+    // The copy, turned a quarter round Z, twice its size and moved up one:
+    // what was at (x, y, z) is at (-2y, 2x, 2z + 1).
+    let place = |p: &Project, name: &str| {
+        let at = apoc_nif::mesh::shapes(&p.nif)
+            .into_iter()
+            .find(|at| apoc_nif::mesh::name(&p.nif, *at).as_deref() == Some(name))
+            .unwrap();
+        apoc_nif::mesh::read(&p.nif, at).unwrap().positions
+    };
+    let was = place(&project, "Bra again");
+    project
+        .transform("Bra again", [0.0, 0.0, 1.0], 2.0, [0.0, 0.0, 90.0])
+        .unwrap();
+    for (a, b) in was.iter().zip(&place(&project, "Bra again")) {
+        let want = [-2.0 * a[1], 2.0 * a[0], 2.0 * a[2] + 1.0];
+        assert!(
+            (0..3).all(|k| (want[k] - b[k]).abs() < 0.05),
+            "{want:?} {b:?}"
+        );
+    }
+    assert_eq!(place(&project, "Bra"), was);
+    assert!(project.transform("Bra", [0.0; 3], 0.0, [0.0; 3]).is_err());
+    project
+        .transform("Bra again", [0.0, 0.0, -1.0], 1.0, [0.0; 3])
+        .unwrap();
+    project
+        .transform("Bra again", [0.0; 3], 0.5, [0.0, 0.0, -90.0])
+        .unwrap();
     for shape in ["Bra", "Panty"] {
         let moving = project
             .conform(

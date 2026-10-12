@@ -115,6 +115,12 @@ impl Work {
             Change::Conform { shape, body } => p
                 .conform(&shape, &body, files, Default::default())
                 .map(drop),
+            Change::Transform {
+                shape,
+                by,
+                scale,
+                turn,
+            } => p.transform(&shape, by, scale, turn),
             Change::Weights { shape, body } => {
                 p.copy_weights(&shape, &body, Default::default()).map(drop)
             }
@@ -224,6 +230,14 @@ enum Change {
     Conform {
         shape: String,
         body: String,
+    },
+    /// Move a whole shape by `by`, scaled by `scale` and turned by `turn`
+    /// degrees about each axis first.
+    Transform {
+        shape: String,
+        by: [f32; 3],
+        scale: f32,
+        turn: [f32; 3],
     },
     /// Give a shape the bones of another (a body), so that it bends as
     /// that one does.

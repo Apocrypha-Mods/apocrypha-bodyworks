@@ -907,6 +907,7 @@ function studioSide() {
                   [
                     state.work && { name: "Rename…", value: "rename" },
                     state.work && { name: "Duplicate…", value: "duplicate" },
+                    state.work && { name: "Move, turn, scale…", value: "transform" },
                     ...(state.work ? bodies.map((o) => ({ name: `Conform to ${o.name}`, value: ["conform", o.name] })) : []),
                     ...(state.work ? bodies.map((o) => ({ name: `Copy weights from ${o.name}`, value: ["weights", o.name] })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
@@ -920,6 +921,7 @@ function studioSide() {
                     if (what === "duplicate") {
                       return rename("Duplicate shape", `${sh.name} copy`, (to) => change({ do: "duplicate", name: sh.name, to }), "Duplicate");
                     }
+                    if (what === "transform") return transform(sh);
                     if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
                     if (Array.isArray(what)) return attempt({ do: what[0], shape: sh.name, body: what[1] });
                     if (what === "hide") hide(i, !sh.hidden);
@@ -1445,6 +1447,35 @@ function option(label, on) {
     h("span.nm.cut", null, label),
   );
   return [el, () => on];
+}
+
+/** Outfit Studio: move, turn and scale a whole shape. */
+function transform(sh) {
+  const number = (label, value) => {
+    const input = h("input.input", { type: "number", step: "any", value: String(value), "aria-label": label });
+    return [h("label.field", null, h("span", null, label), input), input];
+  };
+  const row = (what, value) => ["X", "Y", "Z"].map((axis) => number(`${what} ${axis}`, value));
+  const move = row("Move", 0);
+  const turn = row("Turn", 0);
+  const [scaleField, scale] = number("Scale, percent", 100);
+  const go = h("button.btn.primary", { type: "button" }, "Done");
+  const said = h("span.sub.warn.grow.cut");
+  go.addEventListener("click", () => {
+    const read = (fields) => fields.map(([, input]) => Number(input.value));
+    try {
+      change({ do: "transform", shape: sh.name, by: read(move), scale: Number(scale.value) / 100, turn: read(turn) });
+      close(el);
+    } catch (e) {
+      said.textContent = e.message;
+    }
+  });
+  const el = sheet(
+    sh.name,
+    null,
+    [h("div.pair.three", null, move.map((f) => f[0])), h("div.pair.three", null, turn.map((f) => f[0])), h("div.pair.three", null, scaleField)],
+    [said, h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"), go],
+  );
 }
 
 /** Outfit Studio: what a slider starts at and how it behaves. */
