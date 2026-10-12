@@ -1026,7 +1026,30 @@ function studioSliders() {
   });
   const top = el.querySelector(".rows")?.scrollTop || 0;
   el.replaceChildren(
-    h("div.sl.one.head", null, h("span", null, `${rows.length} ${rows.length === 1 ? "slider" : "sliders"}`), h("span", null, "Shown at")),
+    h(
+      "div.sl.one.head",
+      null,
+      h("span", null, `${rows.length} ${rows.length === 1 ? "slider" : "sliders"}`),
+      state.work
+        ? h(
+            "button.btn.ghost.small",
+            {
+              type: "button",
+              style: "justify-self: end",
+              onclick: () =>
+                rename("New slider", "", (name) => {
+                  change({ do: "addSlider", name });
+                  // What the brushes do next is this slider, shown in full.
+                  const at = state.work.sliders.findIndex((sl) => sl.name === name.trim());
+                  state.editing = at;
+                  state.at[at] = 100;
+                  render();
+                }, "Add"),
+            },
+            "New…",
+          )
+        : h("span", null, "Shown at"),
+    ),
     h("div.rows", null, rows.length ? rows : h("div.sub.quiet", { style: "padding: 8px 12px" }, "Nothing found")),
   );
   el.querySelector(".rows").scrollTop = top;
