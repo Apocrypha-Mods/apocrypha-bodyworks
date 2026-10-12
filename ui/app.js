@@ -93,6 +93,9 @@ const state = {
   focus: Number(remembered.get("brush.focus")) || 50,
   /** The slider the brushes change (its place in the list), or -1 for the shape itself. */
   editing: -1,
+  /** The colour brush's colour ("#rrggbb") and how solid it paints, 0 to 100. */
+  colour: remembered.get("brush.colour") || "#c8643c",
+  alpha: Number(remembered.get("brush.alpha") ?? 100),
   /** The bone the weight brush paints, by name, and how much each vertex of the picked shape follows it. */
   bone: null,
   heat: null,
@@ -250,6 +253,8 @@ function showShapes(frame) {
   const hidden = new Set(studio ? state.shapes.filter((sh) => sh.hidden).map((sh) => sh.name) : []);
   const masks = new Map(studio ? state.shapes.map((sh) => [sh.name, sh.mask]) : []);
   const ghosts = new Set(studio ? state.shapes.filter((sh) => sh.ghost).map((sh) => sh.name) : []);
+  const pickedName = state.shapes[state.picked]?.name;
+  state.part = null;
   const [preview, numbers] = core.ask({ op: "preview", set: state.set.name, work: studio });
   const f32 = new Float32Array(numbers);
   const u32 = new Uint32Array(numbers);
@@ -270,6 +275,7 @@ function showShapes(frame) {
       uvs: f32.slice(s.uvs[0], s.uvs[0] + s.uvs[1]),
       texture: (s.textures || [])[0] || null,
       textures: s.textures || [],
+      colors: s.colors && s.colors[1] ? new Uint8Array(numbers.slice(s.colors[0] * 4, (s.colors[0] + s.colors[1]) * 4)) : new Uint8Array(0),
       parts: (s.parts || []).map((part) => ({
         part: part.part,
         triangles: u32.slice(part.triangles[0], part.triangles[0] + part.triangles[1]),
@@ -294,12 +300,14 @@ function showShapes(frame) {
     return made;
   });
   if (!view) return;
-  view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs, mask: s.mask })));
+  view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs, mask: s.mask, colors: s.colors })));
   state.shapes.forEach((sh, i) => {
     if (sh.hidden) view.hide(i, true);
     if (sh.ghost) view.ghost(i, true);
   });
-  state.picked = Math.min(state.picked, Math.max(0, state.shapes.length - 1));
+  // The same shape stays picked, wherever it now is in the list.
+  const again = state.shapes.findIndex((sh) => sh.name === pickedName);
+  state.picked = again >= 0 ? again : Math.min(state.picked, Math.max(0, state.shapes.length - 1));
   view.look({ picked: state.mode === "studio" ? state.picked : -1 });
   if (!state.shapes.length) return;
   reshape();
@@ -1080,7 +1088,10 @@ function showPart(index) {
   state.part = index;
   if (!s) return;
   if (index !== null && s.parts[index]) {
-    view.cut(state.picked, s.parts[index].triangles);
+    // What is drawn is what a brush can touch.
+    s.shown = s.parts[index].triangles;
+    s.zapped = null;
+    view.cut(state.picked, s.shown);
   } else {
     s.zapped = null;
     reshape();
@@ -1380,7 +1391,7 @@ function studioSliders() {
             if (what === "out" || what === "in") return sliderFile(sl, what === "in");
             if (what === "mask") {
               // Covered: the vertices of the picked shape this slider moves.
-              const at = cur().sliders.indexOf(sl);
+              const at = cur().sliders.findIndex((x) => x.name === sl.name);
               for (const d of on.sliders.filter((x) => x.slider === at)) d.vertices.forEach((v) => (on.mask[v] = 1));
               if (!state.heat) view.mask(state.picked, on.mask);
               return render();
@@ -1517,6 +1528,7 @@ const BRUSHES = [
   ["erase", "Erase"],
   ["mask", "Mask"],
   ["weights", "Weights"],
+  ["colour", "Colour"],
 ];
 
 /** How far the brush reaches, in the mesh's units. */
@@ -1554,6 +1566,32 @@ function brushing(what, ray) {
   }
   view.reach({ point: found.point, normal: found.normal, radius: r });
   if (what === "over") return false;
+  if (state.tool === "colour") {
+    if (!s.colors.length) return false;
+    const reached = brush.spared(brush.reach(found.point, r, s.now), s.mask);
+    if (ray.alt) {
+      // Alt picks up the colour under the middle of the brush.
+      if (what === "down" && reached.vertices.length) {
+        let best = 0;
+        reached.weights.forEach((w, k) => w > reached.weights[best] && (best = k));
+        const at = reached.vertices[best] * 4;
+        state.colour = `#${[0, 1, 2].map((c) => s.colors[at + c].toString(16).padStart(2, "0")).join("")}`;
+        state.alpha = Math.round((s.colors[at + 3] / 255) * 100);
+        remembered.set("brush.colour", state.colour);
+        render();
+      }
+      return false;
+    }
+    if (what === "down") stroke = { tool: "colour", shape: s, before: new Uint8Array(s.colors), amount: 1 };
+    const to = [1, 3, 5].map((c) => parseInt(state.colour.slice(c, c + 2), 16)).concat(Math.round((state.alpha / 100) * 255));
+    const strength = state.strength / 100;
+    reached.vertices.forEach((v, k) => {
+      const by = Math.min(1, strength * reached.weights[k] * 1.5);
+      for (let c = 0; c < 4; c++) s.colors[v * 4 + c] = Math.round(s.colors[v * 4 + c] + (to[c] - s.colors[v * 4 + c]) * by);
+    });
+    view.colours(state.picked, s.colors);
+    return true;
+  }
   if (state.tool === "weights") {
     if (!state.heat || !state.bone) return false;
     if (what === "down") {
@@ -1641,7 +1679,7 @@ function brushing(what, ray) {
     if (stroke.tool === "erase") {
       brush.erase(s.now, stroke.left, reached, strength);
     } else if (stroke.tool === "smooth") {
-      stroke.near ||= brush.neighbours(s.shown, s.weld);
+      stroke.near = near(s);
       // Vertices at one place go to one place: each to its group's first.
       brush.smooth(s.now, s.weld, stroke.near, reached, strength * 0.6);
     } else {
@@ -1662,10 +1700,19 @@ function within(s, reached, corners) {
   const power = 0.25 + (1 - state.focus / 100) * 1.5;
   for (let k = 0; k < reached.weights.length; k++) reached.weights[k] = Math.sqrt(reached.weights[k]) ** (power * 2);
   if (state.connected && corners) {
-    stroke.near ||= brush.neighbours(s.shown, s.weld);
+    stroke.near = near(s);
     reached = brush.joined(reached, s.weld, stroke.near, corners);
   }
   return brush.spared(reached, s.mask);
+}
+
+/** Which vertices of a shape its triangles join, worked out once for the triangles it now shows. */
+function near(s) {
+  if (s.nearOf !== s.shown) {
+    s.near = brush.neighbours(s.shown, s.weld);
+    s.nearOf = s.shown;
+  }
+  return s.near;
 }
 
 function redraw(s) {
@@ -1683,28 +1730,60 @@ function endStroke() {
     render();
     return false;
   }
-  if (done.tool === "weights") {
-    // What changed, as each vertex's new weight for the bone.
-    const painted = (bone, now, before) => {
-      const changed = [];
-      now.forEach((w, v) => w !== before[v] && changed.push(v));
-      if (!changed.length) return;
+  if (done.tool === "colour") {
+    const s = done.shape;
+    const changed = [];
+    for (let v = 0; v < s.colors.length / 4; v++) {
+      if ([0, 1, 2, 3].some((c) => s.colors[v * 4 + c] !== done.before[v * 4 + c])) changed.push(v);
+    }
+    if (changed.length) {
       const bytes = new Uint8Array(changed.length * 8);
       const data = new DataView(bytes.buffer);
       changed.forEach((v, i) => {
         data.setUint32(i * 8, v, true);
-        data.setFloat32(i * 8 + 4, now[v], true);
+        bytes.set(s.colors.subarray(v * 4, v * 4 + 4), i * 8 + 4);
       });
-      [state.work] = core.ask({ op: "change", change: { do: "paint", shape: done.shape.name, bone } }, bytes);
-      state.problem = null;
-      state.saved = null;
-      state.exported = null;
+      try {
+        [state.work] = core.ask({ op: "change", change: { do: "colour", shape: s.name } }, bytes);
+        state.problem = null;
+        state.saved = null;
+        state.exported = null;
+      } catch (e) {
+        state.problem = e.message;
+        s.colors.set(done.before);
+        view.colours(state.picked, s.colors);
+      }
+    }
+    settled();
+    return false;
+  }
+  if (done.tool === "weights") {
+    // What changed, as each vertex's new weight for the bone.
+    // Each vertex whose weight changed, with its new weight: for the bone,
+    // and after those for its twin, as one change to take back as one.
+    const changed = (now, before) => {
+      const rows = [];
+      now.forEach((w, v) => w !== before[v] && rows.push([v, w]));
+      return rows;
     };
-    try {
-      painted(state.bone, state.heat, done.before);
-      if (done.twin) painted(done.twin.bone, done.twin.heat, done.twin.before);
-    } catch (e) {
-      state.problem = e.message;
+    const first = changed(state.heat, done.before);
+    const second = done.twin ? changed(done.twin.heat, done.twin.before) : [];
+    if (first.length + second.length) {
+      const bytes = new Uint8Array((first.length + second.length) * 8);
+      const data = new DataView(bytes.buffer);
+      [...first, ...second].forEach(([v, w], i) => {
+        data.setUint32(i * 8, v, true);
+        data.setFloat32(i * 8 + 4, w, true);
+      });
+      try {
+        const change = { do: "paint", shape: done.shape.name, bone: state.bone, twin: second.length ? done.twin.bone : null, first: first.length };
+        [state.work] = core.ask({ op: "change", change }, bytes);
+        state.problem = null;
+        state.saved = null;
+        state.exported = null;
+      } catch (e) {
+        state.problem = e.message;
+      }
     }
     heat();
     settled();
@@ -1861,9 +1940,25 @@ function brushBar() {
         null,
         knob("Size", "size"),
         state.tool !== "mask" && state.tool !== "move" && knob("Strength", "strength"),
-        state.tool !== "mask" && state.tool !== "weights" && knob("Focus", "focus"),
-        (state.tool !== "weights" || (state.bone && brush.twin(state.bone) !== state.bone)) && mirror,
-        state.tool !== "weights" && state.tool !== "mask" && connected,
+        state.tool !== "mask" && state.tool !== "weights" && state.tool !== "colour" && knob("Focus", "focus"),
+        state.tool === "colour" &&
+          h(
+            "label.knob",
+            null,
+            h("span", null, "Colour"),
+            h("input.swatch", {
+              type: "color",
+              value: state.colour,
+              "aria-label": "Colour",
+              oninput: (e) => {
+                state.colour = e.target.value;
+                remembered.set("brush.colour", state.colour);
+              },
+            }),
+          ),
+        state.tool === "colour" && knob("Alpha", "alpha"),
+        state.tool !== "colour" && (state.tool !== "weights" || (state.bone && brush.twin(state.bone) !== state.bone)) && mirror,
+        state.tool !== "weights" && state.tool !== "mask" && state.tool !== "colour" && connected,
         state.tool === "weights" &&
           state.heat &&
           h(
@@ -1879,7 +1974,7 @@ function brushBar() {
             },
             "Mask it",
           ),
-        state.tool === "mask" ? h("span.sub.quiet", null, "Alt uncovers") : state.tool === "weights" ? h("span.sub.quiet.cut", null, `${state.bone || "No bone"} · Alt takes away`) : target,
+        state.tool === "mask" ? h("span.sub.quiet", null, "Alt uncovers") : state.tool === "weights" ? h("span.sub.quiet.cut", null, `${state.bone || "No bone"} · Alt takes away`) : state.tool === "colour" ? h("span.sub.quiet", null, "Alt picks a colour up") : target,
         state.shapes[state.picked]?.mask.some((m) => m > 0) &&
           h(
             "button.btn.ghost.small",
@@ -1916,7 +2011,7 @@ function brushBar() {
                   type: "button",
                   onclick: () => {
                     const sh = state.shapes[state.picked];
-                    sh.mask.set(brush.spread(sh.mask, sh.weld, brush.neighbours(sh.shown, sh.weld), less));
+                    sh.mask.set(brush.spread(sh.mask, sh.weld, near(sh), less));
                     view.mask(state.picked, sh.mask);
                   },
                 },
@@ -1938,7 +2033,10 @@ function heat() {
   if (!s || !view) return;
   state.heat = null;
   if (state.tool === "weights" && state.work) {
-    if (!s.bones.includes(state.bone)) state.bone = s.bones[0] || state.bone;
+    // The bone that was picked stays picked, though this shape does not
+    // follow it yet: painting is how it comes to. Only with none picked,
+    // or one no shape here has, is the shape's first taken.
+    if (!state.bone || !state.shapes.some((o) => o.bones.includes(state.bone))) state.bone = s.bones[0] || null;
     try {
       const [, numbers] = core.ask({ op: "boneWeights", shape: s.name, bone: state.bone || "" });
       state.heat = new Float32Array(numbers.slice(0));
@@ -1946,7 +2044,8 @@ function heat() {
       state.problem = e.message;
     }
   }
-  view.look({ heat: Boolean(state.heat) });
+  if (state.tool === "colour" && !s.colors.length) state.problem = `${s.name} carries no colours to paint.`;
+  view.look({ heat: Boolean(state.heat), colour: state.tool === "colour" && s.colors.length > 0 });
   view.mask(state.picked, state.heat || s.mask);
 }
 
@@ -1963,7 +2062,7 @@ function hold(tool) {
 }
 
 /** Take a description of the project after a change, keeping each slider where it stood. */
-function taken(work, renamed) {
+function taken(work, renamed, light) {
   const stood = new Map(state.work.sliders.map((sl, i) => [sl.name, state.at[i]]));
   if (renamed) stood.set(renamed[1], stood.get(renamed[0]));
   const edited = state.work.sliders[state.editing]?.name;
@@ -1971,14 +2070,16 @@ function taken(work, renamed) {
   state.editing = work.sliders.findIndex((sl) => sl.name === (renamed && edited === renamed[0] ? renamed[1] : edited));
   state.at = work.sliders.map((sl) => stood.get(sl.name) ?? (sl.zap ? sl.big : 0));
   state.problem = null;
-  showShapes(false);
+  // A change to a name or to where a build goes moves nothing: the shapes
+  // stand as they are.
+  if (!light) showShapes(false);
   render();
 }
 
 /** Change the project. Throws what the change could not do. */
 function change(what, renamed) {
   const [work] = core.ask({ op: "change", change: what });
-  taken(work, renamed);
+  taken(work, renamed, what.do === "renameSlider" || what.do === "output");
 }
 
 /** A change with nothing to ask first: what goes wrong is said under the view. */

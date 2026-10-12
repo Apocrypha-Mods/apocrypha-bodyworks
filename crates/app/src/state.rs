@@ -194,7 +194,12 @@ impl Work {
                     .collect();
                 p.paint_colors(&shape, &colors)
             }
-            Change::Paint { shape, bone } => {
+            Change::Paint {
+                shape,
+                bone,
+                twin,
+                first,
+            } => {
                 let painted: Vec<(u16, f32)> = data
                     .as_chunks::<8>()
                     .0
@@ -206,7 +211,12 @@ impl Work {
                         ))
                     })
                     .collect();
-                p.paint_weights(&shape, &bone, &painted)
+                let split = first.unwrap_or(painted.len()).min(painted.len());
+                p.paint_weights(&shape, &bone, &painted[..split])
+                    .and_then(|()| match &twin {
+                        Some(twin) => p.paint_weights(&shape, twin, &painted[split..]),
+                        None => Ok(()),
+                    })
             }
             Change::Stroke { shape, slider } => {
                 let moves: Vec<osd::Diff> = data
@@ -434,9 +444,15 @@ enum Change {
     },
     /// Set how much vertices of a shape follow a bone. The request's bytes
     /// are, for each vertex, its number and the weight, four bytes each.
+    /// With `twin`, the first `first` of them are the bone's and the rest
+    /// its twin's across the body: one stroke on both sides, one change.
     Paint {
         shape: String,
         bone: String,
+        #[serde(default)]
+        twin: Option<String>,
+        #[serde(default)]
+        first: Option<usize>,
     },
     /// A brush stroke on a shape. The request's bytes say what moved: for
     /// each vertex its number and three offsets, as four-byte numbers (the

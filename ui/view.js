@@ -2,21 +2,23 @@
 // when something changed.
 
 const VS = `#version 300 es
-in vec3 p; in vec3 n; in vec2 t; in float m;
+in vec3 p; in vec3 n; in vec2 t; in float m; in vec4 k;
 uniform mat4 mvp; uniform mat3 nm;
-out vec3 vn; out vec2 vt; out float vm;
-void main() { vn = nm * n; vt = t; vm = m; gl_Position = mvp * vec4(p, 1.0); gl_PointSize = 7.0; }`;
+out vec3 vn; out vec2 vt; out float vm; out vec4 vk;
+void main() { vn = nm * n; vt = t; vm = m; vk = k; gl_Position = mvp * vec4(p, 1.0); gl_PointSize = 7.0; }`;
 
 const FS = `#version 300 es
 precision highp float;
-in vec3 vn; in vec2 vt; in float vm; out vec4 o;
-uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha;
+in vec3 vn; in vec2 vt; in float vm; in vec4 vk; out vec4 o;
+uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha; uniform float coloured;
 void main() {
   // The lines of a wireframe are one flat colour.
   if (line.a > 0.0) { o = line; return; }
   vec3 n = normalize(vn);
   // The texture where the shape has one, the plain tint where it has not.
   vec3 base = mix(tint, pow(texture(skin, vt).rgb, vec3(2.2)), painted);
+  // With the colour brush in hand, a shape is drawn in the colours its vertices carry.
+  if (coloured > 0.5) base = pow(vk.rgb, vec3(2.2));
   float key = max(dot(n, normalize(vec3(0.35, 0.55, 0.75))), 0.0);
   float fill = max(dot(n, normalize(vec3(-0.6, 0.1, 0.4))), 0.0);
   float rim = pow(1.0 - max(n.z, 0.0), 3.0);
@@ -69,6 +71,7 @@ export class View {
     gl.bindAttribLocation(prog, 1, "n");
     gl.bindAttribLocation(prog, 2, "t");
     gl.bindAttribLocation(prog, 3, "m");
+    gl.bindAttribLocation(prog, 4, "k");
     gl.linkProgram(prog);
     this.uMvp = gl.getUniformLocation(prog, "mvp");
     this.uNm = gl.getUniformLocation(prog, "nm");
@@ -77,8 +80,9 @@ export class View {
     this.uLine = gl.getUniformLocation(prog, "line");
     this.uHeat = gl.getUniformLocation(prog, "heat");
     this.uAlpha = gl.getUniformLocation(prog, "alpha");
+    this.uColoured = gl.getUniformLocation(prog, "coloured");
     /** How shapes are drawn: with their textures, with their edges, and which one is picked out. */
-    this.looks = { painted: true, wire: false, picked: -1, heat: false };
+    this.looks = { painted: true, wire: false, picked: -1, heat: false, colour: false };
     this.shapes = [];
     /** Textures already on the card, by what the caller names them: a shape shown again wears its own without a second upload. */
     this.skins = new Map();
@@ -170,6 +174,7 @@ export class View {
       if (s.eb) gl.deleteBuffer(s.eb);
       gl.deleteBuffer(s.pb);
       gl.deleteBuffer(s.mb);
+      if (s.cb) gl.deleteBuffer(s.cb);
       gl.deleteBuffer(s.nb);
       gl.deleteBuffer(s.ib);
       gl.deleteVertexArray(s.vao);
@@ -199,11 +204,20 @@ export class View {
       gl.bufferData(gl.ARRAY_BUFFER, s.mask || new Float32Array(s.positions.length / 3), gl.DYNAMIC_DRAW);
       gl.enableVertexAttribArray(3);
       gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 0, 0);
+      // Colours only for a shape that carries them: the others read white.
+      let cb = null;
+      if (s.colors && s.colors.length === (s.positions.length / 3) * 4) {
+        cb = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+        gl.bufferData(gl.ARRAY_BUFFER, s.colors, gl.DYNAMIC_DRAW);
+        gl.enableVertexAttribArray(4);
+        gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+      } else gl.vertexAttrib4f(4, 1, 1, 1, 1);
       const ib = gl.createBuffer();
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, s.triangles, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
-      return { vao, pb, nb, tb, mb, ib, count: s.triangles.length, shown: true, skin: null, kept: s.triangles, edges: 0, eb: null };
+      return { vao, pb, nb, tb, mb, cb, ib, count: s.triangles.length, shown: true, skin: null, kept: s.triangles, edges: 0, eb: null };
     });
   }
 
@@ -220,6 +234,16 @@ export class View {
     if (!s) return;
     gl.bindBuffer(gl.ARRAY_BUFFER, s.mb);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, covered);
+    this.draw();
+  }
+
+  /** The colours the vertices of shape `i` carry: red, green, blue and how solid, a byte each. */
+  colours(i, bytes) {
+    const gl = this.gl;
+    const s = this.shapes[i];
+    if (!s || !s.cb) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, s.cb);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, bytes);
     this.draw();
   }
 
@@ -433,6 +457,7 @@ export class View {
       const skinned = painted && s.skin;
       // With `heat`, the picked shape's covering is read as weights.
       gl.uniform1f(this.uHeat, this.looks.heat && picked === i ? 1 : 0);
+      gl.uniform1f(this.uColoured, this.looks.colour && picked === i && s.cb ? 1 : 0);
       gl.uniform1f(this.uPainted, skinned ? 1 : 0);
       // The picked shape keeps the tint; the others step back from it.
       const dim = picked >= 0 && picked !== i ? 0.62 : 1;

@@ -78,8 +78,8 @@ BodySlide:
 
 Outfit Studio:
 
-- Brushes: painting vertex colour and alpha, and the vertex tools (collapse,
-  flip or split an edge, weld, move one vertex).
+- Brushes: the vertex tools (collapse, flip or split an edge, weld, move one
+  vertex). Colour is painted only on a shape that already carries colours.
 - Brush settings: spacing.
 - Shapes: refining (subdividing) a mesh, merging shapes,
   removing skinning, shader properties other than the texture files, making
@@ -93,8 +93,8 @@ Outfit Studio:
   sharing, making a conversion reference.
 - View: bones drawn as more than a dot where each is, field of view and lighting
   settings, recalculating or locking normals by hand.
-- Most keyboard shortcuts: there are undo and redo, Q and 1 to 7 for the
-  brushes, the square brackets for a brush's size, W and T for how the
+- Most keyboard shortcuts: there are undo and redo, Q and the digits for the
+  brushes (1 to 8), the square brackets for a brush's size, W and T for how the
   outfit is drawn.
 
 Games: only Skyrim Special Edition has been measured. Skyrim (2011),
