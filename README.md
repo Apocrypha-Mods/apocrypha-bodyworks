@@ -77,14 +77,15 @@ Outfit Studio:
 - Brushes: colour is painted only on a shape that already carries colours.
 - Shapes: refining only part of a mesh (the whole of one is refined),
   merging shapes that keep different things for each vertex, removing
-  skinning, shader properties other than the texture files, a shape from an
-  FBX file (one is made from an OBJ file, in the likeness of a shape already
-  there).
+  skinning, shader properties other than the texture files.
 - Bones: custom bones (one made up, not taken from the game's skeleton).
 - Segments (Fallout 4): viewing and editing.
 - Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI
   go both ways).
-- Files: FBX in and out, head TRI files, physics data.
+- Files: bones and their weights in FBX files (meshes and their texture
+  places go both ways, checked against Blender's own reading and writing;
+  a shape from a file takes its bones from a shape already there), FBX
+  files written as text, head TRI files, physics data.
 - View: bones drawn as more than a dot where each is, recalculating or
   locking normals by hand.
 - The original's own keyboard shortcuts: this has its own (undo and redo,

@@ -5,6 +5,7 @@ import * as host from "./host.js";
 import * as core from "./core.js";
 import { View, welded, shade } from "./view.js";
 import * as brush from "./brush.js";
+import * as fbx from "./fbx.js";
 import * as obj from "./obj.js";
 
 const TOOLS = "Data/CalienteTools/BodySlide";
@@ -1292,7 +1293,7 @@ function studioSide() {
                     state.work && !sh.reference && { name: "Refine", value: "refine" },
                     state.work && !sh.reference && { name: "Weld doubled points", value: "weld" },
                     state.work && !sh.reference && state.shapes.some((o) => o !== sh && !o.reference) && { name: "Merge into…", value: "merge" },
-                    state.work && !sh.reference && { name: "New shape from OBJ…", value: "fromObj" },
+                    state.work && !sh.reference && { name: "New shape from a file…", value: "fromObj" },
                     ...(state.work ? bodies.map((o) => ({ name: `Conform to ${o.name}`, value: ["conform", o.name] })) : []),
                     ...(state.work ? bodies.map((o) => ({ name: `Copy weights from ${o.name}`, value: ["weights", o.name] })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
@@ -1302,7 +1303,9 @@ function studioSide() {
                     state.work && { name: "Flip texture left to right", value: "flipU" },
                     state.work && { name: "Flip texture top to bottom", value: "flipV" },
                     { name: "Export OBJ…", value: "export", rule: true },
-                    state.work && { name: "Import OBJ…", value: "import" },
+                    { name: "Export FBX…", value: "exportFbx" },
+                    state.shapes.length > 1 && { name: "Export all as FBX…", value: "exportAll" },
+                    state.work && { name: "Import points…", value: "import" },
                     state.work && sh.reference && { name: "Conform all to this", value: "conformAll" },
                     state.work && sh.mask.some((m) => m >= 0.5) && { name: "Separate masked points…", value: "part", rule: true },
                     state.work && sh.mask.some((m) => m >= 0.5) && { name: "Delete masked points", value: "cut", danger: true },
@@ -1363,6 +1366,8 @@ function studioSide() {
                     }
                     if (what === "flipU" || what === "flipV") return attempt({ do: "flipUv", shape: sh.name, across: what === "flipU" });
                     if (what === "export") return exportObj(sh);
+                    if (what === "exportFbx") return exportFbx([sh], sh.name);
+                    if (what === "exportAll") return exportFbx(state.shapes, cur().name || "Project");
                     if (what === "import") return importObj(sh);
                     if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
                     if (Array.isArray(what)) {
@@ -1948,35 +1953,54 @@ function moved(s, before, amount) {
   }
 }
 
+/** How many vertices and triangles, then the places, the texture places, the triangles: a mesh as the engine takes one. */
+function meshBytes(made) {
+  const nv = made.positions.length / 3;
+  const nt = made.triangles.length / 3;
+  const bytes = new Uint8Array(8 + nv * 20 + nt * 12);
+  const data = new DataView(bytes.buffer);
+  data.setUint32(0, nv, true);
+  data.setUint32(4, nt, true);
+  made.positions.forEach((c, i) => data.setFloat32(8 + i * 4, c, true));
+  made.uvs.forEach((c, i) => data.setFloat32(8 + nv * 12 + i * 4, c, true));
+  made.triangles.forEach((v, i) => data.setUint32(8 + nv * 20 + i * 4, v, true));
+  return bytes;
+}
+
 /**
- * Outfit Studio: a new shape made of an OBJ file's mesh, in the likeness of
- * a shape of the project: drawn with what that is drawn with, and following
- * the bones its nearest vertices follow.
+ * Outfit Studio: new shapes made of the meshes of an OBJ or FBX file, in
+ * the likeness of a shape of the project: drawn with what that is drawn
+ * with, and following the bones its nearest vertices follow. One mesh is
+ * named by the person; several keep the names the file gives them.
  */
 async function shapeFromObj(like) {
   try {
-    const picked = await host.request("disk.open", { extensions: ["obj"] });
+    const picked = await host.request("disk.open", { extensions: ["obj", "fbx"] });
     if (!picked) return;
-    const made = obj.mesh(new TextDecoder().decode(picked.bytes));
-    const nv = made.positions.length / 3;
-    const nt = made.triangles.length / 3;
-    // How many vertices and triangles, then the places, the texture places, the triangles.
-    const bytes = new Uint8Array(8 + nv * 20 + nt * 12);
-    const data = new DataView(bytes.buffer);
-    data.setUint32(0, nv, true);
-    data.setUint32(4, nt, true);
-    made.positions.forEach((c, i) => data.setFloat32(8 + i * 4, c, true));
-    made.uvs.forEach((c, i) => data.setFloat32(8 + nv * 12 + i * 4, c, true));
-    made.triangles.forEach((v, i) => data.setUint32(8 + nv * 20 + i * 4, v, true));
-    rename(
-      "New shape",
-      picked.name.replace(/\.obj$/i, ""),
-      (name) => {
-        const [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name } }, bytes);
-        taken(work);
-      },
-      "Add",
-    );
+    const plain = picked.name.replace(/\.(obj|fbx)$/i, "");
+    const meshes = /\.fbx$/i.test(picked.name) ? await fbx.read(new Uint8Array(picked.bytes)) : [{ name: plain, ...obj.mesh(new TextDecoder().decode(picked.bytes)) }];
+    if (meshes.length === 1) {
+      const bytes = meshBytes(meshes[0]);
+      rename(
+        "New shape",
+        meshes[0].name || plain,
+        (name) => {
+          const [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name } }, bytes);
+          taken(work);
+        },
+        "Add",
+      );
+      return;
+    }
+    const names = new Set(state.shapes.map((s) => s.name));
+    let work;
+    for (const made of meshes) {
+      let name = made.name || plain;
+      for (let n = 2; names.has(name); n++) name = `${made.name || plain} ${n}`;
+      names.add(name);
+      [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name } }, meshBytes(made));
+    }
+    taken(work);
   } catch (e) {
     state.problem = e.message;
     render();
@@ -1994,16 +2018,33 @@ async function exportObj(sh) {
   }
 }
 
+/** Outfit Studio: shapes as they stand, as one FBX file saved where the person says. */
+async function exportFbx(shapes, name) {
+  try {
+    const bytes = fbx.write(shapes.map((sh) => ({ name: sh.name, positions: sh.now, uvs: sh.uvs, triangles: sh.shown })));
+    await host.request("disk.save", { name: `${name}.fbx`, bytes: bytes.buffer });
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
+}
+
 /**
- * Outfit Studio: move a shape's vertices to where an OBJ file has them: the
+ * Outfit Studio: move a shape's vertices to where an OBJ or FBX file has them: the
  * shape as exported, changed in another program and brought back. It becomes
  * a change to the shape, or to the slider the brushes change.
  */
 async function importObj(sh) {
   try {
-    const picked = await host.request("disk.open", { extensions: ["obj"] });
+    const picked = await host.request("disk.open", { extensions: ["obj", "fbx"] });
     if (!picked) return;
-    const to = obj.positions(new TextDecoder().decode(picked.bytes));
+    let to;
+    if (/\.fbx$/i.test(picked.name)) {
+      // The mesh of the shape's own name, or the only one with as many points.
+      const meshes = await fbx.read(new Uint8Array(picked.bytes));
+      const fits = meshes.filter((m) => m.points.length === sh.now.length);
+      to = (fits.find((m) => m.name === sh.name) || fits[0] || meshes.find((m) => m.name === sh.name) || meshes[0]).points;
+    } else to = obj.positions(new TextDecoder().decode(picked.bytes));
     if (to.length !== sh.now.length) {
       const points = (n) => `${n.toLocaleString()} ${n === 1 ? "point" : "points"}`;
       throw new Error(`${picked.name} has ${points(to.length / 3)}, and ${sh.name} ${points(sh.now.length / 3)}.`);
