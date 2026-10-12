@@ -1257,6 +1257,76 @@ impl Project {
         Ok(())
     }
 
+    /// What one slider does to the project's own shapes, as a slider data
+    /// file: a list for each shape, named as a saved project names them.
+    pub fn slider_data(&self, slider: &str) -> Result<Vec<u8>, Error> {
+        let index = self.slider(slider)?;
+        let lists: Vec<(String, Vec<Diff>)> = self.own[index]
+            .iter()
+            .map(|o| (format!("{}{slider}", o.target), o.diffs.clone()))
+            .collect();
+        if lists.is_empty() {
+            return invalid(format!(
+                "{slider} does nothing to this project's own shapes."
+            ));
+        }
+        Ok(SliderData { version: 1, lists }.write())
+    }
+
+    /// Take what a slider does from a slider data file: each list in it
+    /// named for one of the project's own shapes (the shape's name alone,
+    /// or with a slider's name after it) replaces what the slider did to
+    /// that shape. Returns how many shapes were given one.
+    pub fn import_slider(&mut self, slider: &str, file: &[u8]) -> Result<usize, Error> {
+        let index = self.slider(slider)?;
+        let data = SliderData::read(file)?;
+        let mut given = 0;
+        for shape in self.set.shapes.clone() {
+            if shape.data_folder.is_some() {
+                continue;
+            }
+            // The list for this slider first, then any list for the shape.
+            let named = format!("{}{slider}", shape.target);
+            let Some((_, diffs)) = data
+                .lists
+                .iter()
+                .find(|(n, _)| *n == named)
+                .or_else(|| data.lists.iter().find(|(n, _)| *n == shape.target))
+                .or_else(|| {
+                    let only: Vec<_> = data
+                        .lists
+                        .iter()
+                        .filter(|(n, _)| n.starts_with(&shape.target))
+                        .collect();
+                    (only.len() == 1).then(|| only[0])
+                })
+            else {
+                continue;
+            };
+            let count = self
+                .block(&shape.name)
+                .and_then(|b| mesh::read(&self.nif, b).ok())
+                .map_or(0, |m| m.positions.len());
+            if diffs.iter().any(|d| d.vertex as usize >= count) {
+                return invalid(format!(
+                    "The file moves a vertex {} does not have: it is for another mesh.",
+                    shape.name
+                ));
+            }
+            let own = &mut self.own[index];
+            own.retain(|o| o.target != shape.target);
+            own.push(Own {
+                target: shape.target.clone(),
+                diffs: diffs.clone(),
+            });
+            given += 1;
+        }
+        if given == 0 {
+            return invalid("Nothing in the file is named for a shape of this project.");
+        }
+        Ok(given)
+    }
+
     /// Where a build of the project goes, and whether as two meshes.
     pub fn output(&mut self, folder: &str, file: &str, weights: bool) -> Result<(), Error> {
         let file = file_name(file.trim().trim_end_matches(".nif"));

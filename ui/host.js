@@ -7,6 +7,7 @@
 //   files.read  { path }           ArrayBuffer
 //   files.picture { path, longest } ArrayBuffer       a texture, as a PNG no longer than `longest` a side
 //   output.write { name, files }   { files }          files: [{ path, bytes }], into the mod `name`
+//   output.remove { name, paths }  { removed }        files this add-on built into the mod `name`, taken out again
 //   disk.save   { name, bytes }    { saved }          a file, where the person says; false if they close the dialog
 //   disk.open   { extensions }     { name, bytes }    one file the person picks, or null
 //   apply.review                   opens the mod manager's own review of what Apply will do

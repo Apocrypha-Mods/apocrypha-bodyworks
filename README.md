@@ -61,14 +61,13 @@ BodySlide:
 
 - Taking an outfit out of a group, or deleting a group (an outfit can be
   added to a group, old or new).
-- Deleting a preset or a project.
 - Building to a folder outside the mod manager.
 
 Outfit Studio:
 
 - Brushes: painting vertex colour and alpha, and the vertex tools (collapse,
   flip or split an edge, weld, move one vertex).
-- Brush settings: focus and spacing.
+- Brush settings: spacing.
 - Shapes: refining (subdividing) a mesh, merging shapes,
   removing skinning, shader properties other than the texture files, making
   a shape from an OBJ or FBX file.
@@ -78,7 +77,7 @@ Outfit Studio:
   parts and into a new one, by masking them).
   Segments (Fallout 4): viewing and editing.
 - Sliders: combined sliders, importing and exporting slider data as BSD,
-  OSD, TRI or FBX.
+  TRI or FBX (OSD goes both ways).
 - Files: FBX in and out, head TRI files, physics data, packing projects for
   sharing, making a conversion reference.
 - View: bones drawn as more than a dot where each is, field of view and lighting

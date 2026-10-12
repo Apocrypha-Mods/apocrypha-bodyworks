@@ -174,6 +174,7 @@ impl Work {
             Change::ToPart { shape, to, part } => {
                 p.move_to_part(&shape, &numbers(data), to, part).map(drop)
             }
+            Change::ImportSlider { slider } => p.import_slider(&slider, data).map(drop),
             Change::Paint { shape, bone } => {
                 let painted: Vec<(u16, f32)> = data
                     .as_chunks::<8>()
@@ -378,6 +379,10 @@ enum Change {
         #[serde(default)]
         part: u16,
     },
+    /// Take what a slider does from a slider data file: the request's bytes.
+    ImportSlider {
+        slider: String,
+    },
     /// Set how much vertices of a shape follow a bone. The request's bytes
     /// are, for each vertex, its number and the weight, four bytes each.
     Paint {
@@ -452,6 +457,9 @@ enum Request {
     /// How much each vertex of a shape of the open project follows a bone:
     /// a number a vertex, after the answer.
     BoneWeights { shape: String, bone: String },
+    /// What one slider of the open project does, as a slider data file
+    /// after the answer.
+    SliderData { slider: String },
     /// Change the open project.
     Change { change: Change },
     /// Take the last change back, or with `again` put it back.
@@ -970,6 +978,13 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                     json!({ "vertices": weights.len() }),
                     weights.iter().flat_map(|w| w.to_le_bytes()).collect(),
                 ),
+                Err(e) => Answer::failed(e),
+            },
+            None => Answer::failed("No project is open."),
+        },
+        Request::SliderData { slider } => match &state.work {
+            Some(work) => match work.project.slider_data(&slider) {
+                Ok(bytes) => Answer::with(json!({ "name": format!("{slider}.osd") }), bytes),
                 Err(e) => Answer::failed(e),
             },
             None => Answer::failed("No project is open."),

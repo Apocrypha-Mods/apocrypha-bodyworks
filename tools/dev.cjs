@@ -58,6 +58,7 @@ const answers = {
   // No dialogs here: a save lands under the output folder, and an open hands back what a test put in window.toOpen.
   "disk.save": async (a) => { await fetch("/write?path=" + encodeURIComponent("disk/" + a.name), { method: "POST", body: a.bytes }); window.saved = a.name; return { saved: true }; },
   "disk.open": async () => window.toOpen || null,
+  "output.remove": async (a) => { const had = window.written || []; const gone = a.paths.filter((p) => had.includes(p)); window.written = had.filter((p) => !gone.includes(p)); window.removed = (window.removed || []).concat(gone); return { removed: gone.length }; },
   "apply.review": async () => { window.reviewed = true; },
 };
 addEventListener("message", async (e) => {

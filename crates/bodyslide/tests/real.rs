@@ -877,6 +877,24 @@ fn what_is_spared_keeps_its_sliders_and_its_bones() {
     // The rest were given the body's, and are not as painted.
     assert!((50..200).any(|v| by_name(&before, v) != by_name(&after, v)) || was == before);
 
+    // A slider's data out as a file, and back in to another slider.
+    let mut swapped = project.clone();
+    let file = swapped.slider_data("Breasts").unwrap();
+    let lists = osd::SliderData::read(&file).unwrap();
+    assert!(lists.lists.iter().any(|(n, _)| n == "BraBreasts"));
+    swapped.add_slider("Copy").unwrap();
+    assert!(swapped.slider_data("Copy").is_err());
+    assert_eq!(
+        swapped.import_slider("Copy", &file).unwrap(),
+        lists.lists.len()
+    );
+    let again = osd::SliderData::read(&swapped.slider_data("Copy").unwrap()).unwrap();
+    assert_eq!(
+        again.lists.iter().map(|l| &l.1).collect::<Vec<_>>(),
+        lists.lists.iter().map(|l| &l.1).collect::<Vec<_>>()
+    );
+    assert!(swapped.import_slider("Copy", b"not a file").is_err());
+
     // Sliders likewise: the spared keep the data the outfit came with.
     let (shipped, _) = project.save("A").unwrap();
     let mut conformed = project.clone();

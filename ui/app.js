@@ -89,6 +89,8 @@ const state = {
   size: Number(remembered.get("brush.size")) || 30,
   strength: Number(remembered.get("brush.strength")) || 40,
   mirror: remembered.get("brush.mirror") !== "0",
+  /** How much of a brush's reach has its full strength, 1 to 100: a point, up to nearly all of it. */
+  focus: Number(remembered.get("brush.focus")) || 50,
   /** The slider the brushes change (its place in the list), or -1 for the shape itself. */
   editing: -1,
   /** The bone the weight brush paints, by name, and how much each vertex of the picked shape follows it. */
@@ -602,6 +604,33 @@ async function addToGroup() {
     },
     "Add",
   );
+}
+
+/**
+ * BodySlide: delete the preset or the project on screen, where it was saved
+ * here into the output mod. Another mod's is that mod's to remove.
+ */
+async function remove(what) {
+  const set = state.set;
+  const file = (name) => name.replace(/[\\/:*?"<>|]/g, "_").trim().replace(/\.+$/, "");
+  const paths =
+    what === "preset"
+      ? [`${TOOLS}/SliderPresets/${state.preset.name}.xml`]
+      : ["SliderSets/NAME.osp", "ShapeData/NAME/NAME.nif", "ShapeData/NAME/NAME.osd"].map((p) => `${TOOLS}/${p.replaceAll("NAME", file(set.name))}`);
+  busy("Deleting");
+  try {
+    const { removed } = await host.request("output.remove", { name: state.output, paths });
+    if (!removed) throw new Error(`That ${what} is another mod's: it goes when that mod does.`);
+    for (const p of paths) state.kept.delete(under(p).toLowerCase());
+    await readCatalog();
+    state.busy = null;
+    const next = state.catalog.sets.find((s) => s.name === set.name) || state.catalog.sets[0];
+    if (next) return choose(next, what === "preset" ? undefined : state.preset?.name);
+  } catch (e) {
+    state.problem = e.message;
+  }
+  state.busy = null;
+  render();
 }
 
 function several() {
@@ -1303,12 +1332,15 @@ function studioSliders() {
             state.shapes[state.picked] && { name: `Clear for ${state.shapes[state.picked].name}`, value: "clear", rule: true },
             state.shapes[state.picked] && { name: "Mask what it moves", value: "mask" },
             { name: "Invert", value: "negate" },
+            { name: "Export data…", value: "out", rule: true },
+            { name: "Import data…", value: "in" },
             { name: "Delete", value: "delete", danger: true, rule: true },
           ].filter(Boolean),
           (what) => {
             const on = state.shapes[state.picked];
             if (what === "clear") return attempt({ do: "clearSlider", slider: sl.name, shape: on.name });
             if (what === "negate") return attempt({ do: "negateSlider", slider: sl.name });
+            if (what === "out" || what === "in") return sliderFile(sl, what === "in");
             if (what === "mask") {
               // Covered: the vertices of the picked shape this slider moves.
               const at = cur().sliders.indexOf(sl);
@@ -1589,6 +1621,9 @@ function brushing(what, ray) {
  * that is asked for.
  */
 function within(s, reached, corners) {
+  // A wider focus lifts the edge of the brush toward its middle.
+  const power = 0.25 + (1 - state.focus / 100) * 1.5;
+  for (let k = 0; k < reached.weights.length; k++) reached.weights[k] = Math.sqrt(reached.weights[k]) ** (power * 2);
   if (state.connected && corners) {
     stroke.near ||= brush.neighbours(s.shown, s.weld);
     reached = brush.joined(reached, s.weld, stroke.near, corners);
@@ -1777,6 +1812,7 @@ function brushBar() {
         null,
         knob("Size", "size"),
         state.tool !== "mask" && state.tool !== "move" && knob("Strength", "strength"),
+        state.tool !== "mask" && state.tool !== "weights" && knob("Focus", "focus"),
         (state.tool !== "weights" || (state.bone && brush.twin(state.bone) !== state.bone)) && mirror,
         state.tool !== "weights" && state.tool !== "mask" && connected,
         state.tool === "weights" &&
@@ -2109,6 +2145,23 @@ function texturesOf(sh) {
   );
 }
 
+/** Outfit Studio: what a slider does, out to a slider data file or in from one. */
+async function sliderFile(sl, into) {
+  try {
+    if (into) {
+      const picked = await host.request("disk.open", { extensions: ["osd"] });
+      if (!picked) return;
+      const [work] = core.ask({ op: "change", change: { do: "importSlider", slider: sl.name } }, new Uint8Array(picked.bytes));
+      return taken(work);
+    }
+    const [made, bytes] = core.ask({ op: "sliderData", slider: sl.name });
+    await host.request("disk.save", { name: made.name, bytes: bytes.slice(0) });
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
+}
+
 /** Outfit Studio: what a slider starts at and how it behaves. */
 function sliderSettings(sl) {
   const number = (label, value) => {
@@ -2387,6 +2440,24 @@ function render() {
           ),
         ),
       h("button.btn.ghost", { type: "button", disabled: !set, onclick: savePreset }, "Save preset…"),
+      set &&
+        h(
+          "button.btn.ghost",
+          {
+            type: "button",
+            title: "Presets and projects saved here",
+            onclick: (e) =>
+              menu(
+                e.currentTarget,
+                [
+                  state.preset && { name: `Delete preset ${state.preset.name}`, value: "preset", danger: true },
+                  { name: `Delete project ${set.name}`, value: "project", danger: true },
+                ].filter(Boolean),
+                (what) => remove(what),
+              ),
+          },
+          "Delete…",
+        ),
       h("span.grow"),
       h("label.search", { style: "flex: 0 1 200px; min-width: 120px", html: GLASS }, search),
     ),
