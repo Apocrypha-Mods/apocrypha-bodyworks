@@ -70,3 +70,21 @@ test("a stroke is what moved, scaled to what the slider stood at", () => {
   assert.equal(view.getFloat32(12, true), 1);
   assert.deepEqual(brush.across([1, 2, 3]), [-1, 2, 3]);
 });
+
+test("a mask covers what it is painted on, and the brushes leave that alone", () => {
+  const mask = new Float32Array(4);
+  brush.cover(mask, brush.reach([0, 0, 0], 1.2, square), false);
+  assert.equal(mask[0], 1);
+  assert.ok(mask[1] > 0 && mask[1] < 1);
+  assert.equal(mask[2], 0);
+  const reached = brush.spared(brush.reach([0, 0, 0], 1.2, square), mask);
+  assert.equal(reached.weights[0], 0);
+  const p = new Float32Array(square);
+  brush.inflate(p, new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]), reached, 1);
+  assert.equal(p[2], 0);
+  assert.ok(p[5] > 0);
+  // Uncovered again, it is as it was.
+  brush.cover(mask, brush.reach([0, 0, 0], 1.2, square), true);
+  assert.equal(mask[0], 0);
+  assert.ok(mask[1] < 1);
+});

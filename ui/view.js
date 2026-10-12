@@ -2,14 +2,14 @@
 // when something changed.
 
 const VS = `#version 300 es
-in vec3 p; in vec3 n; in vec2 t;
+in vec3 p; in vec3 n; in vec2 t; in float m;
 uniform mat4 mvp; uniform mat3 nm;
-out vec3 vn; out vec2 vt;
-void main() { vn = nm * n; vt = t; gl_Position = mvp * vec4(p, 1.0); }`;
+out vec3 vn; out vec2 vt; out float vm;
+void main() { vn = nm * n; vt = t; vm = m; gl_Position = mvp * vec4(p, 1.0); }`;
 
 const FS = `#version 300 es
 precision highp float;
-in vec3 vn; in vec2 vt; out vec4 o;
+in vec3 vn; in vec2 vt; in float vm; out vec4 o;
 uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line;
 void main() {
   // The lines of a wireframe are one flat colour.
@@ -23,6 +23,8 @@ void main() {
   // A painted shape is lit harder: a skin texture is darker than the tint.
   float light = (0.22 + 0.72 * key + 0.2 * fill) * mix(1.0, 1.9, painted);
   vec3 c = base * light + vec3(0.12) * rim * mix(1.0, 0.35, painted);
+  // What a mask covers is drawn dark: the brushes leave it alone.
+  c *= mix(1.0, 0.3, clamp(vm, 0.0, 1.0));
   o = vec4(pow(c, vec3(1.0 / 2.2)), 1.0);
 }`;
 
@@ -59,6 +61,7 @@ export class View {
     gl.bindAttribLocation(prog, 0, "p");
     gl.bindAttribLocation(prog, 1, "n");
     gl.bindAttribLocation(prog, 2, "t");
+    gl.bindAttribLocation(prog, 3, "m");
     gl.linkProgram(prog);
     this.uMvp = gl.getUniformLocation(prog, "mvp");
     this.uNm = gl.getUniformLocation(prog, "nm");
@@ -154,6 +157,7 @@ export class View {
       if (s.eb) gl.deleteBuffer(s.eb);
       if (s.skin) gl.deleteTexture(s.skin);
       gl.deleteBuffer(s.pb);
+      gl.deleteBuffer(s.mb);
       gl.deleteBuffer(s.nb);
       gl.deleteBuffer(s.ib);
       gl.deleteVertexArray(s.vao);
@@ -178,17 +182,32 @@ export class View {
         gl.enableVertexAttribArray(2);
         gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 0, 0);
       }
+      const mb = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, mb);
+      gl.bufferData(gl.ARRAY_BUFFER, s.mask || new Float32Array(s.positions.length / 3), gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(3);
+      gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 0, 0);
       const ib = gl.createBuffer();
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, s.triangles, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
-      return { vao, pb, nb, tb, ib, count: s.triangles.length, shown: true, skin: null, kept: s.triangles, edges: 0, eb: null };
+      return { vao, pb, nb, tb, mb, ib, count: s.triangles.length, shown: true, skin: null, kept: s.triangles, edges: 0, eb: null };
     });
   }
 
   /** Change how shapes are drawn (see `looks`). */
   look(changes) {
     Object.assign(this.looks, changes);
+    this.draw();
+  }
+
+  /** How much of each vertex of shape `i` a mask covers: nothing (0) to all of it (1). */
+  mask(i, covered) {
+    const gl = this.gl;
+    const s = this.shapes[i];
+    if (!s) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, s.mb);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, covered);
     this.draw();
   }
 
@@ -315,7 +334,7 @@ export class View {
     const y = (1 - ((e.clientY - box.top) / box.height) * 2) / f;
     const dir = [0, 1, 2].map((k) => right[k] * x + up[k] * y - back[k]);
     const l = Math.hypot(dir[0], dir[1], dir[2]);
-    return { origin: eye, dir: dir.map((c) => c / l), back };
+    return { origin: eye, dir: dir.map((c) => c / l), back, alt: e.altKey };
   }
 
   /** Show the brush's reach on the shape, or with null stop showing it. */

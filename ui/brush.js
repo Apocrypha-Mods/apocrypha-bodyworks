@@ -92,6 +92,23 @@ export function neighbours(triangles, weld) {
   return { start, next };
 }
 
+/** What a brush reaches, less what a mask covers of each vertex (0 nothing, 1 all of it). */
+export function spared(reached, mask) {
+  const { vertices, weights } = reached;
+  for (let k = 0; k < vertices.length; k++) weights[k] *= 1 - mask[vertices[k]];
+  return reached;
+}
+
+/** Cover what the brush reaches with a mask, soft at its edge; or with `off` uncover it. */
+export function cover(mask, reached, off) {
+  const { vertices, weights } = reached;
+  for (let k = 0; k < vertices.length; k++) {
+    const much = Math.min(1, weights[k] * 4);
+    const v = vertices[k];
+    mask[v] = off ? Math.min(mask[v], 1 - much) : Math.max(mask[v], much);
+  }
+}
+
 /** Push what the brush reaches out along its normals (or in, with a negative `amount`). */
 export function inflate(positions, normals, reached, amount) {
   const { vertices, weights } = reached;

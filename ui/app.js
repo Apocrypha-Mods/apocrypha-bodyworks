@@ -229,6 +229,7 @@ async function prepare(set) {
 function showShapes(frame) {
   const studio = state.mode === "studio" && Boolean(state.work);
   const hidden = new Set(studio ? state.shapes.filter((sh) => sh.hidden).map((sh) => sh.name) : []);
+  const masks = new Map(studio ? state.shapes.map((sh) => [sh.name, sh.mask]) : []);
   const [preview, numbers] = core.ask({ op: "preview", set: state.set.name, work: studio });
   const f32 = new Float32Array(numbers);
   const u32 = new Uint32Array(numbers);
@@ -260,10 +261,13 @@ function showShapes(frame) {
       })),
     };
     made.shown = made.triangles;
+    // A mask stays on the shape it was painted on, while it has the same vertices.
+    const mask = masks.get(s.name);
+    made.mask = mask && mask.length === base.length / 3 ? mask : new Float32Array(base.length / 3);
     return made;
   });
   if (!view) return;
-  view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs })));
+  view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs, mask: s.mask })));
   state.shapes.forEach((sh, i) => sh.hidden && view.hide(i, true));
   state.picked = Math.min(state.picked, Math.max(0, state.shapes.length - 1));
   view.look({ picked: state.mode === "studio" ? state.picked : -1 });
@@ -1063,6 +1067,7 @@ const BRUSHES = [
   ["deflate", "Deflate"],
   ["move", "Move"],
   ["smooth", "Smooth"],
+  ["mask", "Mask"],
 ];
 
 /** How far the brush reaches, in the mesh's units. */
@@ -1100,6 +1105,15 @@ function brushing(what, ray) {
   }
   view.reach({ point: found.point, normal: found.normal, radius: r });
   if (what === "over") return false;
+  if (state.tool === "mask") {
+    // Not a change to the outfit: what the other brushes are to leave alone.
+    if (what === "down") stroke = { tool: "mask", shape: s, before: s.now, amount: 1 };
+    for (const point of state.mirror ? [found.point, brush.across(found.point)] : [found.point]) {
+      brush.cover(s.mask, brush.reach(point, r, s.now), ray.alt);
+    }
+    view.mask(state.picked, s.mask);
+    return true;
+  }
   if (what === "down") {
     const k = state.editing;
     const amount = k < 0 ? 1 : applied(cur().sliders[k], state.at[k]);
@@ -1108,7 +1122,7 @@ function brushing(what, ray) {
     stroke = { tool: state.tool, shape: s, before: new Float32Array(s.now), amount, last: null, near: null };
     if (stroke.tool === "move") {
       const pick = (p) => {
-        const reached = brush.reach(p, r, s.now);
+        const reached = brush.spared(brush.reach(p, r, s.now), s.mask);
         const from = new Float32Array(reached.vertices.length * 3);
         reached.vertices.forEach((v, i) => from.set(s.now.subarray(v * 3, v * 3 + 3), i * 3));
         return [reached, from];
@@ -1127,7 +1141,7 @@ function brushing(what, ray) {
   stroke.last = found.point;
   const strength = state.strength / 100;
   for (const point of state.mirror ? [found.point, brush.across(found.point)] : [found.point]) {
-    const reached = brush.reach(point, r, s.now);
+    const reached = brush.spared(brush.reach(point, r, s.now), s.mask);
     if (stroke.tool === "smooth") {
       stroke.near ||= brush.neighbours(s.shown, s.weld);
       // Vertices at one place go to one place: each to its group's first.
@@ -1151,6 +1165,10 @@ function endStroke() {
   const done = stroke;
   stroke = null;
   if (!done) return false;
+  if (done.tool === "mask") {
+    render();
+    return false;
+  }
   const s = done.shape;
   const k = state.editing;
   // What a slider does is what was seen to move, over how far the slider stood.
@@ -1228,7 +1246,29 @@ function brushBar() {
   return h(
     "div.tools",
     null,
-    state.tool && h("div.brush", null, knob("Size", "size"), knob("Strength", "strength"), mirror, target),
+    state.tool &&
+      h(
+        "div.brush",
+        null,
+        knob("Size", "size"),
+        state.tool !== "mask" && state.tool !== "move" && knob("Strength", "strength"),
+        mirror,
+        state.tool === "mask" ? h("span.sub.quiet", null, "Alt uncovers") : target,
+        state.shapes[state.picked]?.mask.some((m) => m > 0) &&
+          h(
+            "button.btn.ghost.small",
+            {
+              type: "button",
+              onclick: () => {
+                const sh = state.shapes[state.picked];
+                sh.mask.fill(0);
+                view.mask(state.picked, sh.mask);
+                render();
+              },
+            },
+            "Clear mask",
+          ),
+      ),
     h("div.seg", { role: "group", "aria-label": "Tool" }, tool(null, "Orbit"), ...BRUSHES.map(([id, label]) => tool(id, label))),
   );
 }
