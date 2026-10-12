@@ -79,7 +79,8 @@ Outfit Studio:
 
 - Brushes: colour is painted only on a shape that already carries colours.
 - Shapes: merging shapes that keep different things for each vertex,
-  removing skinning, shader properties other than the texture files.
+  removing skinning, the kind of shader a shape is drawn with and its
+  switches (its textures, glow, shine, gloss and opacity are changed).
 - Segments (Fallout 4): viewing and editing.
 - Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI
   go both ways).

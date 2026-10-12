@@ -222,6 +222,25 @@ impl Work {
                 p.add_zap(&name, &shape, &vertices)
             }
             Change::Textures { shape, textures } => p.set_textures(&shape, &textures),
+            Change::Look {
+                shape,
+                glow,
+                glow_strength,
+                alpha,
+                gloss,
+                shine,
+                shine_strength,
+            } => p.set_look(
+                &shape,
+                &mesh::Look {
+                    glow,
+                    glow_strength,
+                    alpha,
+                    gloss,
+                    shine,
+                    shine_strength,
+                },
+            ),
             Change::Separate { shape, to } => {
                 let vertices: Vec<u16> = data
                     .as_chunks::<4>()
@@ -511,6 +530,17 @@ enum Change {
     AddZap {
         name: String,
         shape: String,
+    },
+    /// Change how a shape takes light.
+    #[serde(rename_all = "camelCase")]
+    Look {
+        shape: String,
+        glow: [f32; 3],
+        glow_strength: f32,
+        alpha: f32,
+        gloss: f32,
+        shine: [f32; 3],
+        shine_strength: f32,
     },
     /// Name the texture files a shape is drawn with, slot by slot.
     Textures {
@@ -1108,6 +1138,10 @@ impl State {
                 "triangles": triangles,
                 "uvs": uvs,
                 "textures": m.textures,
+                "look": mesh::look(&nif, m.block).map(|l| json!({
+                    "glow": l.glow, "glowStrength": l.glow_strength, "alpha": l.alpha,
+                    "gloss": l.gloss, "shine": l.shine, "shineStrength": l.shine_strength,
+                })),
                 "sliders": sliders,
                 "zaps": zaps,
                 "bones": mesh::bone_names(&nif, m.block),

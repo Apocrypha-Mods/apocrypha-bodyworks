@@ -1639,6 +1639,35 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
     };
     assert_eq!(named(&left_skin, 1), named(&plain_skin, 1));
     assert_eq!(named(&left_skin, 2), vec![(names[2].clone(), 1.0)]);
+    // How a shape takes light: changed, read back, and nothing else of the
+    // file with it.
+    let lit = |p: &Project| {
+        let at = mesh::shapes(&p.nif)
+            .into_iter()
+            .find(|at| mesh::name(&p.nif, *at).as_deref() == Some("Bra"))
+            .unwrap();
+        mesh::look(&p.nif, at).unwrap()
+    };
+    let mut look = lit(&project);
+    assert!((0.0..=1.0).contains(&look.alpha) && look.gloss > 0.0);
+    look.glow = [1.0, 0.5, 0.25];
+    look.glow_strength = 2.0;
+    look.gloss = 80.0;
+    let mut glowing = project.clone();
+    glowing.set_look("Bra", &look).unwrap();
+    assert_eq!(lit(&glowing), look);
+    let changed = glowing
+        .nif
+        .blocks
+        .iter()
+        .zip(&project.nif.blocks)
+        .filter(|(a, b)| a.data != b.data)
+        .count();
+    assert_eq!(changed, 1);
+    look.alpha = 2.0;
+    assert!(glowing.set_look("Bra", &look).is_err());
+    built(&glowing, "Bra");
+
     // A bone made up by hand: once, and where it was put.
     let mut boned = project.clone();
     boned

@@ -285,6 +285,7 @@ function showShapes(frame) {
       weld: welded(base),
       triangles: u32.slice(s.triangles[0], s.triangles[0] + s.triangles[1]),
       bones: s.bones || [],
+      look: s.look || null,
       reference: Boolean(s.reference),
       hidden: hidden.has(s.name),
       ghost: ghosts.has(s.name),
@@ -1300,6 +1301,7 @@ function studioSide() {
                     { name: sh.hidden ? "Show" : "Hide", value: "hide" },
                     { name: sh.ghost ? "Solid" : "Ghost", value: "ghost" },
                     state.work && sh.textures.length > 0 && { name: "Textures…", value: "textures" },
+                    state.work && sh.look && { name: "Material…", value: "material" },
                     state.work && { name: "Flip texture left to right", value: "flipU" },
                     state.work && { name: "Flip texture top to bottom", value: "flipV" },
                     { name: "Export OBJ…", value: "export", rule: true },
@@ -1319,6 +1321,7 @@ function studioSide() {
                       return rename("Duplicate shape", `${sh.name} copy`, (to) => change({ do: "duplicate", name: sh.name, to }), "Duplicate");
                     }
                     if (what === "transform") return transform(sh);
+                    if (what === "material") return material(sh);
                     if (what === "mirror") return attempt({ do: "mirror", shape: sh.name });
                     if (what === "refine") {
                       // Masked points, and the edges they end, stay as they are.
@@ -2671,6 +2674,49 @@ function transform(sh) {
     [h("div.pair.three", null, move.map((f) => f[0])), h("div.pair.three", null, turn.map((f) => f[0])), h("div.pair.three", null, scaleField)],
     [said, h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"), go],
   );
+}
+
+/** Outfit Studio: how a shape takes light: its glow, its shine, its gloss and how solid it is. */
+function material(sh) {
+  const hex = (c) => "#" + c.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0")).join("");
+  const rgb = (text) => [1, 3, 5].map((i) => parseInt(text.slice(i, i + 2), 16) / 255);
+  const field = (label, input) => [h("label.field", null, h("span", null, label), input), input];
+  const colour = (label, value) => field(label, h("input.input.swatch", { type: "color", value: hex(value), "aria-label": label }));
+  const number = (label, value, max) => field(label, h("input.input", { type: "number", step: "any", min: 0, max, value: String(Math.round(value * 1000) / 1000), "aria-label": label }));
+  const look = sh.look;
+  const [glow, glowStrength] = [colour("Glow", look.glow), number("Glow strength", look.glowStrength, 1000)];
+  const [shine, shineStrength] = [colour("Shine", look.shine), number("Shine strength", look.shineStrength, 1000)];
+  const [gloss, alpha] = [number("Gloss", look.gloss, 1000), number("Opacity, percent", look.alpha * 100, 100)];
+  const go = h("button.btn.primary", { type: "button" }, "Done");
+  const said = h("span.sub.warn.grow.cut");
+  go.addEventListener("click", () => {
+    try {
+      const percent = Number(alpha[1].value);
+      if (!(percent >= 0 && percent <= 100)) throw new Error("Opacity is 0 to 100.");
+      if (![glowStrength, shineStrength, gloss].every(([, input]) => Number(input.value) >= 0 && Number(input.value) <= 1000)) throw new Error("Strengths and gloss are 0 to 1,000.");
+      // A colour left alone goes back as it came, not as the nearest of 256 a picker holds.
+      const kept = (input, was) => (input.value === hex(was) ? was : rgb(input.value));
+      change({
+        do: "look",
+        shape: sh.name,
+        glow: kept(glow[1], look.glow),
+        glowStrength: Number(glowStrength[1].value),
+        alpha: Number(alpha[1].value) / 100,
+        gloss: Number(gloss[1].value),
+        shine: kept(shine[1], look.shine),
+        shineStrength: Number(shineStrength[1].value),
+      });
+      close(el);
+    } catch (e) {
+      said.textContent = e.message;
+    }
+  });
+  const pair = (a, b) => h("div.pair", null, [a[0], b[0]]);
+  const el = sheet(sh.name, null, [pair(glow, glowStrength), pair(shine, shineStrength), pair(gloss, alpha)], [
+    said,
+    h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
+    go,
+  ]);
 }
 
 /** Outfit Studio: the texture files a shape is drawn with. */

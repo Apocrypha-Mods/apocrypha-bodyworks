@@ -53,6 +53,83 @@ fn textures_of(nif: &Nif, shader: i32) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// How a shape's surface takes light, as its lighting shader keeps it after
+/// the link to its textures (measured over real files with `--example
+/// look`): the colour it glows and how strongly, how solid it is, how
+/// glossy, and the colour and strength of its shine.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Look {
+    pub glow: [f32; 3],
+    pub glow_strength: f32,
+    pub alpha: f32,
+    pub gloss: f32,
+    pub shine: [f32; 3],
+    pub shine_strength: f32,
+}
+
+/// Where in a lighting shader's kept bytes each number of a [`Look`] is.
+const LOOK_BYTES: usize = 48;
+
+fn shader_of(nif: &Nif, block: usize) -> Option<usize> {
+    let stream = nif.header.stream.version;
+    // The layout is the one Skyrim and Special Edition write.
+    if !(83..=100).contains(&stream) {
+        return None;
+    }
+    let shader = if nif.kind_of(block) == "NiTriShape" {
+        NiTriShape::read(&nif.blocks[block].data, stream)
+            .ok()?
+            .shader
+            .unwrap_or(-1)
+    } else {
+        TriShape::read(&nif.blocks[block].data, stream).ok()?.shader
+    };
+    block_of(nif, shader, &["BSLightingShaderProperty"])
+}
+
+/// How the shape at `block` takes light; nothing for one drawn another way.
+pub fn look(nif: &Nif, block: usize) -> Option<Look> {
+    let at = shader_of(nif, block)?;
+    let s = LightingShader::read(&nif.blocks[at].data, nif.header.stream.version).ok()?;
+    if s.rest.len() < LOOK_BYTES {
+        return None;
+    }
+    let f = |i: usize| f32::from_le_bytes([0, 1, 2, 3].map(|k| s.rest[i * 4 + k]));
+    Some(Look {
+        glow: [f(0), f(1), f(2)],
+        glow_strength: f(3),
+        alpha: f(5),
+        gloss: f(7),
+        shine: [f(8), f(9), f(10)],
+        shine_strength: f(11),
+    })
+}
+
+/// Change how the shape at `block` takes light. Everything else its shader
+/// keeps stays as it was.
+pub fn set_look(nif: &mut Nif, block: usize, look: &Look) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    let at = shader_of(nif, block)
+        .ok_or_else(|| NifError::Unsupported("the shape has no lighting to change".into()))?;
+    let mut s = LightingShader::read(&nif.blocks[at].data, stream)?;
+    if s.rest.len() < LOOK_BYTES {
+        return Err(NifError::Unsupported(
+            "the shape has no lighting to change".into(),
+        ));
+    }
+    let mut put = |i: usize, v: f32| s.rest[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+    for k in 0..3 {
+        put(k, look.glow[k]);
+        put(8 + k, look.shine[k]);
+    }
+    put(3, look.glow_strength);
+    put(5, look.alpha);
+    put(7, look.gloss);
+    put(11, look.shine_strength);
+    nif.blocks[at].data = s.write();
+    Ok(())
+}
+
 /// Name the texture files of the shape at `block`, slot by slot: as many
 /// as it has slots for, no more and no fewer.
 pub fn set_textures(nif: &mut Nif, block: usize, textures: &[String]) -> Result<(), NifError> {

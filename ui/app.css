@@ -200,3 +200,21 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bo
   .main.studio .split { display: none; }
 }
 .main.studio .sl.one { grid-template-columns: minmax(0, 1fr) minmax(90px, 130px); gap: 12px; }
+
+/* A colour to pick: the swatch fills the field. */
+.input.swatch {
+  width: 100%;
+  padding: 4px;
+  cursor: pointer;
+}
+.input.swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.input.swatch::-webkit-color-swatch {
+  border: 0;
+  border-radius: 5px;
+}
+.input.swatch::-moz-color-swatch {
+  border: 0;
+  border-radius: 5px;
+}

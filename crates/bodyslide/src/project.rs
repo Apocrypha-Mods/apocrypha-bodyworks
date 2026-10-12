@@ -1141,6 +1141,27 @@ impl Project {
             .map_err(|e| Error::Invalid(e.to_string()))
     }
 
+    /// Change how a shape takes light: its glow, how solid it is, its gloss
+    /// and its shine.
+    pub fn set_look(&mut self, shape: &str, look: &mesh::Look) -> Result<(), Error> {
+        self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let colours = look.glow.iter().chain(&look.shine);
+        if colours.clone().any(|c| !(0.0..=1.0).contains(c))
+            || !(0.0..=1.0).contains(&look.alpha)
+            || [look.glow_strength, look.gloss, look.shine_strength]
+                .iter()
+                .any(|v| !(0.0..=1000.0).contains(v))
+        {
+            return invalid(
+                "Colours and opacity run from 0 to 1, strengths and gloss from 0 to 1000.",
+            );
+        }
+        mesh::set_look(&mut self.nif, block, look).map_err(|e| Error::Invalid(e.to_string()))
+    }
+
     /// Part some vertices of a shape off as a shape of their own, named
     /// `to`: the first keeps the rest. Both keep what sliders did to them.
     pub fn separate(&mut self, shape: &str, to: &str, vertices: &[u16]) -> Result<(), Error> {
