@@ -37,6 +37,13 @@ fn every_real_project_reads_and_reads_the_same_after_being_written() {
     let mut sets_seen = 0;
     for path in files("osp", None) {
         let bytes = std::fs::read(&path).unwrap();
+        // One file among the samples was shipped broken (a set closed
+        // twice): it is refused, as a file that is not XML is, and is not
+        // a set the mods have.
+        if path.ends_with("UBE Dawnguard - Body - Prisoner Bloody.osp") {
+            assert!(set::read(&bytes).is_err());
+            continue;
+        }
         let sets = set::read(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let again = set::read(set::write(&sets).as_bytes()).unwrap();
         assert_eq!(again, sets, "{}", path.display());
@@ -74,11 +81,9 @@ fn every_real_preset_and_group_file_round_trips() {
             preset::read(preset::write(&presets).as_bytes()).unwrap(),
             presets
         );
-        assert!(
-            presets.iter().all(|p| !p.values.is_empty()),
-            "{}",
-            path.display()
-        );
+        // A preset may set nothing at all (one that zeroes every slider);
+        // a file of presets has at least one.
+        assert!(!presets.is_empty(), "{}", path.display());
     }
     for path in files("xml", Some("SliderCategories")) {
         let categories = category::read(&std::fs::read(&path).unwrap()).unwrap();
@@ -2147,6 +2152,17 @@ fn a_fallout_4_shape_keeps_its_segments_and_skin_through_changes() {
             }
         )
         .is_err());
+    // Whatever the asker says of which game it is.
+    assert!(shiny
+        .set_look(
+            name,
+            &mesh::Look {
+                gloss: 30.0,
+                smooth: false,
+                ..look
+            }
+        )
+        .is_err());
     assert!(shiny
         .set_look(
             name,
@@ -2180,4 +2196,32 @@ fn a_fallout_4_shape_keeps_its_segments_and_skin_through_changes() {
     assert!(painted_skin.vertices[0]
         .iter()
         .any(|x| x.0 == 0 && x.1 > 0.99));
+}
+
+#[test]
+fn a_face_part_loses_vertices_and_still_reads() {
+    use apoc_bodyslide::project::Project;
+    use apoc_nif::{mesh, Nif};
+    // A part of a head keeps its places after the shape and the rest of
+    // each vertex in its skin: both lose what is taken out.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/ube/fix/meshes/!UBE/Brows/FemaleBrows.nif");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    let mut project = Project::from_mesh("Brows", "meshes/brows.nif", &bytes).unwrap();
+    let name = project.set.shapes[0].name.clone();
+    let was = mesh::read(&project.nif, mesh::shapes(&project.nif)[0]).unwrap();
+    let half: Vec<u16> = (0..(was.positions.len() / 2) as u16).collect();
+    project.delete_vertices(&name, &half).unwrap();
+    let nif = Nif::read(&project.nif.write()).unwrap();
+    let now = mesh::read(&nif, mesh::shapes(&nif)[0]).unwrap();
+    assert_eq!(now.positions.len(), was.positions.len() - half.len());
+    assert_eq!(now.positions[..], was.positions[half.len()..]);
+    assert_eq!(now.uvs.len(), now.positions.len());
+    // What would give it other vertices altogether is refused, and leaves it be.
+    let before = project.nif.write();
+    assert!(project.refine(&name, &[]).is_err());
+    assert!(project.weld(&name).is_err());
+    assert_eq!(project.nif.write(), before);
 }

@@ -52,6 +52,17 @@ Edition:
 Rules found this way are written where they are used, each with what it was
 found from.
 
+### Another body for Skyrim (UBE)
+
+Held against UBE 2.0 and its armour set (636 meshes, 299 sets): every mesh
+reads and writes back as it was, every project and slider data file reads
+and writes back, 298 sets build (the last names a mesh its package does not
+have), and one project file shipped broken (a set closed twice) is refused
+as it is not XML. Its heads' parts (brows, eyes) showed two faults since
+mended: a part of a head left unreadable when vertices were taken out of
+it, and changes that give one other vertices altogether, which are now
+refused for a part of a head rather than leaving it out of step.
+
 ### Fallout 4
 
 Held against CBBE for Fallout 4's own shipped meshes (348 sets, the "Curvy"

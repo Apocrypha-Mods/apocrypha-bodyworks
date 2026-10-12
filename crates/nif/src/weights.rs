@@ -958,6 +958,12 @@ pub fn remove_part(nif: &mut Nif, block: usize, index: usize, into: usize) -> Re
 /// other's now begin.
 pub fn merge(nif: &mut Nif, into: usize, from: usize) -> Result<usize, NifError> {
     let stream = nif.header.stream.version;
+    if [into, from]
+        .iter()
+        .any(|b| nif.kind_of(*b) == "BSDynamicTriShape")
+    {
+        return unsupported("a face part's vertices and triangles are not changed here");
+    }
     // Two of Fallout 4's shapes: one's vertices after the other's, each
     // group of the second's triangles joining the same group of the
     // first's where they are grouped alike, and the first segment where
@@ -1187,6 +1193,9 @@ pub fn rebuild(
     like: Option<usize>,
 ) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
+    if nif.kind_of(block) == "BSDynamicTriShape" {
+        return unsupported("a face part's vertices and triangles are not changed here");
+    }
     if let Some(at) = fo4(nif, block)? {
         // Fallout 4: vertices and triangles in the shape itself, the
         // triangles laid down group after group for its segments, and
@@ -1425,6 +1434,12 @@ pub type Packed = (Vec<u8>, Layout, Vec<Vec<[u16; 3]>>);
 /// by part: what [`rebuild`] takes back.
 pub fn packed(nif: &Nif, block: usize) -> Result<Packed, NifError> {
     let stream = nif.header.stream.version;
+    // A face part keeps its places after the shape, apart from the rest of
+    // each vertex: giving it other vertices is not done here, and would
+    // leave the two out of step.
+    if nif.kind_of(block) == "BSDynamicTriShape" {
+        return unsupported("a face part's vertices and triangles are not changed here");
+    }
     if fo4(nif, block)?.is_some() {
         // Fallout 4: the vertices are the shape's own, and its triangles
         // are dealt into the groups its segments make of them.

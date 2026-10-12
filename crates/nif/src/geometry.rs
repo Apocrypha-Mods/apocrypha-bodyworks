@@ -379,6 +379,9 @@ impl TriShape {
                     rest.extend(rows);
                     rest.extend_from_slice(&self.rest[4 + size..]);
                     self.rest = rest;
+                    // It counts its own vertices by these, wherever the
+                    // rest of each vertex is kept.
+                    self.vertex_count = kept as u16;
                 }
             }
         }
