@@ -1774,6 +1774,8 @@ function brushing(what, ray) {
   }
   // Let go: the stroke ends as what it began as, whatever is in hand by now.
   if (what === "up") return finish();
+  // A drag whose stroke ended early, a brush changed mid-stroke, does nothing more until the next press.
+  if (what === "drag" && !stroke) return true;
   if (state.tool === "place") {
     // The whole shape, dragged across the view: taken hold of where the pointer is on it.
     if (what === "drag" && stroke?.tool === "place") {

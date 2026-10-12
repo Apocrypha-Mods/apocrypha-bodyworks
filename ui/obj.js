@@ -41,7 +41,7 @@ export function uvs(text) {
   for (const line of text.split(/\r?\n/)) {
     const blank = line[1] === " " || line[1] === "\t";
     if (line[0] === "v" && blank) vertices++;
-    else if (line[0] === "f" && blank) faces.push(line.slice(2).trim().split(/\s+/));
+    else if (line[0] === "f" && blank) faces.push({ words: line.slice(2).trim().split(/\s+/), vertices, listed: listed.length / 2 });
     else if (line.startsWith("vt") && (line[2] === " " || line[2] === "\t")) {
       const [u, v] = line.slice(3).trim().split(/\s+/).map(Number);
       if (![u, v].every((c) => Number.isFinite(Math.fround(c)))) throw new Error("The file has a place in the texture that is not two numbers.");
@@ -50,7 +50,7 @@ export function uvs(text) {
   }
   if (!faces.length) return Float32Array.from(listed);
   const out = new Float32Array(vertices * 2).fill(NaN);
-  // Counted from one; a number below nothing counts back from the last.
+  // Counted from one; a number below nothing counts back from the last listed before the face.
   const at = (word, count) => {
     const n = Number(word);
     const i = n < 0 ? count + n : n - 1;
@@ -58,10 +58,10 @@ export function uvs(text) {
     return i;
   };
   for (const face of faces) {
-    for (const word of face) {
+    for (const word of face.words) {
       const [v, vt] = word.split("/");
       if (!vt) continue;
-      const [to, from] = [at(v, vertices) * 2, at(vt, listed.length / 2) * 2];
+      const [to, from] = [at(v, face.vertices) * 2, at(vt, face.listed) * 2];
       if (Number.isNaN(out[to])) out.set(listed.slice(from, from + 2), to);
       else if (Math.abs(out[to] - Math.fround(listed[from])) > 1e-6 || Math.abs(out[to + 1] - Math.fround(listed[from + 1])) > 1e-6) {
         throw new Error("The file has a vertex with two places in the texture.");

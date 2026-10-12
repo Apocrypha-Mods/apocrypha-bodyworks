@@ -12,4 +12,7 @@ test("a vertex's place in the texture is the one its faces give it, not the one 
   assert.ok(Number.isNaN(obj.uvs("v 0 0 0\nv 1 0 0\nv 0 1 0\nv 2 2 2\nvt 0.5 0.5\nf 1/1 2/1 3/1\n")[6]));
   assert.throws(() => obj.uvs("v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 1\nf 1/1 2/1 3/1\nf 1/2 2/1 3/1\n"), /two places/);
   assert.throws(() => obj.uvs("v 0 0 0\nvt 0 0\nf 1/5 1/1 1/1\n"), /does not list/);
+  // Counted back, a number counts from what was listed before its face.
+  const back = "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0.1 1\nvt 0.2 1\nvt 0.3 1\nf -3/-3 -2/-2 -1/-1\nv 2 2 2\nvt 0.4 1\nf -1/-1 -2/-2 -3/-3\n";
+  assert.ok(near([...obj.uvs(back)], [0.1, 0, 0.2, 0, 0.3, 0, 0.4, 0]));
 });
