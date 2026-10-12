@@ -39,6 +39,10 @@ pub struct Settings {
     pub clamp: bool,
 }
 
+/// A slider moves a vertex less than this along every axis: it does not
+/// move it.
+const GONE: f32 = 0.00001;
+
 fn invalid<T>(why: impl Into<String>) -> Result<T, Error> {
     Err(Error::Invalid(why.into()))
 }
@@ -263,6 +267,89 @@ impl Project {
         slider.clamp = to.clamp;
         if !to.zap {
             slider.zap_toggles.clear();
+        }
+        Ok(())
+    }
+
+    /// Move vertices of a shape, each by its offset. With a slider, it is
+    /// what that slider does to the shape that changes by as much, and the
+    /// shape itself stays; a vertex the slider is left doing nothing to is
+    /// dropped from it.
+    pub fn move_vertices(
+        &mut self,
+        shape: &str,
+        slider: Option<&str>,
+        moves: &[Diff],
+    ) -> Result<(), Error> {
+        let at = self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let read = mesh::read(&self.nif, block).map_err(|e| Error::Invalid(e.to_string()))?;
+        if moves
+            .iter()
+            .any(|m| m.vertex as usize >= read.positions.len())
+        {
+            return invalid(format!("{shape} has {} vertices.", read.positions.len()));
+        }
+        let Some(slider) = slider else {
+            let mut positions = read.positions;
+            crate::morph::add(&mut positions, moves, 1.0);
+            return mesh::set_positions(&mut self.nif, block, &positions)
+                .map_err(|e| Error::Invalid(e.to_string()));
+        };
+        let index = self.slider(slider)?;
+        let target = self.set.shapes[at].target.clone();
+        if self.set.sliders[index]
+            .data
+            .iter()
+            .any(|d| d.target == target)
+        {
+            return invalid(format!(
+                "What {slider} does to {shape} is another project's, and is not changed from here."
+            ));
+        }
+        let own = &mut self.own[index];
+        let list = match own.iter().position(|o| o.target == target) {
+            Some(i) => &mut own[i].diffs,
+            None => {
+                own.push(Own {
+                    target,
+                    diffs: Vec::new(),
+                });
+                &mut own.last_mut().expect("just pushed").diffs
+            }
+        };
+        // Only what the stroke touched changes: the rest of the list stays
+        // as it was read, in its order.
+        let sorted = list.is_sorted_by_key(|d| d.vertex);
+        let mut place: HashMap<u16, usize> = list
+            .iter()
+            .enumerate()
+            .map(|(i, d)| (d.vertex, i))
+            .collect();
+        let mut touched = vec![false; list.len()];
+        for m in moves {
+            let i = *place.entry(m.vertex).or_insert_with(|| {
+                list.push(Diff {
+                    vertex: m.vertex,
+                    offset: [0.0; 3],
+                });
+                touched.push(false);
+                list.len() - 1
+            });
+            touched[i] = true;
+            for (c, by) in list[i].offset.iter_mut().zip(m.offset) {
+                *c += by;
+            }
+        }
+        let mut i = 0;
+        list.retain(|d| {
+            i += 1;
+            !touched[i - 1] || d.offset.iter().any(|c| c.abs() >= GONE)
+        });
+        if sorted {
+            list.sort_by_key(|d| d.vertex);
         }
         Ok(())
     }

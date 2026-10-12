@@ -216,6 +216,90 @@ fn a_body_is_listed_previewed_and_built() {
     assert_eq!(&bytes[..length], whole);
     // Saving again under the name it now has is not refused.
     ask(json!({ "op": "save", "name": "Mine: a body" }), &[]);
+
+    // A brush stroke: vertex 7 goes up by two, as the shape itself and then
+    // as what a slider does to it.
+    let floats = |bytes: &[u8], at: &Value| -> Vec<f32> {
+        let (from, count) = (
+            at[0].as_u64().unwrap() as usize,
+            at[1].as_u64().unwrap() as usize,
+        );
+        bytes[from * 4..(from + count) * 4]
+            .chunks(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    };
+    let mut stroke = 7u32.to_le_bytes().to_vec();
+    for c in [0.0f32, 0.0, 2.0] {
+        stroke.extend(c.to_le_bytes());
+    }
+    let (before, numbers) = ask(json!({ "op": "preview", "set": "", "work": true }), &[]);
+    let was = floats(&numbers, &before["shapes"][0]["positions"]);
+    ask(
+        json!({ "op": "change", "change": { "do": "stroke", "shape": first } }),
+        &stroke,
+    );
+    let (after, numbers) = ask(json!({ "op": "preview", "set": "", "work": true }), &[]);
+    let now = floats(&numbers, &after["shapes"][0]["positions"]);
+    assert!((now[23] - was[23] - 2.0).abs() < 0.01);
+    assert_eq!(now[..21], was[..21]);
+    assert_eq!(now[24..], was[24..]);
+    ask(json!({ "op": "undo" }), &[]);
+
+    let slider = sliders[3]["name"].as_str().unwrap();
+    let list_of = |preview: &Value, numbers: &[u8]| -> Vec<(u32, [f32; 3])> {
+        let d = preview["shapes"][0]["sliders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["slider"] == 3)
+            .unwrap();
+        let (from, count) = (
+            d["vertices"][0].as_u64().unwrap() as usize,
+            d["vertices"][1].as_u64().unwrap() as usize,
+        );
+        let offsets = floats(numbers, &d["offsets"]);
+        (0..count)
+            .map(|i| {
+                let at = (from + i) * 4;
+                (
+                    u32::from_le_bytes(numbers[at..at + 4].try_into().unwrap()),
+                    [offsets[i * 3], offsets[i * 3 + 1], offsets[i * 3 + 2]],
+                )
+            })
+            .collect()
+    };
+    let (before, numbers) = ask(json!({ "op": "preview", "set": "", "work": true }), &[]);
+    let was = list_of(&before, &numbers);
+    let had = was.iter().find(|(v, _)| *v == 7).map_or([0.0; 3], |x| x.1);
+    let (work, _) = ask(
+        json!({ "op": "change", "change": { "do": "stroke", "shape": first, "slider": slider } }),
+        &stroke,
+    );
+    assert_eq!(work["changed"], true);
+    let (after, numbers) = ask(json!({ "op": "preview", "set": "", "work": true }), &[]);
+    let now = list_of(&after, &numbers);
+    let has = now.iter().find(|(v, _)| *v == 7).unwrap().1;
+    assert!((has[2] - had[2] - 2.0).abs() < 0.0001);
+    // The shape itself has not moved, and nothing else of the slider has.
+    assert_eq!(
+        floats(&numbers, &after["shapes"][0]["positions"]),
+        floats(&numbers, &before["shapes"][0]["positions"])
+    );
+    assert_eq!(
+        now.iter().filter(|(v, _)| *v != 7).collect::<Vec<_>>(),
+        was.iter().filter(|(v, _)| *v != 7).collect::<Vec<_>>()
+    );
+    // A vertex the shape does not have is refused.
+    let mut wrong = 60000u32.to_le_bytes().to_vec();
+    wrong.extend([0u8; 12]);
+    let a = answer(
+        json!({ "op": "change", "change": { "do": "stroke", "shape": first } })
+            .to_string()
+            .as_bytes(),
+        &wrong,
+    );
+    assert!(a.json.contains("vertices"), "{}", a.json);
 }
 
 #[test]

@@ -63,7 +63,7 @@ impl Work {
         Ok(())
     }
 
-    fn change(&mut self, change: Change) -> Result<(), String> {
+    fn change(&mut self, change: Change, data: &[u8]) -> Result<(), String> {
         let before = self.project.clone();
         let p = &mut self.project;
         let done = match change {
@@ -99,6 +99,22 @@ impl Work {
                 file,
                 weights,
             } => p.output(&folder, &file, weights),
+            Change::Stroke { shape, slider } => {
+                let moves: Vec<osd::Diff> = data
+                    .as_chunks::<16>()
+                    .0
+                    .iter()
+                    .filter_map(|c| {
+                        let part = |i: usize| [c[i], c[i + 1], c[i + 2], c[i + 3]];
+                        Some(osd::Diff {
+                            vertex: u16::try_from(u32::from_le_bytes(part(0))).ok()?,
+                            offset: [4, 8, 12].map(|i| f32::from_le_bytes(part(i))),
+                        })
+                    })
+                    .filter(|d| d.offset.iter().all(|c| c.is_finite()))
+                    .collect();
+                p.move_vertices(&shape, slider.as_deref(), &moves)
+            }
         };
         if let Err(e) = done
             .map_err(|e| e.to_string())
@@ -173,6 +189,15 @@ enum Change {
         folder: String,
         file: String,
         weights: bool,
+    },
+    /// A brush stroke on a shape. The request's bytes say what moved: for
+    /// each vertex its number and three offsets, as four-byte numbers (the
+    /// first whole, the rest floating). With `slider`, it is what the slider
+    /// does to the shape that changes.
+    Stroke {
+        shape: String,
+        #[serde(default)]
+        slider: Option<String>,
     },
 }
 
@@ -702,7 +727,7 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
             }
         }
         Request::Change { change } => match &mut state.work {
-            Some(work) => match work.change(change) {
+            Some(work) => match work.change(change, data) {
                 Ok(()) => state.working().map_or_else(Answer::failed, Answer::ok),
                 Err(e) => Answer::failed(e),
             },
