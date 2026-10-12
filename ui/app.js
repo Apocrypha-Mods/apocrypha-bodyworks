@@ -220,6 +220,7 @@ function remaining(s, values) {
 /** Move every shape to where the sliders put it, and show it. */
 function reshape() {
   const values = state.mode === "studio" ? state.at : state.heavy ? state.big : state.small;
+  const bending = state.tool === "pose" && Boolean(state.work) && Boolean(state.bone) && state.pose.some((d) => d !== 0);
   state.shapes.forEach((s, i) => {
     const left = remaining(s, values);
     if (left) {
@@ -243,6 +244,8 @@ function reshape() {
       s.shown = s.parts[state.part].triangles;
       view.cut(i, s.shown);
     }
+    // Shown bent, a shape is lit and drawn once, bent: not as it is and then again.
+    if (bending) return;
     shade(s.now, s.shown, s.weld, s.normals, s.sum);
     view.move(i, s.now, s.normals);
   });
@@ -2571,7 +2574,11 @@ function pose() {
   // Turned about X, then Y, then Z.
   const m = [cb * cc, sa * sb * cc - ca * sc, ca * sb * cc + sa * sc, cb * sc, sa * sb * sc + ca * cc, ca * sb * sc - sa * cc, -sb, sa * cb, ca * cb];
   state.shapes.forEach((s, i) => {
-    if (!pivot || !bone || state.pose.every((d) => d === 0)) return view.move(i, s.now, s.normals);
+    if (!pivot || !bone || state.pose.every((d) => d === 0)) {
+      // As it is: lit as it is, which a reshape left to this where a pose was expected.
+      shade(s.now, s.shown, s.weld, s.normals, s.sum);
+      return view.move(i, s.now, s.normals);
+    }
     const w = goesWith(s, bone);
     // Room for the bent shape, kept from one turn of a knob to the next.
     if (!s.posed || s.posed.out.length !== s.now.length) s.posed = { out: new Float32Array(s.now.length), normals: new Float32Array(s.normals.length), sum: new Float32Array(s.sum.length) };
