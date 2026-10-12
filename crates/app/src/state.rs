@@ -63,7 +63,12 @@ impl Work {
         Ok(())
     }
 
-    fn change(&mut self, change: Change, data: &[u8]) -> Result<(), String> {
+    fn change(
+        &mut self,
+        change: Change,
+        data: &[u8],
+        files: &dyn build::Files,
+    ) -> Result<(), String> {
         let before = self.project.clone();
         let p = &mut self.project;
         let done = match change {
@@ -99,6 +104,9 @@ impl Work {
                 file,
                 weights,
             } => p.output(&folder, &file, weights),
+            Change::Conform { shape, body } => p
+                .conform(&shape, &body, files, Default::default())
+                .map(drop),
             Change::Stroke { shape, slider } => {
                 let moves: Vec<osd::Diff> = data
                     .as_chunks::<16>()
@@ -189,6 +197,12 @@ enum Change {
         folder: String,
         file: String,
         weights: bool,
+    },
+    /// Give a shape what every slider does to another (a body), so that
+    /// it follows it.
+    Conform {
+        shape: String,
+        body: String,
     },
     /// A brush stroke on a shape. The request's bytes say what moved: for
     /// each vertex its number and three offsets, as four-byte numbers (the
@@ -726,13 +740,19 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 Err(e) => Answer::failed(e),
             }
         }
-        Request::Change { change } => match &mut state.work {
-            Some(work) => match work.change(change, data) {
+        Request::Change { change } => {
+            let held = &state.files;
+            let done = match &mut state.work {
+                Some(work) => {
+                    work.change(change, data, &|path: &str| held.get(&key(path)).cloned())
+                }
+                None => Err("No project is open.".to_string()),
+            };
+            match done {
                 Ok(()) => state.working().map_or_else(Answer::failed, Answer::ok),
                 Err(e) => Answer::failed(e),
-            },
-            None => Answer::failed("No project is open."),
-        },
+            }
+        }
         Request::Undo { again } => match &mut state.work {
             Some(work) => match work.step(!again) {
                 Ok(()) => state.working().map_or_else(Answer::failed, Answer::ok),

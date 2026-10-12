@@ -39,6 +39,11 @@ Edition:
 - All 479, opened as a project in Outfit Studio and saved, build to the same
   bytes from the saved project as from the original (`resave.rs`). Whether
   the original program opens a project saved here has not been checked.
+- Conforming an outfit to a body is this project's own method, not the
+  original's. For the outfits that come with a whole reference body, what it
+  gives is off the slider data they shipped with by about 10% of how far
+  that data moves, 4% for the middle shape (`conformfit.rs`). The shipped
+  data was also touched up by hand, so some of that is not the method's.
 
 Rules found this way are written where they are used, each with what it was
 found from.

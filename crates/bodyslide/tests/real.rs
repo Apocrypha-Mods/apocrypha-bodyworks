@@ -309,3 +309,65 @@ fn a_shape_taken_out_of_a_project_is_out_of_what_it_builds() {
     assert!(names.contains(&"Renamed".to_string()));
     assert_eq!(names.len(), set.shapes.len() - 1);
 }
+
+#[test]
+fn an_outfit_conformed_to_its_body_follows_it_much_as_it_did() {
+    use apoc_bodyslide::project::Project;
+    use apoc_bodyslide::{build, conform, morph};
+    use std::collections::HashMap;
+
+    let tools = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/cbbe/@required/Data/CalienteTools/BodySlide");
+    let on_disk = |path: &str| std::fs::read(tools.join(path)).ok();
+    let Some(sets) = on_disk("SliderSets/CBBE.osp").and_then(|b| set::read(&b).ok()) else {
+        return;
+    };
+    let set = sets.iter().find(|s| s.name == "CBBE NeverNude").unwrap();
+    let body = set.shapes.iter().find(|s| s.data_folder.is_some()).unwrap();
+    let outfit = set.shapes.iter().find(|s| s.data_folder.is_none()).unwrap();
+    let mut project = Project::open(set, &on_disk).unwrap();
+    let values = morph::values(set, None, true);
+    let built = |p: &Project| {
+        let (saved, files) = p.save("Conformed").unwrap();
+        let held: HashMap<String, Vec<u8>> = files.into_iter().map(|o| (o.path, o.bytes)).collect();
+        let files = |path: &str| held.get(path).cloned().or_else(|| on_disk(path));
+        let out = build::build_at(&saved, &values, &values, &files).unwrap();
+        let nif = apoc_nif::Nif::read(&out.outputs[0].bytes).unwrap();
+        apoc_nif::mesh::shapes(&nif)
+            .into_iter()
+            .filter_map(|at| apoc_nif::mesh::read(&nif, at).ok())
+            .find(|m| m.name == outfit.name)
+            .unwrap()
+            .positions
+    };
+    let before = built(&project);
+    // The body's own data is another project's, and stays so.
+    assert!(project
+        .conform(
+            &body.name,
+            &outfit.name,
+            &on_disk,
+            conform::Options::default()
+        )
+        .is_err());
+    let moving = project
+        .conform(
+            &outfit.name,
+            &body.name,
+            &on_disk,
+            conform::Options::default(),
+        )
+        .unwrap();
+    assert!(moving > 50, "{moving} sliders");
+    let after = built(&project);
+    // Built at the set's own values, no vertex is far from where the
+    // outfit's own data put it: a small part of the size of a body.
+    let worst = before
+        .iter()
+        .zip(&after)
+        .map(|(a, b)| {
+            ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+        })
+        .fold(0.0f32, f32::max);
+    assert!(worst < 1.5, "a vertex {worst} from where it was");
+}

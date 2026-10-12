@@ -2,6 +2,7 @@
 //! own shapes, held together so they can be changed and saved as a project.
 
 use crate::build::{Files, Output};
+use crate::conform;
 use crate::osd::{Diff, SliderData};
 use crate::set::{DataRef, Slider, SliderSet};
 use crate::Error;
@@ -352,6 +353,80 @@ impl Project {
             list.sort_by_key(|d| d.vertex);
         }
         Ok(())
+    }
+
+    /// What one slider does to one shape: the project's own list for it,
+    /// or the list another project keeps, read from `files`.
+    fn list(&self, slider: usize, shape: usize, files: &dyn Files) -> Option<Vec<Diff>> {
+        let of = &self.set.shapes[shape];
+        if let Some(own) = self.own[slider].iter().find(|o| o.target == of.target) {
+            return Some(own.diffs.clone());
+        }
+        let d = self.set.sliders[slider]
+            .data
+            .iter()
+            .find(|d| d.target == of.target)?;
+        let folder = of.data_folder.as_deref().unwrap_or(&self.set.data_folder);
+        let data = files.read(&path(&["ShapeData", folder, &d.file]))?;
+        SliderData::read(&data)
+            .ok()?
+            .list(&d.list)
+            .map(<[_]>::to_vec)
+    }
+
+    /// Give `shape` what every slider does to `body`, so that it follows
+    /// the body: each of its vertices takes what the body's vertices
+    /// nearest it do. What sliders did to the shape before is replaced.
+    /// Returns how many sliders now move it.
+    pub fn conform(
+        &mut self,
+        shape: &str,
+        body: &str,
+        files: &dyn Files,
+        options: conform::Options,
+    ) -> Result<usize, Error> {
+        let (at, from) = (self.shape(shape)?, self.shape(body)?);
+        if at == from {
+            return invalid("A shape is conformed to another shape.");
+        }
+        let target = self.set.shapes[at].target.clone();
+        if self
+            .set
+            .sliders
+            .iter()
+            .any(|s| s.data.iter().any(|d| d.target == target))
+        {
+            return invalid(format!(
+                "What sliders do to {shape} is another project's, and is not changed from here."
+            ));
+        }
+        let read = |name: &str| {
+            self.block(name)
+                .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {name}.")))
+                .and_then(|b| mesh::read(&self.nif, b).map_err(|e| Error::Invalid(e.to_string())))
+        };
+        let ties = conform::tie(&read(body)?.positions, &read(shape)?.positions, options);
+        let mut scratch = Vec::new();
+        let mut moving = 0;
+        for slider in 0..self.set.sliders.len() {
+            if self.set.sliders[slider].zap || self.set.sliders[slider].uv {
+                continue;
+            }
+            let Some(does) = self.list(slider, from, files) else {
+                continue;
+            };
+            let diffs = conform::carried(&ties, &does, crate::tri::LEAST, &mut scratch);
+            let own = &mut self.own[slider];
+            own.retain(|o| o.target != target);
+            if !diffs.is_empty() {
+                moving += 1;
+                own.push(Own {
+                    target: target.clone(),
+                    diffs,
+                });
+            }
+        }
+        Ok(moving)
     }
 
     /// Where a build of the project goes, and whether as two meshes.

@@ -902,10 +902,14 @@ function studioSide() {
               oncontextmenu: (e) => {
                 e.preventDefault();
                 const others = state.shapes.some((o, j) => j !== i && !o.hidden);
+                // A shape follows a body: the one marked as the reference, or any of a few.
+                const marked = state.shapes.filter((o) => o.reference && o !== sh);
+                const bodies = sh.reference ? [] : marked.length ? marked : state.shapes.filter((o) => o !== sh).slice(0, 4);
                 menu(
                   e.currentTarget,
                   [
                     state.work && { name: "Rename…", value: "rename" },
+                    ...(state.work ? bodies.map((o) => ({ name: `Conform to ${o.name}`, value: o })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
                     { name: sh.hidden ? "Show" : "Hide", value: "hide" },
                     state.work && state.shapes.length > 1 && { name: "Delete", value: "delete", danger: true, rule: true },
@@ -915,6 +919,7 @@ function studioSide() {
                       return rename("Rename shape", sh.name, (to) => change({ do: "renameShape", from: sh.name, to }));
                     }
                     if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
+                    if (typeof what === "object") return attempt({ do: "conform", shape: sh.name, body: what.name });
                     if (what === "hide") hide(i, !sh.hidden);
                     else state.shapes.forEach((_, j) => hide(j, others ? j !== i : false));
                     studioSide();
