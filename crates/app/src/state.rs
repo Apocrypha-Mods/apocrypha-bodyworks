@@ -71,6 +71,13 @@ enum Request {
         #[serde(default)]
         morphs: bool,
     },
+    /// One mesh of a set as it stands with each slider at `values`: what
+    /// Outfit Studio exports. `path` is where it goes under the data folder.
+    Export {
+        set: String,
+        values: Vec<f32>,
+        path: String,
+    },
     /// A presets file holding one preset, as text to save.
     PresetFile { preset: PresetIn },
 }
@@ -91,6 +98,15 @@ fn key(path: &str) -> String {
         .collect::<Vec<_>>()
         .join("/")
         .to_lowercase()
+}
+
+/// A path with forward slashes and no empty parts, spelled as given.
+fn key_keeping_case(path: &str) -> String {
+    path.replace('\\', "/")
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[derive(Serialize)]
@@ -419,6 +435,31 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
         } => state
             .build(&set, &small, &big, morphs)
             .unwrap_or_else(Answer::failed),
+        Request::Export { set, values, path } => {
+            let made = state.set(&set).and_then(|found| {
+                let path = key_keeping_case(&path);
+                let path = path.strip_suffix(".nif").unwrap_or(&path);
+                let (folder, file) = path.rsplit_once('/').unwrap_or(("meshes", path));
+                if file.is_empty() {
+                    return Err("Give the mesh a name.".to_string());
+                }
+                // The same set, asked for one mesh at one place.
+                let mut one = found.clone();
+                one.gen_weights = false;
+                one.output_path = folder.to_string();
+                one.output_file = file.to_string();
+                let files = |path: &str| state.file(path);
+                build::build_at(&one, &values, &values, &files).map_err(|e| e.to_string())
+            });
+            match made {
+                Ok(mut built) if !built.outputs.is_empty() => {
+                    let out = built.outputs.remove(0);
+                    Answer::with(json!({ "path": out.path, "notes": built.notes }), out.bytes)
+                }
+                Ok(_) => Answer::failed("Nothing was made."),
+                Err(e) => Answer::failed(e),
+            }
+        }
         Request::PresetFile { preset: p } => {
             let values = p
                 .values

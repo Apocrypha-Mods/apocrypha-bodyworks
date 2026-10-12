@@ -204,6 +204,7 @@ async function prepare(set) {
 
 async function choose(set, presetName) {
   state.set = set;
+  state.exported = null;
   state.built = null;
   state.problem = null;
   state.shapes = [];
@@ -928,6 +929,39 @@ function studioSliders() {
   el.querySelector(".rows").scrollTop = top;
 }
 
+/** Outfit Studio: write the outfit as it stands as one mesh, into the output mod. */
+function exportMesh() {
+  const path = h("input.input", { type: "text", value: `${state.set.output}.nif`, "aria-label": "Where", spellcheck: false });
+  const go = h("button.btn.primary", { type: "button" }, "Export");
+  const said = h("span.sub.warn.grow.cut");
+  const run = async () => {
+    const wanted = path.value.trim();
+    if (!wanted || /[:*?"<>|]/.test(wanted)) {
+      said.textContent = wanted ? 'Leave out : * ? " < > |' : "";
+      return;
+    }
+    go.disabled = true;
+    try {
+      const [made, bytes] = core.ask({ op: "export", set: state.set.name, values: state.at, path: wanted });
+      await write([{ path: `Data/${made.path}`, bytes }]);
+      state.exported = made.path.split("/").pop();
+      close(el);
+      render();
+    } catch (e) {
+      said.textContent = e.message;
+      go.disabled = false;
+    }
+  };
+  go.addEventListener("click", run);
+  path.addEventListener("keydown", (e) => e.key === "Enter" && run());
+  const el = sheet("Export mesh", null, h("label.field", null, h("span", null, "Where, under the game's data folder"), path), [
+    said,
+    h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
+    go,
+  ]);
+  path.focus();
+}
+
 function renderStudio() {
   const flag = (label, key) => {
     const b = h(
@@ -954,7 +988,15 @@ function renderStudio() {
   });
   view.look({ picked: state.picked });
   root.replaceChildren(
-    h("div.bar", null, modes(), outfitPick("Project"), h("span.grow"), h("label.search", { style: "flex: 0 1 220px", html: GLASS }, search)),
+    h(
+      "div.bar",
+      null,
+      modes(),
+      outfitPick("Project"),
+      h("button.btn.ghost", { type: "button", disabled: !state.shapes.length, onclick: exportMesh }, "Export mesh…"),
+      h("span.grow"),
+      h("label.search", { style: "flex: 0 1 220px", html: GLASS }, search),
+    ),
     h(
       "div.main.studio",
       null,
@@ -962,7 +1004,19 @@ function renderStudio() {
       h("div.view", null, canvas, h("div.looks", null, h("div.seg", { role: "group", "aria-label": "How it is drawn" }, flag("Textures", "painted"), flag("Wireframe", "wire")))),
       h("div.card.list", { id: "list" }),
     ),
-    ...(state.problem ? [h("div.bar", null, h("span.sub.warn.cut", null, state.problem))] : []),
+    ...(state.problem
+      ? [h("div.bar", null, h("span.sub.warn.cut", null, state.problem))]
+      : state.exported
+        ? [
+            h(
+              "div.bar",
+              null,
+              h("span.sub.cut", null, `${state.exported} exported into ${OUTPUT}`),
+              h("span.grow"),
+              h("button.btn.primary", { type: "button", onclick: () => host.request("apply.review").catch(() => {}) }, "Apply"),
+            ),
+          ]
+        : []),
   );
   studioSide();
   studioSliders();

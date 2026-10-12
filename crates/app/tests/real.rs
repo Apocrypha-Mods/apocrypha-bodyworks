@@ -110,6 +110,18 @@ fn a_body_is_listed_previewed_and_built() {
     let first = &bytes[..outputs[0]["length"].as_u64().unwrap() as usize];
     assert!(apoc_nif::Nif::read(first).is_ok());
 
+    // One mesh as it stands, where it is asked to go.
+    let (made, mesh) = ask(
+        json!({ "op": "export", "set": "CBBE Body", "values": big, "path": "meshes\\mine/../Body.nif" }),
+        &[],
+    );
+    assert_eq!(made["path"], "meshes/mine/Body.nif");
+    assert!(apoc_nif::Nif::read(&mesh).is_ok());
+    assert_eq!(
+        mesh,
+        &bytes[outputs[1]["at"].as_u64().unwrap() as usize..][..mesh.len()]
+    );
+
     // With morphs asked for, the morph file comes too, after the meshes.
     let (built, bytes) = ask(
         json!({ "op": "build", "set": "CBBE Body", "small": small, "big": big, "morphs": true }),
