@@ -27,18 +27,30 @@ fn main() {
     let tools = args.next().expect("the BodySlide folder");
     let set = args.next().unwrap_or_else(|| "CBBE Body".to_string());
     let tools = Path::new(&tools);
-    timed("every project, preset, group and category put and read", || {
-        for folder in ["SliderSets", "SliderPresets", "SliderGroups", "SliderCategories"] {
-            for e in std::fs::read_dir(tools.join(folder)).into_iter().flatten().flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                ask(
-                    json!({ "op": "put", "path": format!("{folder}/{name}") }),
-                    &std::fs::read(e.path()).unwrap(),
-                );
+    timed(
+        "every project, preset, group and category put and read",
+        || {
+            for folder in [
+                "SliderSets",
+                "SliderPresets",
+                "SliderGroups",
+                "SliderCategories",
+            ] {
+                for e in std::fs::read_dir(tools.join(folder))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    ask(
+                        json!({ "op": "put", "path": format!("{folder}/{name}") }),
+                        &std::fs::read(e.path()).unwrap(),
+                    );
+                }
             }
-        }
-        ask(json!({ "op": "load" }), &[]);
-    });
+            ask(json!({ "op": "load" }), &[]);
+        },
+    );
     let (needs, _) = ask(json!({ "op": "needs", "set": set }), &[]);
     let mut bytes = 0;
     for path in needs.as_array().unwrap() {
