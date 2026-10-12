@@ -3103,15 +3103,15 @@ function renderStudio() {
             "button.btn.ghost",
             {
               type: "button",
-              disabled: !state.shapes.length,
               onclick: (e) =>
                 menu(
                   e.currentTarget,
                   [
-                    { name: "Export mesh…", value: "mesh" },
-                    { name: "Export cloth data…", value: "clothOut", rule: true },
+                    // The mesh's cloth data is there whether a shape is left or not.
+                    state.shapes.length > 0 && { name: "Export mesh…", value: "mesh" },
+                    { name: "Export cloth data…", value: "clothOut", rule: state.shapes.length > 0 },
                     { name: "Import cloth data…", value: "clothIn" },
-                  ],
+                  ].filter(Boolean),
                   (what) => (what === "mesh" ? exportMesh() : clothData(what === "clothIn")),
                 ),
             },

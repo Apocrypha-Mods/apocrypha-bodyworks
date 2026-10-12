@@ -1820,6 +1820,10 @@ impl Project {
                 if !morph.scale.is_finite() || morph.name.trim().is_empty() {
                     continue;
                 }
+                // A name a project file could not hold is not a slider's.
+                if morph.name.chars().any(char::is_control) {
+                    return invalid("A morph in the file has a name no slider can have.");
+                }
                 let diffs: Vec<Diff> = morph
                     .offsets
                     .iter()
@@ -1875,17 +1879,27 @@ impl Project {
             .block(shape)
             .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
         let m = mesh::read(&self.nif, block).map_err(|e| Error::Invalid(e.to_string()))?;
+        // Every such file measured has a place in the texture for each
+        // vertex; one without is not written.
+        if m.uvs.len() != m.positions.len() {
+            return invalid(format!(
+                "{shape} has no place in the texture for each vertex, as a head's morph file needs."
+            ));
+        }
         let target = &self.set.shapes[at].target;
         let mut morphs = Vec::new();
         for (slider, own) in self.set.sliders.iter().zip(&self.own) {
             if slider.zap || slider.uv {
                 continue;
             }
-            let Some(o) = own.iter().find(|o| &o.target == target) else {
+            // Everything the slider does to it, where it is said in more
+            // than one list, added up as applying them adds them.
+            let mut lists = own.iter().filter(|o| &o.target == target).peekable();
+            if lists.peek().is_none() {
                 continue;
-            };
+            }
             let mut offsets = vec![[0.0f32; 3]; m.positions.len()];
-            for d in o.diffs.iter() {
+            for d in lists.flat_map(|o| o.diffs.iter()) {
                 if let Some(slot) = offsets.get_mut(d.vertex as usize) {
                     for (c, by) in slot.iter_mut().zip(d.offset) {
                         *c += by;

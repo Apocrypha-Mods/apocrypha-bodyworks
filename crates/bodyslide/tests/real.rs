@@ -2343,6 +2343,15 @@ fn a_head_parts_morph_file_becomes_sliders_and_goes_back_out() {
             }
         }
     }
+    // A morph whose name a project file could not hold is refused, and
+    // nothing of the file taken.
+    let mut bad = tri.clone();
+    let at = bad.windows(3).position(|w| w == b"Aah").unwrap();
+    bad[at + 1] = 0;
+    let mut fresh = Project::from_mesh("Brows", "meshes/brows.nif", &nif).unwrap();
+    assert!(fresh.import_morphs(&bad).is_err());
+    assert!(fresh.set.sliders.is_empty());
+
     // A file for another mesh is refused, and says how many vertices it is for.
     let mut other = Project::from_mesh("Brows", "meshes/brows.nif", &nif).unwrap();
     other.delete_vertices(&name, &[0, 1, 2]).unwrap();
