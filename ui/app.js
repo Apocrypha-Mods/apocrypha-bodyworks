@@ -331,6 +331,7 @@ function showShapes(frame) {
 
 async function choose(set, presetName) {
   state.set = set;
+  state.note = null;
   view?.forget();
   state.work = null;
   state.editing = -1;
@@ -423,6 +424,23 @@ async function build() {
     const files = filesOf(built, bytes);
     await write(files);
     state.built = files.length;
+  } catch (e) {
+    state.problem = e.message;
+  }
+  state.busy = null;
+  render();
+}
+
+/** Build the outfit on screen into a folder the person picks, laid out as the game's data folder is. */
+async function buildToFolder() {
+  busy("Building");
+  try {
+    const [built, bytes] = core.ask({ op: "build", set: state.set.name, small: state.small, big: state.big, morphs: state.morphs });
+    // Under the folder as under the game's data folder: `meshes/…`.
+    const files = built.outputs.map((o) => ({ path: o.path, bytes: bytes.slice(o.at, o.at + o.length) }));
+    const { saved } = await host.request("disk.folder", { files }, files.map((f) => f.bytes));
+    state.problem = null;
+    state.note = saved ? `${saved} ${saved === 1 ? "file" : "files"} built into the folder` : null;
   } catch (e) {
     state.problem = e.message;
   }
@@ -994,7 +1012,9 @@ function foot() {
       ? h("span.sub.warn.cut", null, state.problem)
       : state.built !== null
         ? h("span.sub.cut", null, `${state.built} ${state.built === 1 ? "file" : "files"} built into ${state.output}`)
-        : state.busy
+        : state.note
+          ? h("span.sub.cut", null, state.note)
+          : state.busy
           ? h("span.sub.cut", { id: "status" }, state.busy)
           : h(
               "button.btn.ghost.small",
@@ -1035,6 +1055,11 @@ function foot() {
       },
       h("span.box"),
       h("span", null, "RaceMenu morphs"),
+    ),
+    h(
+      "button.btn.ghost",
+      { type: "button", disabled: !ready, title: "Build into a folder you pick, outside the mods", onclick: buildToFolder },
+      "To a folder…",
     ),
     h("button.btn", { type: "button", disabled: !ready, onclick: several }, "Build several…"),
     state.built !== null && !state.problem

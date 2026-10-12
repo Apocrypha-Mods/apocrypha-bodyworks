@@ -72,10 +72,6 @@ triangle of the picked shape once.
 Held against what the original two programs offer, from using them and from
 their documentation. Each line is something they do that this does not.
 
-BodySlide:
-
-- Building to a folder outside the mod manager.
-
 Outfit Studio:
 
 - Brushes: the vertex tools (collapse, flip or split an edge, weld, move one
