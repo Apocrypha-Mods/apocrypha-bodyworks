@@ -1082,3 +1082,91 @@ fn a_shape_is_mirrored_and_its_triangles_moved_between_parts() {
         .zip(&was.positions)
         .all(|(a, b)| (0..3).all(|k| (a[k] - b[k]).abs() < 0.01)));
 }
+
+#[test]
+fn a_bone_brought_in_from_a_skeleton_is_placed_as_a_skin_that_has_it_places_it() {
+    use apoc_bodyslide::project::Project;
+    use apoc_nif::geometry::TriShape;
+    use apoc_nif::skin::{SkinData, SkinInstance};
+    use apoc_nif::{mesh, weights, Nif};
+
+    let cbbe = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scratch/samples/cbbe");
+    let body = cbbe.join("@required/Data/CalienteTools/BodySlide/ShapeData/CBBE/CBBE Body.nif");
+    let gloves = cbbe.join(
+        "@conditional-3/Data/CalienteTools/BodySlide/ShapeData/CBBE Dawnguard/1st Person/Dawnguard Gauntlets.nif",
+    );
+    let (Ok(body), Ok(gloves)) = (std::fs::read(body), std::fs::read(gloves)) else {
+        return;
+    };
+    // Where a skin has a bone: its transform, by the bone's name.
+    let placed = |nif: &Nif, shape: usize, bone: &str| {
+        let stream = nif.header.stream.version;
+        let s = TriShape::read(&nif.blocks[shape].data, stream).unwrap();
+        let skin = s.skin as usize;
+        let instance = SkinInstance::read(
+            &nif.blocks[skin].data,
+            nif.kind_of(skin) != "NiSkinInstance",
+        )
+        .unwrap();
+        let data = SkinData::read(&nif.blocks[instance.data as usize].data).unwrap();
+        let at = mesh::bone_names(nif, shape)
+            .iter()
+            .position(|b| b == bone)
+            .unwrap();
+        data.bones[at].transform
+    };
+    let skeleton = Nif::read(&body).unwrap();
+    let whole = mesh::shapes(&skeleton)[0];
+    let mut project = Project::from_mesh("Gloves", "meshes/gloves_1.nif", &gloves).unwrap();
+    let shape = project.set.shapes[0].name.clone();
+    let block = |p: &Project| {
+        mesh::shapes(&p.nif)
+            .into_iter()
+            .find(|at| mesh::name(&p.nif, *at).as_deref() == Some(shape.as_str()))
+            .unwrap()
+    };
+    // A bone of the body's that the gloves' mesh does not have at all.
+    let have = apoc_nif::copy::bone_names(&project.nif);
+    let bone = mesh::bone_names(&skeleton, whole)
+        .into_iter()
+        .find(|b| !have.contains(b))
+        .expect("a bone the gloves lack");
+    assert!(project.paint_weights(&shape, &bone, &[(0, 0.5)]).is_err());
+    project.add_bone(&bone, &body).unwrap();
+    project.add_bone(&bone, &body).unwrap();
+    assert_eq!(
+        apoc_nif::copy::bone_names(&project.nif)
+            .iter()
+            .filter(|b| **b == bone)
+            .count(),
+        1
+    );
+    project.paint_weights(&shape, &bone, &[(0, 0.5)]).unwrap();
+    let nif = Nif::read(&project.nif.write()).unwrap();
+    assert!(
+        (weights::read(&nif, block(&project)).unwrap().vertices[0]
+            .iter()
+            .map(|x| x.1)
+            .sum::<f32>()
+            - 1.0)
+            .abs()
+            < 0.01
+    );
+    let (ours, theirs) = (
+        placed(&nif, block(&project), &bone),
+        placed(&skeleton, whole, &bone),
+    );
+    for (a, b) in ours.translation.iter().zip(&theirs.translation) {
+        assert!(
+            (a - b).abs() < 0.05,
+            "{bone}: {ours:?} and the body's {theirs:?}"
+        );
+    }
+    for (a, b) in ours.rotation.iter().zip(&theirs.rotation) {
+        assert!(
+            (a - b).abs() < 0.005,
+            "{bone}: {ours:?} and the body's {theirs:?}"
+        );
+    }
+    assert!(project.add_bone("No such bone", &body).is_err());
+}

@@ -84,7 +84,7 @@ Outfit Studio:
 - Shapes: refining (subdividing) a mesh, merging shapes,
   removing skinning, shader properties other than the texture files, making
   a shape from an OBJ or FBX file.
-- Bones: adding a bone no shape of the mesh follows, custom bones,
+- Bones: custom bones (one made up, not taken from the game's skeleton),
   transferring selected weights between shapes.
 - Segments (Fallout 4): viewing and editing.
 - Sliders: combined sliders, importing and exporting slider data as BSD,

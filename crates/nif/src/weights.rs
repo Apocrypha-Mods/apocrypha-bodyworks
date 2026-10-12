@@ -14,7 +14,7 @@ use crate::geometry::{
     f32_to_half, half_to_f32, is_tri_shape, set_skin_weights_in, skin_weights_in, Layout, TriShape,
 };
 use crate::mesh;
-use crate::node::{is_node, Node};
+use crate::node::{is_node, Node, Transform};
 use crate::skin::{BoneData, SkinData, SkinInstance, SkinPartition};
 use crate::{Nif, NifError};
 use std::collections::BTreeSet;
@@ -251,7 +251,17 @@ pub fn write(
                 .position(|n| n == name)
                 .and_then(|k| data.bones.get(k))
         });
-        let Some(place) = old.or(theirs) else {
+        // Failing both, from where the bone's node is: a skin places a
+        // bone as the undoing of that (so 26,114 of 26,204 real bones are
+        // placed, `examples/bindfit.rs`), for a skin that is itself placed
+        // nowhere in particular.
+        let from_node =
+            (old.is_none() && theirs.is_none() && data.transform == Transform::IDENTITY)
+                .then(|| crate::copy::placed(nif, node, &crate::copy::parents(nif)).ok())
+                .flatten()
+                .and_then(|p| crate::copy::inverse(&p))
+                .map(|transform| BoneData::new(transform, [0.0; 3], 0.0, Vec::new()));
+        let Some(place) = old.or(theirs).or(from_node.as_ref()) else {
             return Err(NifError::Unsupported(format!(
                 "nothing here says where the bone {name} is"
             )));

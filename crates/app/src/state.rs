@@ -179,6 +179,7 @@ impl Work {
                 p.move_to_part(&shape, &numbers(data), to, part).map(drop)
             }
             Change::ImportSlider { slider } => p.import_slider(&slider, data).map(drop),
+            Change::AddBone { bone } => p.add_bone(&bone, data),
             Change::RemovePart { shape, index, into } => p.remove_part(&shape, index, into),
             Change::Colour { shape } => {
                 let colors: Vec<(u16, [u8; 4])> = data
@@ -430,6 +431,10 @@ enum Change {
     ImportSlider {
         slider: String,
     },
+    /// Bring a bone into the mesh from a skeleton: the request's bytes.
+    AddBone {
+        bone: String,
+    },
     /// Take one part out of a shape, its triangles going to another.
     RemovePart {
         shape: String,
@@ -525,6 +530,8 @@ enum Request {
     /// What one slider of the open project does, as a slider data file
     /// after the answer.
     SliderData { slider: String },
+    /// The names of the bones of a skeleton: the request's bytes.
+    Skeleton,
     /// Change the open project.
     Change { change: Change },
     /// Take the last change back, or with `again` put it back.
@@ -912,7 +919,12 @@ impl State {
                 "reference": shape.data_folder.is_some(),
             }));
         }
-        Ok(Answer::with(json!({ "shapes": shapes }), bytes))
+        // Every bone the mesh has, followed by a shape or not.
+        let bones = apoc_nif::copy::bone_names(&nif);
+        Ok(Answer::with(
+            json!({ "shapes": shapes, "bones": bones }),
+            bytes,
+        ))
     }
 
     /// The open project as files under the BodySlide folder, named `name`.
@@ -1067,6 +1079,10 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 Err(e) => Answer::failed(e),
             },
             None => Answer::failed("No project is open."),
+        },
+        Request::Skeleton => match Nif::read(data) {
+            Ok(nif) => Answer::ok(json!(apoc_nif::copy::bone_names(&nif))),
+            Err(e) => Answer::failed(e),
         },
         Request::Change { change } => {
             let (held, sets) = (&state.files, &state.sets);

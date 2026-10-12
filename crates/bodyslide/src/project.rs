@@ -829,15 +829,14 @@ impl Project {
         let (at, like) = match skin.bones.iter().position(|b| b == bone) {
             Some(at) => (at, None),
             None => {
+                // Placed as another shape that follows it has it, or failing
+                // that from where the bone's own node is in the mesh.
                 let like = mesh::shapes(&self.nif).into_iter().find(|other| {
                     *other != block
                         && mesh::bone_names(&self.nif, *other)
                             .iter()
                             .any(|b| b == bone)
                 });
-                if like.is_none() {
-                    return invalid(format!("No shape here follows a bone named {bone}."));
-                }
                 skin.bones.push(bone.to_string());
                 (skin.bones.len() - 1, like)
             }
@@ -1248,6 +1247,15 @@ impl Project {
             return invalid(format!("{shape} has {count} vertices."));
         }
         mesh::set_colors(&mut self.nif, block, colors).map_err(fail)
+    }
+
+    /// Bring a bone into the mesh from a skeleton (a mesh file of bones),
+    /// placed as the skeleton has it, for shapes to be painted onto.
+    pub fn add_bone(&mut self, bone: &str, skeleton: &[u8]) -> Result<(), Error> {
+        let from = Nif::read(skeleton).map_err(|e| Error::Invalid(e.to_string()))?;
+        copy::copy_bone(&mut self.nif, &from, bone)
+            .map(drop)
+            .map_err(|e| Error::Invalid(e.to_string()))
     }
 
     /// Mirror a shape across the middle of the body: every vertex to the

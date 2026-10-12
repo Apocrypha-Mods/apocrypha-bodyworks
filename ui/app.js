@@ -96,6 +96,8 @@ const state = {
   /** The colour brush's colour ("#rrggbb") and how solid it paints, 0 to 100. */
   colour: remembered.get("brush.colour") || "#c8643c",
   alpha: Number(remembered.get("brush.alpha") ?? 100),
+  /** Every bone the mesh on screen has, whether a shape follows it or not. */
+  bones: [],
   /** The bone the weight brush paints, by name, and how much each vertex of the picked shape follows it. */
   bone: null,
   heat: null,
@@ -258,6 +260,7 @@ function showShapes(frame) {
   const [preview, numbers] = core.ask({ op: "preview", set: state.set.name, work: studio });
   const f32 = new Float32Array(numbers);
   const u32 = new Uint32Array(numbers);
+  state.bones = preview.bones || [];
   state.shapes = preview.shapes.map((s) => {
     const base = f32.slice(s.positions[0], s.positions[0] + s.positions[1]);
     const made = {
@@ -1199,7 +1202,7 @@ function studioSide() {
           ),
         )
       : state.side === "bones"
-      ? [...(picked?.bones || []), ...[...new Set(state.shapes.flatMap((o) => o.bones))].filter((b) => !picked?.bones.includes(b)).sort()].map((b) =>
+      ? [...(picked?.bones || []), ...[...new Set([...state.shapes.flatMap((o) => o.bones), ...(state.tool === "weights" ? state.bones : [])])].filter((b) => !picked?.bones.includes(b)).sort()].map((b) =>
           h(
             "div.shape" + (state.tool === "weights" && b === state.bone ? ".on" : "") + (picked?.bones.includes(b) ? "" : ".off"),
             {
@@ -1348,7 +1351,10 @@ function studioSide() {
       null,
       h("div.seg.plain", { role: "group", "aria-label": "List" }, tab("shapes", "Shapes"), tab("bones", "Bones"), picked?.parts.length > 0 && tab("parts", "Parts")),
       h("span.grow"),
-      state.work && h("button.btn.ghost.small", { type: "button", onclick: (e) => reference(e.currentTarget) }, "Reference…"),
+      state.work &&
+        (state.side === "bones"
+          ? h("button.btn.ghost.small", { type: "button", onclick: (e) => addBone(e.currentTarget) }, "Add bone…")
+          : h("button.btn.ghost.small", { type: "button", onclick: (e) => reference(e.currentTarget) }, "Reference…")),
     ),
     h("div.rows", { role: state.side === "shapes" ? "listbox" : null }, rows.length ? rows : h("div.sub.quiet", { style: "padding: 8px 12px" }, "No bones")),
     picked &&
@@ -2036,7 +2042,7 @@ function heat() {
     // The bone that was picked stays picked, though this shape does not
     // follow it yet: painting is how it comes to. Only with none picked,
     // or one no shape here has, is the shape's first taken.
-    if (!state.bone || !state.shapes.some((o) => o.bones.includes(state.bone))) state.bone = s.bones[0] || null;
+    if (!state.bone || !(state.bones.includes(state.bone) || state.shapes.some((o) => o.bones.includes(state.bone)))) state.bone = s.bones[0] || null;
     try {
       const [, numbers] = core.ask({ op: "boneWeights", shape: s.name, bone: state.bone || "" });
       state.heat = new Float32Array(numbers.slice(0));
@@ -2122,6 +2128,68 @@ function reference(anchor) {
     },
     "Search bodies",
   );
+}
+
+/** The game's skeletons: `{ path, bytes, names }` each, read once. */
+let skeletons = null;
+
+/**
+ * Outfit Studio: bring a bone into the mesh from the game's skeleton, to
+ * paint a shape onto. It is then the bone the weight brush paints.
+ */
+async function addBone(anchor) {
+  try {
+    if (!skeletons) {
+      busy("Reading");
+      const list = await host.request("files.list", { folder: "Data/meshes/actors/character" }).catch(() => []);
+      // The woman's first: it has the bones a body's physics hangs on.
+      const found = list
+        .filter((f) => /(^|\/)skeleton[^/]*\.nif$/i.test(f.path))
+        .sort((a, b) => /female/i.test(b.path) - /female/i.test(a.path) || a.path.length - b.path.length)
+        .slice(0, 4);
+      skeletons = [];
+      for (const f of found) {
+        const bytes = await host.request("files.read", { path: f.path });
+        const [names] = core.ask({ op: "skeleton" }, new Uint8Array(bytes));
+        skeletons.push({ path: f.path, bytes, names });
+      }
+      state.busy = null;
+      render();
+      anchor = document.querySelector("#side .side-head .btn") || anchor;
+    }
+    const have = new Set(state.bones);
+    const items = [];
+    for (const sk of skeletons) {
+      for (const name of sk.names) {
+        if (have.has(name) || items.some((it) => it.name === name)) continue;
+        items.push({ name, note: sk.path.split("/").pop(), value: { name, sk } });
+      }
+    }
+    if (!items.length) throw new Error(skeletons.length ? "The mesh has every bone of the game's skeleton." : "No mod, nor the game, has a skeleton to take a bone from.");
+    items.sort((a, b) => a.name.localeCompare(b.name));
+    menu(
+      anchor,
+      items,
+      ({ name, sk }) => {
+        try {
+          const [work] = core.ask({ op: "change", change: { do: "addBone", bone: name } }, new Uint8Array(sk.bytes));
+          state.bone = name;
+          state.tool = "weights";
+          view.brush = brushing;
+          canvas.style.cursor = "crosshair";
+          taken(work);
+        } catch (e) {
+          state.problem = e.message;
+          render();
+        }
+      },
+      "Search bones",
+    );
+  } catch (e) {
+    state.busy = null;
+    state.problem = e.message;
+    render();
+  }
 }
 
 /** Every mesh the mods have, listed once: `{ name, note, value }` for the menu. */

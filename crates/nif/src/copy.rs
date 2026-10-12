@@ -93,7 +93,7 @@ fn restrung(
 }
 
 /// One transform after another: `inner` in the space `outer` places.
-fn composed(outer: &Transform, inner: &Transform) -> Transform {
+pub fn composed(outer: &Transform, inner: &Transform) -> Transform {
     let (a, b) = (&outer.rotation, &inner.rotation);
     let mut rotation = [0.0f32; 9];
     for r in 0..3 {
@@ -110,7 +110,11 @@ fn composed(outer: &Transform, inner: &Transform) -> Transform {
 
 /// Where a node is in its file, through every node it hangs from, as one
 /// transform from the root's own space.
-fn placed(nif: &Nif, node: usize, parents: &HashMap<usize, usize>) -> Result<Transform, NifError> {
+pub fn placed(
+    nif: &Nif,
+    node: usize,
+    parents: &HashMap<usize, usize>,
+) -> Result<Transform, NifError> {
     let stream = nif.header.stream.version;
     let root = nif.roots.first().and_then(|r| usize::try_from(*r).ok());
     let mut place = Node::read(&nif.blocks[node].data, stream)?.av.transform;
@@ -128,6 +132,113 @@ fn placed(nif: &Nif, node: usize, parents: &HashMap<usize, usize>) -> Result<Tra
         at = parent;
     }
     Ok(place)
+}
+
+/// Each node's parent in a file: the node whose children list it.
+pub fn parents(nif: &Nif) -> HashMap<usize, usize> {
+    let stream = nif.header.stream.version;
+    let mut parents = HashMap::new();
+    for at in 0..nif.blocks.len() {
+        if is_node(nif.kind_of(at)) {
+            if let Ok(n) = Node::read(&nif.blocks[at].data, stream) {
+                for child in n.children {
+                    if let Ok(child) = usize::try_from(child) {
+                        parents.entry(child).or_insert(at);
+                    }
+                }
+            }
+        }
+    }
+    parents
+}
+
+/// The transform that undoes `t`: what takes its results back to what it
+/// was given. None for one that scales to nothing.
+pub fn inverse(t: &Transform) -> Option<Transform> {
+    if t.scale == 0.0 || !t.scale.is_finite() {
+        return None;
+    }
+    let m = &t.rotation;
+    // A rotation is undone by its transpose.
+    let rotation = [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]];
+    let scale = 1.0 / t.scale;
+    let back = Transform {
+        translation: [0.0; 3],
+        rotation,
+        scale,
+    };
+    let moved = back.apply(t.translation);
+    Some(Transform {
+        translation: [-moved[0], -moved[1], -moved[2]],
+        rotation,
+        scale,
+    })
+}
+
+/// Bring one bone of `from` into `into` by its name: a bare node hung from
+/// the first root, placed where its own parents had it. Nothing is done,
+/// and its place returned, when `into` already has a node of that name.
+pub fn copy_bone(into: &mut Nif, from: &Nif, name: &str) -> Result<usize, NifError> {
+    let stream = from.header.stream.version;
+    if into.header.version != from.header.version
+        || into.header.user_version != from.header.user_version
+        || into.header.stream.version != stream
+    {
+        return Err(NifError::Unsupported(
+            "the skeleton is made for a different game".into(),
+        ));
+    }
+    if let Some(at) = node_names(into).get(name.as_bytes()) {
+        return Ok(*at);
+    }
+    let bone = node_names(from)
+        .get(name.as_bytes())
+        .copied()
+        .ok_or_else(|| NifError::Unsupported(format!("the skeleton has no bone named {name}")))?;
+    let root = into
+        .roots
+        .first()
+        .and_then(|r| usize::try_from(*r).ok())
+        .filter(|r| *r < into.blocks.len() && is_node(into.kind_of(*r)))
+        .ok_or_else(|| NifError::Unsupported("the mesh has no node to hang a bone from".into()))?;
+    let mut node = Node::read(&from.blocks[bone].data, stream)?;
+    node.av.transform = placed(from, bone, &parents(from))?;
+    node.av.name = into.intern(name.as_bytes());
+    node.av.extra_data.clear();
+    node.av.controller = -1;
+    node.av.collision = -1;
+    if let Some(p) = &mut node.av.properties {
+        p.clear();
+    }
+    node.children.clear();
+    if let Some(e) = &mut node.effects {
+        e.clear();
+    }
+    // A plain node, whatever kind the skeleton made it: a bone needs no more.
+    let kind = into.kind_index("NiNode");
+    into.blocks.push(Block {
+        kind,
+        data: node.write(stream),
+    });
+    let at = into.blocks.len() - 1;
+    let mut top = Node::read(&into.blocks[root].data, stream)?;
+    top.children.push(at as i32);
+    into.blocks[root].data = top.write(stream);
+    Ok(at)
+}
+
+/// The names of every node of a file, in the file's order: a skeleton's bones.
+pub fn bone_names(nif: &Nif) -> Vec<String> {
+    let stream = nif.header.stream.version;
+    (0..nif.blocks.len())
+        .filter(|at| is_node(nif.kind_of(*at)))
+        .filter_map(|at| Node::read(&nif.blocks[at].data, stream).ok())
+        .filter_map(|n| {
+            nif.string(n.av.name)
+                .map(|s| String::from_utf8_lossy(s).into_owned())
+        })
+        .filter(|n| !n.is_empty())
+        .collect()
 }
 
 /// Every node of a file by its name: the first, where two share one.
@@ -207,18 +318,7 @@ pub fn copy_shape(into: &mut Nif, from: &Nif, block: usize) -> Result<usize, Nif
     }
 
     // Each node's parent in the file the shape is from.
-    let mut parents: HashMap<usize, usize> = HashMap::new();
-    for at in 0..from.blocks.len() {
-        if is_node(from.kind_of(at)) {
-            if let Ok(n) = Node::read(&from.blocks[at].data, stream) {
-                for child in n.children {
-                    if let Ok(child) = usize::try_from(child) {
-                        parents.entry(child).or_insert(at);
-                    }
-                }
-            }
-        }
-    }
+    let parents = parents(from);
     // Each bone, by name, in the file the copy lands in.
     let mut have = node_names(into);
     let from_root = from.roots.first().and_then(|r| usize::try_from(*r).ok());
