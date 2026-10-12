@@ -310,6 +310,7 @@ function showShapes(frame) {
 
 async function choose(set, presetName) {
   state.set = set;
+  view?.forget();
   state.work = null;
   state.editing = -1;
   stroke = null;
@@ -372,7 +373,7 @@ function paint(set) {
     }
     pictures.get(path).then((picture) => {
       // Another set may have been opened while this was on its way.
-      if (picture && state.set === set && state.shapes[i] === s) view.paint_with(i, picture);
+      if (picture && state.set === set && state.shapes[i] === s) view.paint_with(i, picture, path);
     });
   });
 }
@@ -1670,12 +1671,24 @@ function endStroke() {
       state.problem = e.message;
     }
     heat();
-    render();
+    settled();
     return false;
   }
   moved(done.shape, done.before, done.amount);
-  render();
+  settled();
   return false;
+}
+
+/**
+ * After a stroke: what of the screen a stroke can change is brought up to
+ * date, and no more. The lists are as they were, so they are left standing.
+ */
+function settled() {
+  const bar = (label) => [...document.querySelectorAll(".bar button")].find((b) => b.textContent === label);
+  const said = document.querySelector(".bar .warn, .bar .sub");
+  if (state.problem || said || !bar("Undo")) return render();
+  bar("Undo").disabled = !state.work.undo;
+  bar("Redo").disabled = !state.work.redo;
 }
 
 /**

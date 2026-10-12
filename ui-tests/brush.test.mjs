@@ -142,3 +142,22 @@ test("a mask grows and shrinks by a ring, and a bone has its twin", () => {
   assert.equal(brush.twin("NPC R Clavicle [RClv]"), "NPC L Clavicle [LClv]");
   assert.equal(brush.twin("NPC Spine2 [Spn2]"), "NPC Spine2 [Spn2]");
 });
+
+test("vertices at one place are found as one, however many there are", async () => {
+  const { welded } = await import("../ui/view.js");
+  const p = new Float32Array([0, 0, 0, 1, 2, 3, 0, 0, 0.0001, 1, 2, 3, -1, 2, 3, 0, 0, 0.001]);
+  assert.deepEqual([...welded(p)], [0, 1, 0, 1, 4, 5]);
+  // Many vertices, every one twice: each second finds its first.
+  const n = 50000;
+  const big = new Float32Array(n * 6);
+  for (let i = 0; i < n; i++) {
+    const at = [Math.sin(i) * 60, Math.cos(i * 1.7) * 60, (i % 997) * 0.13];
+    big.set(at, i * 3);
+    big.set(at, (n + i) * 3);
+  }
+  const start = performance.now();
+  const w = welded(big);
+  const took = performance.now() - start;
+  for (let i = 0; i < n; i += 97) assert.equal(w[n + i], w[i]);
+  assert.ok(took < 200, `${took} ms for ${n * 2} vertices`);
+});

@@ -52,6 +52,21 @@ Edition:
 Rules found this way are written where they are used, each with what it was
 found from.
 
+## How fast it is
+
+Measured on CBBE's body (13,554 vertices, 136 sliders), not assumed
+(`crates/app/examples/timing.rs` for the module, built natively; a headless
+browser for the screen's own script, drawing apart):
+
+- The module: a preview read in 7 ms, a project opened in 5 ms, a brush
+  stroke or any other change taken in about 5 ms, a build of both weights
+  with its morph file in 19 ms.
+- The screen: a slider moved in about 1 ms, a brush moved in under 1 ms, a
+  stroke's end in about 15 ms.
+
+Larger meshes cost in proportion: every brush move looks at each vertex and
+triangle of the picked shape once.
+
 ## What is not here yet
 
 Held against what the original two programs offer, from using them and from

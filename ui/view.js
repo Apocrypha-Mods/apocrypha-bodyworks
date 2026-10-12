@@ -80,6 +80,8 @@ export class View {
     /** How shapes are drawn: with their textures, with their edges, and which one is picked out. */
     this.looks = { painted: true, wire: false, picked: -1, heat: false };
     this.shapes = [];
+    /** Textures already on the card, by what the caller names them: a shape shown again wears its own without a second upload. */
+    this.skins = new Map();
     this.turn = FRONT;
     this.tilt = 0.08;
     this.far = 1;
@@ -166,7 +168,6 @@ export class View {
     for (const s of this.shapes) {
       gl.deleteBuffer(s.tb);
       if (s.eb) gl.deleteBuffer(s.eb);
-      if (s.skin) gl.deleteTexture(s.skin);
       gl.deleteBuffer(s.pb);
       gl.deleteBuffer(s.mb);
       gl.deleteBuffer(s.nb);
@@ -234,20 +235,35 @@ export class View {
     this.draw();
   }
 
-  /** Paint shape `i` with a picture (an ImageBitmap), laid by its texture coordinates. */
-  paint_with(i, picture) {
+  /**
+   * Paint shape `i` with a picture (an ImageBitmap), laid by its texture
+   * coordinates. `key` names the picture: one already sent under that name
+   * is used again as it is.
+   */
+  paint_with(i, picture, key) {
     const gl = this.gl;
     const s = this.shapes[i];
     if (!s) return;
-    if (s.skin) gl.deleteTexture(s.skin);
-    s.skin = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, s.skin);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture);
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    let skin = key === undefined ? null : this.skins.get(key);
+    if (!skin) {
+      skin = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, skin);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      if (key !== undefined) this.skins.set(key, skin);
+    }
+    s.skin = skin;
     this.draw();
+  }
+
+  /** Let go of every texture sent: for when another set is opened. */
+  forget() {
+    for (const skin of this.skins.values()) this.gl.deleteTexture(skin);
+    this.skins.clear();
+    for (const s of this.shapes) s.skin = null;
   }
 
   /** Draw only these triangles of shape `i`. */
@@ -503,15 +519,32 @@ export class View {
 /** For each vertex, the first vertex at the same place: seams light as one surface. */
 export function welded(positions) {
   const count = positions.length / 3;
+  // Places are told apart to a two-thousandth of a unit; each is looked up
+  // by a number made of its three, and checked, since two places can make
+  // the same number.
+  const q = new Int32Array(positions.length);
+  for (let i = 0; i < positions.length; i++) q[i] = Math.round(positions[i] * 2000);
   const first = new Map();
   const out = new Uint32Array(count);
+  const next = new Int32Array(count).fill(-1);
   for (let i = 0; i < count; i++) {
-    const key = `${Math.round(positions[i * 3] * 2000)},${Math.round(positions[i * 3 + 1] * 2000)},${Math.round(positions[i * 3 + 2] * 2000)}`;
-    const seen = first.get(key);
-    if (seen === undefined) {
-      first.set(key, i);
+    const x = q[i * 3], y = q[i * 3 + 1], z = q[i * 3 + 2];
+    const key = (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) | 0;
+    let at = first.get(key);
+    let found = -1;
+    for (let j = at === undefined ? -1 : at; j >= 0; j = next[j]) {
+      if (q[j * 3] === x && q[j * 3 + 1] === y && q[j * 3 + 2] === z) {
+        found = j;
+        break;
+      }
+    }
+    if (found >= 0) out[i] = found;
+    else {
       out[i] = i;
-    } else out[i] = seen;
+      // Chained under its number, oldest last, so the first at a place is the one found.
+      next[i] = at === undefined ? -1 : at;
+      first.set(key, i);
+    }
   }
   return out;
 }
