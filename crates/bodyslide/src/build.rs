@@ -215,13 +215,14 @@ pub fn build_with(
                 // As the set says of the shape: left as the mesh has them, or
                 // a seam's two sides lit as one within another angle.
                 let said = set.shapes.iter().find(|s| s.name == m.name);
-                if said.is_some_and(|s| s.lock_normals) {
-                    continue;
+                // Locked, its normals stay the mesh's; what is square to
+                // them is still worked out for the shape it now is.
+                if !said.is_some_and(|s| s.lock_normals) {
+                    let angle = said.map_or(apoc_nif::shading::SMOOTH_ANGLE, |s| s.seam_angle());
+                    let normals =
+                        apoc_nif::shading::smooth_normals_within(&positions, &now.triangles, angle);
+                    mesh::set_shading(&mut nif, m.block, &normals, &[], &[]).map_err(fail)?;
                 }
-                let angle = said.map_or(apoc_nif::shading::SMOOTH_ANGLE, |s| s.seam_angle());
-                let normals =
-                    apoc_nif::shading::smooth_normals_within(&positions, &now.triangles, angle);
-                mesh::set_shading(&mut nif, m.block, &normals, &[], &[]).map_err(fail)?;
                 // Tangents are squared to the normals as the file holds
                 // them, which is how the original's come out: a normal is
                 // stored in less detail than it is worked out in.

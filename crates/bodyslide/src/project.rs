@@ -229,8 +229,9 @@ impl Project {
             name: to.to_string(),
             target: to.to_string(),
             data_folder: first.data_folder,
-            lock_normals: false,
-            smooth_seam_angle: None,
+            // Lit when built as the one it is a copy of.
+            lock_normals: first.lock_normals,
+            smooth_seam_angle: first.smooth_seam_angle,
         });
         for (slider, own) in self.set.sliders.iter_mut().zip(&mut self.own) {
             let again: Vec<DataRef> = slider
@@ -304,8 +305,9 @@ impl Project {
                 name: theirs.name.clone(),
                 target: theirs.target.clone(),
                 data_folder: Some(folder),
-                lock_normals: false,
-                smooth_seam_angle: None,
+                // Lit when built as its own set says.
+                lock_normals: theirs.lock_normals,
+                smooth_seam_angle: theirs.smooth_seam_angle.clone(),
             });
             for slider in &other.sliders {
                 let Some(d) = slider.data.iter().find(|d| d.target == theirs.target) else {

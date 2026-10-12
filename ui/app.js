@@ -295,6 +295,8 @@ function showShapes(frame) {
   const f32 = new Float32Array(numbers);
   const u32 = new Uint32Array(numbers);
   state.bones = preview.bones || [];
+  // Other shapes, whatever their names: what went with each bone is not theirs.
+  bent.clear();
   state.shapes = preview.shapes.map((s) => {
     const base = f32.slice(s.positions[0], s.positions[0] + s.positions[1]);
     const made = {
@@ -2643,30 +2645,41 @@ function undo(again) {
 
 /** The sets the mods name as bodies to fit outfits to (`RefTemplates`), by set name, each with the name it is offered under. Read once a catalogue. */
 async function templates() {
-  if (state.templates && state.templates.of === state.catalog) return state.templates.named;
+  // Of the catalogue this began with: one read while another was awaited is not the new one's.
+  const of = state.catalog;
+  if (state.templates && state.templates.of === of) return state.templates.named;
   const named = new Map();
+  const unescaped = (t) => t.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   try {
     const list = await host.request("files.list", { folder: `${TOOLS}/RefTemplates` }).catch(() => []);
-    for (const f of list.filter((x) => /\.xml$/i.test(x.path))) {
-      const text = new TextDecoder().decode(await host.request("files.read", { path: f.path }));
-      // Each: which set, and under what name. Read as text: a file of the mods' is not trusted to be more.
-      for (const m of text.matchAll(/<Template\b([^>]*)>([^<]*)<\/Template>/g)) {
-        const set = /\bset="([^"]*)"/.exec(m[1])?.[1];
-        const unescaped = (t) => t.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-        if (set && !named.has(unescaped(set))) named.set(unescaped(set), unescaped(m[2]).trim() || unescaped(set));
+    // Small files of a few lines each: one that is not is not read through.
+    for (const f of list.filter((x) => /\.xml$/i.test(x.path) && !(x.size > 262144)).slice(0, 64)) {
+      const text = new TextDecoder().decode(await host.request("files.read", { path: f.path })).slice(0, 262144);
+      // Each: which set, and under what name. Read as text, a file of the mods' not being trusted to be more;
+      // and no further than the next tag at a time, so one that never closes costs no more than its length.
+      for (const m of text.matchAll(/<Template\b([^<>]*)>([^<]*)<\/Template>/g)) {
+        const set = /\bset\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(m[1]);
+        const name = set && unescaped(set[1] ?? set[2]);
+        if (name && !named.has(name)) named.set(name, unescaped(m[2]).trim() || name);
       }
     }
   } catch {
     // None to offer first, then.
   }
-  state.templates = { of: state.catalog, named };
+  state.templates = { of, named };
   return named;
 }
 
 /** Outfit Studio: bring a body in from another project, as what the outfit is fitted to. */
 async function reference(anchor) {
+  // One at a time: a second press while the first is read opens nothing more.
+  if (reference.busy) return;
+  reference.busy = true;
+  const [work, mode] = [state.work, state.mode];
   // The bodies the mods themselves name as ones to fit outfits to come first.
-  const named = await templates();
+  const named = await templates().finally(() => (reference.busy = false));
+  // Asked of a project that is no longer the one open: not offered.
+  if (state.work !== work || state.mode !== mode || !anchor.isConnected) return;
   const first = state.catalog.sets.filter((s) => named.has(s.name));
   const rest = state.catalog.sets.filter((s) => !named.has(s.name));
   menu(
