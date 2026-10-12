@@ -1711,6 +1711,16 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
             (&was.positions, &was.uvs, &was.triangles)
         );
         assert_eq!(now_skin, was_skin);
+        // Every place the file says what a vertex carries says the same.
+        for at in 0..tinted.nif.blocks.len() {
+            if tinted.nif.kind_of(at) != "NiSkinPartition" {
+                continue;
+            }
+            let p = apoc_nif::skin::SkinPartition::read(&tinted.nif.blocks[at].data, 100).unwrap();
+            for part in &p.partitions {
+                assert_eq!(part.vertex_desc, p.vertex_desc);
+            }
+        }
         tinted
             .paint_colors("Bra", &[(3, [10, 20, 30, 40])])
             .unwrap();
