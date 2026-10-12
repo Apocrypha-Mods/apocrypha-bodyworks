@@ -645,6 +645,11 @@ enum Request {
     /// How much each vertex of a shape of the open project follows a bone:
     /// a number a vertex, after the answer.
     BoneWeights { shape: String, bone: String },
+    /// The bones a shape of the open project follows and how each stood
+    /// when the shape was fitted to it. After the answer, for each vertex,
+    /// four pairs: a bone's number in that list in four bytes, and how much
+    /// the vertex follows it (nothing for a pair not used).
+    Rig { shape: String },
     /// The open project packed as one zip file for sharing, laid out as a
     /// mod is, after the answer.
     Pack,
@@ -1192,6 +1197,30 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                     json!({ "vertices": weights.len() }),
                     weights.iter().flat_map(|w| w.to_le_bytes()).collect(),
                 ),
+                Err(e) => Answer::failed(e),
+            },
+            None => Answer::failed("No project is open."),
+        },
+        Request::Rig { shape } => match &state.work {
+            Some(work) => match work.project.rig(&shape) {
+                Ok((bones, vertices)) => {
+                    let mut bytes = Vec::with_capacity(vertices.len() * 32);
+                    for slots in &vertices {
+                        let mut used = slots.iter().filter(|x| x.1 > 0.0).take(4);
+                        for _ in 0..4 {
+                            let (bone, weight) = used.next().copied().unwrap_or((0, 0.0));
+                            bytes.extend((bone as u32).to_le_bytes());
+                            bytes.extend(weight.to_le_bytes());
+                        }
+                    }
+                    let bones: Vec<_> = bones
+                        .iter()
+                        .map(|(name, t)| {
+                            json!({ "name": name, "turn": t.rotation, "at": t.translation, "scale": t.scale })
+                        })
+                        .collect();
+                    Answer::with(json!({ "bones": bones, "vertices": vertices.len() }), bytes)
+                }
                 Err(e) => Answer::failed(e),
             },
             None => Answer::failed("No project is open."),

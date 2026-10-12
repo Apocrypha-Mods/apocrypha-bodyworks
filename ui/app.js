@@ -2006,13 +2006,18 @@ async function shapeFromObj(like) {
     }
     const names = new Set(state.shapes.map((s) => s.name));
     let work;
-    for (const made of meshes) {
-      let name = made.name || plain;
-      for (let n = 2; names.has(name); n++) name = `${made.name || plain} ${n}`;
-      names.add(name);
-      [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name } }, meshBytes(made));
+    try {
+      for (const made of meshes) {
+        const given = (made.name || plain).trim() || "Shape";
+        let name = given;
+        for (let n = 2; names.has(name); n++) name = `${given} ${n}`;
+        names.add(name);
+        [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name } }, meshBytes(made));
+      }
+    } finally {
+      // Those made before one that could not be are there all the same.
+      if (work) taken(work);
     }
-    taken(work);
   } catch (e) {
     state.problem = e.message;
     render();
@@ -2033,7 +2038,21 @@ async function exportObj(sh) {
 /** Outfit Studio: shapes as they stand, as one FBX file saved where the person says. */
 async function exportFbx(shapes, name) {
   try {
-    const bytes = fbx.write(shapes.map((sh) => ({ name: sh.name, positions: sh.now, uvs: sh.uvs, triangles: sh.shown })));
+    const bytes = fbx.write(
+      shapes.map((sh) => {
+        // With its bones, where it has any: a shape of a set only looked at has none to give.
+        let rig = null;
+        if (state.work) {
+          try {
+            const [made, slots] = core.ask({ op: "rig", shape: sh.name });
+            if (made.vertices * 3 === sh.now.length) rig = { bones: made.bones, slots: new Uint8Array(slots) };
+          } catch {
+            rig = null;
+          }
+        }
+        return { name: sh.name, positions: sh.now, uvs: sh.uvs, triangles: sh.shown, rig };
+      }),
+    );
     await host.request("disk.save", { name: `${name}.fbx`, bytes: bytes.buffer });
   } catch (e) {
     state.problem = e.message;
@@ -2052,10 +2071,11 @@ async function importObj(sh) {
     if (!picked) return;
     let to;
     if (/\.fbx$/i.test(picked.name)) {
-      // The mesh of the shape's own name, or the only one with as many points.
+      // The mesh of the shape's own name, or the file's only mesh.
       const meshes = await fbx.read(new Uint8Array(picked.bytes));
-      const fits = meshes.filter((m) => m.points.length === sh.now.length);
-      to = (fits.find((m) => m.name === sh.name) || fits[0] || meshes.find((m) => m.name === sh.name) || meshes[0]).points;
+      const named = meshes.filter((m) => m.name === sh.name);
+      if (named.length !== 1 && meshes.length !== 1) throw new Error(`${picked.name} has ${meshes.length} meshes, and ${named.length ? "more than one" : "none"} named ${sh.name}.`);
+      to = (named.length === 1 ? named[0] : meshes[0]).points;
     } else to = obj.positions(new TextDecoder().decode(picked.bytes));
     if (to.length !== sh.now.length) {
       const points = (n) => `${n.toLocaleString()} ${n === 1 ? "point" : "points"}`;

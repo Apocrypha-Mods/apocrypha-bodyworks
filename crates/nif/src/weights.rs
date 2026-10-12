@@ -473,6 +473,20 @@ pub fn bone_places(nif: &Nif, block: usize) -> Result<Vec<[f32; 3]>, NifError> {
         .collect())
 }
 
+/// How each bone of a shape stood when the shape was fitted to it, in the
+/// shape's own space, in the order its skin lists them: what undoes the
+/// bone's own transform. A bone whose transform cannot be undone stands
+/// at nothing, unturned.
+pub fn bone_binds(nif: &Nif, block: usize) -> Result<Vec<Transform>, NifError> {
+    let at = blocks(nif, block)?;
+    let data = SkinData::read(&nif.blocks[at.data].data)?;
+    Ok(data
+        .bones
+        .iter()
+        .map(|b| crate::copy::inverse(&b.transform).unwrap_or(Transform::IDENTITY))
+        .collect())
+}
+
 /// Give a partition new triangles; [`settle`] then fills its copy of the
 /// weights.
 fn retriangled(p: &mut crate::skin::Partition, triangles: Vec<[u16; 3]>) -> Result<(), NifError> {

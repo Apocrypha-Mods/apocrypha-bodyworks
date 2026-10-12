@@ -799,6 +799,32 @@ impl Project {
         Ok(skin.bones.len())
     }
 
+    /// The bones `shape` follows, each with how it stood when the shape was
+    /// fitted to it, and for each vertex the bones it follows and by how
+    /// much, as numbers into that list.
+    #[allow(clippy::type_complexity)]
+    pub fn rig(
+        &self,
+        shape: &str,
+    ) -> Result<
+        (
+            Vec<(String, apoc_nif::node::Transform)>,
+            Vec<[(u16, f32); 4]>,
+        ),
+        Error,
+    > {
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let skin = weights::read(&self.nif, block).map_err(fail)?;
+        let binds = weights::bone_binds(&self.nif, block).map_err(fail)?;
+        if binds.len() != skin.bones.len() {
+            return invalid(format!("{shape} and its skin disagree about its bones."));
+        }
+        Ok((skin.bones.into_iter().zip(binds).collect(), skin.vertices))
+    }
+
     /// How much each vertex of `shape` follows `bone`: nothing for a bone
     /// the shape does not follow at all.
     pub fn bone_weights(&self, shape: &str, bone: &str) -> Result<Vec<f32>, Error> {
