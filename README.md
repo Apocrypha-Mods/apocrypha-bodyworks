@@ -59,8 +59,8 @@ their documentation. Each line is something they do that this does not.
 
 BodySlide:
 
-- The group manager (the list can be narrowed to a group; groups cannot be
-  made or changed).
+- Taking an outfit out of a group, or deleting a group (an outfit can be
+  added to a group, old or new).
 - Deleting a preset or a project.
 - Building to a folder outside the mod manager.
 
@@ -75,12 +75,14 @@ Outfit Studio:
   a shape from an OBJ or FBX file.
 - Bones: adding a bone no shape of the mesh follows, custom bones,
   transferring selected weights between shapes.
-- Partitions (Skyrim) and segments (Fallout 4): viewing and editing.
+- Partitions (Skyrim): moving triangles from one part to another, adding and
+  removing parts (each part can be seen alone and given another body part).
+  Segments (Fallout 4): viewing and editing.
 - Sliders: combined sliders, importing and exporting slider data as BSD,
   OSD, TRI or FBX.
 - Files: FBX in and out, head TRI files, physics data, packing projects for
   sharing, making a conversion reference.
-- View: showing the skeleton, ghosting a shape, field of view and lighting
+- View: bones drawn as more than a dot where each is, ghosting a shape, field of view and lighting
   settings, recalculating or locking normals by hand.
 - Most keyboard shortcuts: there are undo and redo, Q and 1 to 7 for the
   brushes, the square brackets for a brush's size, W and T for how the

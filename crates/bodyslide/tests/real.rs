@@ -347,7 +347,8 @@ fn an_outfit_conformed_to_its_body_follows_it_much_as_it_did() {
             &body.name,
             &outfit.name,
             &on_disk,
-            conform::Options::default()
+            conform::Options::default(),
+            &[],
         )
         .is_err());
     let moving = project
@@ -356,6 +357,7 @@ fn an_outfit_conformed_to_its_body_follows_it_much_as_it_did() {
             &body.name,
             &on_disk,
             conform::Options::default(),
+            &[],
         )
         .unwrap();
     assert!(moving > 50, "{moving} sliders");
@@ -523,6 +525,7 @@ fn a_mesh_becomes_a_project_fitted_to_a_body() {
                 &reference.name,
                 &on_disk,
                 conform::Options::default(),
+                &[],
             )
             .unwrap();
         assert!(moving > 20, "{shape}: {moving}");
@@ -750,7 +753,7 @@ fn an_outfit_given_its_bodys_bones_bends_much_as_it_did() {
     for shape in ["Bra", "Panty"] {
         let before = skin_of(&project.nif, shape);
         let bones = project
-            .copy_weights(shape, "CBBE", conform::Options::default())
+            .copy_weights(shape, "CBBE", conform::Options::default(), &[])
             .unwrap();
         // The file is still a file, with the skin it was given.
         let nif = Nif::read(&project.nif.write()).unwrap();
@@ -781,7 +784,7 @@ fn an_outfit_given_its_bodys_bones_bends_much_as_it_did() {
         );
     }
     assert!(project
-        .copy_weights("Bra", "Bra", conform::Options::default())
+        .copy_weights("Bra", "Bra", conform::Options::default(), &[])
         .is_err());
     // Painted: vertex 3 follows a bone of the body's that the bra did not,
     // by half, and what it followed before by the other half between them.
@@ -814,4 +817,106 @@ fn an_outfit_given_its_bodys_bones_bends_much_as_it_did() {
     assert_eq!(project.bone_weights("Bra", "No such bone").unwrap()[3], 0.0);
     // The body itself is as it was.
     assert_eq!(skin_of(&project.nif, "CBBE"), body);
+}
+
+#[test]
+fn what_is_spared_keeps_its_sliders_and_its_bones() {
+    use apoc_bodyslide::conform;
+    use apoc_bodyslide::project::Project;
+    use apoc_nif::{mesh, weights};
+
+    let tools = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/cbbe/@required/Data/CalienteTools/BodySlide");
+    let on_disk = |path: &str| std::fs::read(tools.join(path)).ok();
+    let Some(sets) = on_disk("SliderSets/CBBE.osp").and_then(|b| set::read(&b).ok()) else {
+        return;
+    };
+    let set = sets.iter().find(|s| s.name == "CBBE NeverNude").unwrap();
+    let project = Project::open(set, &on_disk).unwrap();
+    let skin = |p: &Project| {
+        let at = mesh::shapes(&p.nif)
+            .into_iter()
+            .find(|at| mesh::name(&p.nif, *at).as_deref() == Some("Bra"))
+            .unwrap();
+        weights::read(&p.nif, at).unwrap()
+    };
+    let by_name = |s: &weights::Skin, v: usize| -> Vec<(String, f32)> {
+        let mut all: Vec<(String, f32)> = s.vertices[v]
+            .iter()
+            .filter(|x| x.1 > 0.0)
+            .map(|x| (s.bones[x.0 as usize].clone(), x.1))
+            .collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        all
+    };
+    let spared: Vec<u16> = (0..50).collect();
+    let was = skin(&project);
+    // Painted first, so the spared vertices have weights no copy would give.
+    let mut painted = project.clone();
+    let odd = was.bones.last().unwrap().clone();
+    painted
+        .paint_weights(
+            "Bra",
+            &odd,
+            &spared.iter().map(|v| (*v, 0.9)).collect::<Vec<_>>(),
+        )
+        .unwrap();
+    let before = skin(&painted);
+    painted
+        .copy_weights("Bra", "CBBE", conform::Options::default(), &spared)
+        .unwrap();
+    let after = skin(&painted);
+    for v in 0..50 {
+        let (a, b) = (by_name(&before, v), by_name(&after, v));
+        assert_eq!(a.len(), b.len(), "vertex {v}");
+        assert!(a
+            .iter()
+            .zip(&b)
+            .all(|(x, y)| x.0 == y.0 && (x.1 - y.1).abs() < 0.002));
+    }
+    // The rest were given the body's, and are not as painted.
+    assert!((50..200).any(|v| by_name(&before, v) != by_name(&after, v)) || was == before);
+
+    // Sliders likewise: the spared keep the data the outfit came with.
+    let (shipped, _) = project.save("A").unwrap();
+    let mut conformed = project.clone();
+    conformed
+        .conform(
+            "Bra",
+            "CBBE",
+            &on_disk,
+            conform::Options::default(),
+            &spared,
+        )
+        .unwrap();
+    let (_, files_a) = project.save("A").unwrap();
+    let (_, files_b) = conformed.save("A").unwrap();
+    let lists = |files: &[apoc_bodyslide::build::Output]| {
+        osd::SliderData::read(
+            &files
+                .iter()
+                .find(|f| f.path.ends_with(".osd"))
+                .unwrap()
+                .bytes,
+        )
+        .unwrap()
+    };
+    let (a, b) = (lists(&files_a), lists(&files_b));
+    let mut compared = 0;
+    for (name, diffs) in &a.lists {
+        if !name.starts_with("Bra") {
+            continue;
+        }
+        let ours = b.list(name).unwrap_or(&[]);
+        // The same moves, in whatever order the file lists them.
+        let low = |d: &[osd::Diff]| {
+            let mut kept: Vec<osd::Diff> = d.iter().filter(|x| x.vertex < 50).copied().collect();
+            kept.sort_by_key(|x| x.vertex);
+            kept
+        };
+        assert_eq!(low(diffs), low(ours), "{name}");
+        compared += 1;
+    }
+    assert!(compared > 20 && a != b);
+    assert!(!shipped.sliders.is_empty());
 }

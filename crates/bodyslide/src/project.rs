@@ -556,7 +556,8 @@ impl Project {
 
     /// Give `shape` what every slider does to `body`, so that it follows
     /// the body: each of its vertices takes what the body's vertices
-    /// nearest it do. What sliders did to the shape before is replaced.
+    /// nearest it do. What sliders did to the shape before is replaced,
+    /// but for the vertices in `spared`, which go on as they were.
     /// Returns how many sliders now move it.
     pub fn conform(
         &mut self,
@@ -564,6 +565,7 @@ impl Project {
         body: &str,
         files: &dyn Files,
         options: conform::Options,
+        spared: &[u16],
     ) -> Result<usize, Error> {
         let (at, from) = (self.shape(shape)?, self.shape(body)?);
         if at == from {
@@ -595,8 +597,16 @@ impl Project {
             let Some(does) = self.list(slider, from, files) else {
                 continue;
             };
-            let diffs = conform::carried(&ties, &does, crate::tri::LEAST, &mut scratch);
+            let mut diffs = conform::carried(&ties, &does, crate::tri::LEAST, &mut scratch);
             let own = &mut self.own[slider];
+            if !spared.is_empty() {
+                // What is spared goes on doing what it did.
+                diffs.retain(|d| !spared.contains(&d.vertex));
+                if let Some(old) = own.iter().find(|o| o.target == target) {
+                    diffs.extend(old.diffs.iter().filter(|d| spared.contains(&d.vertex)));
+                }
+                diffs.sort_by_key(|d| d.vertex);
+            }
             own.retain(|o| o.target != target);
             if !diffs.is_empty() {
                 moving += 1;
@@ -657,13 +667,14 @@ impl Project {
     /// Give `shape` the bones of `body`, so that it bends as the body does:
     /// each of its vertices follows the bones the body's vertices nearest
     /// it follow, the nearer the more, and the heaviest four of them. The
-    /// shape's own weights are replaced. Returns how many bones it now
-    /// follows.
+    /// shape's own weights are replaced, but for the vertices in `spared`,
+    /// which keep theirs. Returns how many bones it now follows.
     pub fn copy_weights(
         &mut self,
         shape: &str,
         body: &str,
         options: conform::Options,
+        spared: &[u16],
     ) -> Result<usize, Error> {
         if shape == body {
             return invalid("A shape takes its weights from another shape.");
@@ -685,16 +696,43 @@ impl Project {
             ));
         }
         let ties = conform::tie(&on, &ours, options);
-        // The body's bones the shape ends up following, in the body's order.
-        let mut place: Vec<Option<u16>> = vec![None; theirs.bones.len()];
+        // Every bone there is to follow: the body's, then any only the
+        // shape has, which a spared vertex may still follow.
+        let mut names = theirs.bones.clone();
+        let had = if spared.is_empty() {
+            None
+        } else {
+            let had = weights::read(&self.nif, to).map_err(fail)?;
+            for bone in &had.bones {
+                if !names.contains(bone) {
+                    names.push(bone.clone());
+                }
+            }
+            Some(had)
+        };
+        // Those the shape ends up following, in that order.
+        let mut place: Vec<Option<u16>> = vec![None; names.len()];
         let mut mixed: Vec<[(u16, f32); weights::MOST]> = Vec::with_capacity(ours.len());
         let mut all: Vec<(u16, f32)> = Vec::new();
         for v in 0..ours.len() {
             all.clear();
-            for (near, share) in ties.of(v) {
-                for (bone, weight) in theirs.vertices[near as usize] {
-                    if weight > 0.0 {
-                        all.push((bone, weight * share));
+            match had.as_ref().filter(|_| spared.contains(&(v as u16))) {
+                Some(had) => {
+                    for (bone, weight) in had.vertices.get(v).copied().unwrap_or_default() {
+                        if weight > 0.0 {
+                            let name = &had.bones[bone as usize];
+                            let at = names.iter().position(|n| n == name).unwrap_or(0);
+                            all.push((at as u16, weight));
+                        }
+                    }
+                }
+                None => {
+                    for (near, share) in ties.of(v) {
+                        for (bone, weight) in theirs.vertices[near as usize] {
+                            if weight > 0.0 {
+                                all.push((bone, weight * share));
+                            }
+                        }
                     }
                 }
             }
@@ -712,7 +750,7 @@ impl Project {
         for (i, p) in place.iter_mut().enumerate() {
             if p.is_some() {
                 *p = Some(bones.len() as u16);
-                bones.push(theirs.bones[i].clone());
+                bones.push(names[i].clone());
             }
         }
         for slots in &mut mixed {
@@ -860,7 +898,7 @@ impl Project {
             .map(|s| s.name.clone())
             .collect();
         for shape in &shapes {
-            self.conform(shape, body, files, options)?;
+            self.conform(shape, body, files, options, &[])?;
         }
         Ok(shapes.len())
     }
@@ -1113,6 +1151,16 @@ impl Project {
             }
         }
         weights::write(&mut self.nif, block, &skin, None).map_err(fail)
+    }
+
+    /// Say which part of the body the `index`th part of a shape is.
+    pub fn set_part(&mut self, shape: &str, index: usize, part: u16) -> Result<(), Error> {
+        self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        weights::set_part(&mut self.nif, block, index, part)
+            .map_err(|e| Error::Invalid(e.to_string()))
     }
 
     /// Where a build of the project goes, and whether as two meshes.

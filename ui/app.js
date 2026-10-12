@@ -94,6 +94,8 @@ const state = {
   /** The bone the weight brush paints, by name, and how much each vertex of the picked shape follows it. */
   bone: null,
   heat: null,
+  /** Outfit Studio: the part of the picked shape drawn alone, by its place in the list, or null. */
+  part: null,
   /** Outfit Studio: the open project as it stands, changes and all. */
   work: null,
   /** Files saved here that the mods do not have yet, by lower-case path. */
@@ -264,6 +266,11 @@ function showShapes(frame) {
       uvs: f32.slice(s.uvs[0], s.uvs[0] + s.uvs[1]),
       texture: (s.textures || [])[0] || null,
       textures: s.textures || [],
+      parts: (s.parts || []).map((part) => ({
+        part: part.part,
+        triangles: u32.slice(part.triangles[0], part.triangles[0] + part.triangles[1]),
+      })),
+      places: s.bonePlaces ? f32.slice(s.bonePlaces[0], s.bonePlaces[0] + s.bonePlaces[1]) : new Float32Array(0),
       shown: null,
       zapped: "",
       zaps: (s.zaps || []).map((z) => ({
@@ -555,6 +562,41 @@ function savePreset() {
   ]);
   name.focus();
   name.select();
+}
+
+/** BodySlide: put the outfit on screen in a group, an old one or a new one, kept in the output mod. */
+async function addToGroup() {
+  const set = state.set;
+  // The groups made here before, where the mods have the file from an earlier visit.
+  const key = "slidergroups/apocrypha.xml";
+  if (!state.kept.has(key) && state.paths.has(key)) {
+    try {
+      state.kept.set(key, await host.request("files.read", { path: state.paths.get(key) }));
+    } catch {
+      // Unreadable: the file is begun again.
+    }
+  }
+  rename(
+    "Add to group",
+    state.group || "",
+    (to) => {
+      const name = to.trim();
+      const rel = "SliderGroups/Apocrypha.xml";
+      const had = state.kept.get(rel.toLowerCase());
+      const [text] = core.ask({ op: "groupAdd", group: name, set: set.name }, had ? new Uint8Array(had) : undefined);
+      const bytes = new TextEncoder().encode(text).buffer;
+      state.kept.set(rel.toLowerCase(), bytes);
+      core.ask({ op: "put", path: rel }, new Uint8Array(bytes));
+      host.request("output.write", { name: state.output, files: [{ path: `${TOOLS}/${rel}`, bytes: bytes.slice(0) }] }).catch((e) => {
+        state.problem = e.message;
+        render();
+      });
+      if (!set.groups.includes(name)) set.groups.push(name);
+      if (!state.catalog.groups.includes(name)) state.catalog.groups.push(name);
+      render();
+    },
+    "Add",
+  );
 }
 
 function several() {
@@ -964,6 +1006,26 @@ function outfitPick(label) {
   );
 }
 
+/** Skyrim's numbers for the parts of a body an armour covers, as the game's editor names them. */
+const PARTS = {
+  30: "Head", 31: "Hair", 32: "Body", 33: "Hands", 34: "Forearms", 35: "Amulet", 36: "Ring", 37: "Feet", 38: "Calves",
+  39: "Shield", 40: "Tail", 41: "Long hair", 42: "Circlet", 43: "Ears", 130: "Head, cut off", 131: "Hair, cut off",
+  141: "Long hair, cut off", 142: "Circlet, cut off", 143: "Ears, cut off", 150: "Head, cut off", 230: "Neck, cut off",
+};
+
+/** Outfit Studio: draw only one part of the picked shape, or with null all of it again. */
+function showPart(index) {
+  const s = state.shapes[state.picked];
+  state.part = index;
+  if (!s) return;
+  if (index !== null && s.parts[index]) {
+    view.cut(state.picked, s.parts[index].triangles);
+  } else {
+    s.zapped = null;
+    reshape();
+  }
+}
+
 const EYE =
   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_OFF =
@@ -980,8 +1042,43 @@ function studioSide() {
     state.shapes[i].hidden = hidden;
     view.hide(i, hidden);
   };
+  // The skeleton shows with the list of bones.
+  const bonesShown = state.side === "bones" && picked && !picked.hidden;
+  view.bones(bonesShown ? picked.places : null, bonesShown ? picked.bones.indexOf(state.bone) : -1);
+  if (state.side !== "parts" && state.part !== null) showPart(null);
   const rows =
-    state.side === "bones"
+    state.side === "parts"
+      ? (picked?.parts || []).map((part, i) =>
+          h(
+            "div.shape" + (state.part === i ? ".on" : ""),
+            {
+              tabIndex: 0,
+              onclick: () => {
+                showPart(state.part === i ? null : i);
+                studioSide();
+              },
+              oncontextmenu: (e) => {
+                e.preventDefault();
+                if (!state.work) return;
+                menu(e.currentTarget, [{ name: "Change part…", value: 1 }], () =>
+                  rename(
+                    "Body part",
+                    String(part.part),
+                    (to) => {
+                      const number = Number(to);
+                      if (!Number.isInteger(number) || number < 0 || number > 65535) throw new Error("A part is a whole number, 30 to 61 for most armour.");
+                      change({ do: "bodyPart", shape: picked.name, index: i, part: number });
+                    },
+                    "Done",
+                  ),
+                );
+              },
+            },
+            h("span.nm.cut", null, `${part.part}${PARTS[part.part] ? ` · ${PARTS[part.part]}` : ""}`),
+            h("span.sub.quiet", null, (part.triangles.length / 3).toLocaleString()),
+          ),
+        )
+      : state.side === "bones"
       ? [...(picked?.bones || []), ...[...new Set(state.shapes.flatMap((o) => o.bones))].filter((b) => !picked?.bones.includes(b)).sort()].map((b) =>
           h(
             "div.shape" + (state.tool === "weights" && b === state.bone ? ".on" : "") + (picked?.bones.includes(b) ? "" : ".off"),
@@ -1081,7 +1178,19 @@ function studioSide() {
                     if (what === "export") return exportObj(sh);
                     if (what === "import") return importObj(sh);
                     if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
-                    if (Array.isArray(what)) return attempt({ do: what[0], shape: sh.name, body: what[1] });
+                    if (Array.isArray(what)) {
+                      // What a mask covers keeps the sliders, or the bones, it has.
+                      const spared = [];
+                      sh.mask.forEach((m, v) => m >= 0.5 && spared.push(v));
+                      try {
+                        const [work] = core.ask({ op: "change", change: { do: what[0], shape: sh.name, body: what[1] } }, new Uint8Array(Uint32Array.from(spared).buffer));
+                        taken(work);
+                      } catch (e) {
+                        state.problem = e.message;
+                        render();
+                      }
+                      return;
+                    }
                     if (what === "hide") hide(i, !sh.hidden);
                     else state.shapes.forEach((_, j) => hide(j, others ? j !== i : false));
                     studioSide();
@@ -1109,7 +1218,7 @@ function studioSide() {
     h(
       "div.side-head",
       null,
-      h("div.seg.plain", { role: "group", "aria-label": "List" }, tab("shapes", "Shapes"), tab("bones", "Bones")),
+      h("div.seg.plain", { role: "group", "aria-label": "List" }, tab("shapes", "Shapes"), tab("bones", "Bones"), picked?.parts.length > 0 && tab("parts", "Parts")),
       h("span.grow"),
       state.work && h("button.btn.ghost.small", { type: "button", onclick: (e) => reference(e.currentTarget) }, "Reference…"),
     ),
@@ -2158,8 +2267,13 @@ function render() {
         pickButton("Group", state.group || "All", (b) =>
           menu(
             b,
-            [{ name: "All", value: null, on: !state.group }, ...state.catalog.groups.map((g) => ({ name: g, value: g, on: g === state.group }))],
+            [
+              { name: "All", value: null, on: !state.group },
+              ...state.catalog.groups.map((g) => ({ name: g, value: g, on: g === state.group })),
+              set && { name: "Add this outfit to a group…", value: addToGroup, rule: true },
+            ].filter(Boolean),
             (g) => {
+              if (g === addToGroup) return addToGroup();
               state.group = g;
               render();
             },
@@ -2246,6 +2360,13 @@ async function start() {
   const first = sets.find((s) => s.name === last) || sets.find((s) => /\bbody\b/i.test(s.name)) || sets[0];
   await choose(first, remembered.get(`preset.${state.game?.id}`));
 }
+
+// Escape shuts the menu or sheet on top, wherever the keys are going.
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const open = [...document.querySelectorAll(".scrim")].pop();
+  if (open) close(open);
+});
 
 // Outfit Studio: Q puts the brush down, 1 and up take one in hand in the
 // order they are shown, the square brackets size it, W and T change how the

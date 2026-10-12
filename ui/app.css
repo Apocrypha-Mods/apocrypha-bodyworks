@@ -164,6 +164,8 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bo
 .side-head { display: flex; align-items: center; height: 36px; padding: 0 8px; box-shadow: inset 0 -1px 0 var(--border); flex-shrink: 0; }
 .side-foot { padding: 10px 12px; box-shadow: inset 0 1px 0 var(--border); flex-shrink: 0; }
 .seg.plain { padding: 0; background: none; box-shadow: none; gap: 2px; }
+.side-head .seg button { padding: 0 9px; }
+.side-head .btn.small { padding: 0 6px; }
 .shape { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px 0 6px; cursor: default; }
 .shape:hover { background: var(--bg-hover); }
 .shape.on { background: var(--bg-selected); }

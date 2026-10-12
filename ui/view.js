@@ -5,7 +5,7 @@ const VS = `#version 300 es
 in vec3 p; in vec3 n; in vec2 t; in float m;
 uniform mat4 mvp; uniform mat3 nm;
 out vec3 vn; out vec2 vt; out float vm;
-void main() { vn = nm * n; vt = t; vm = m; gl_Position = mvp * vec4(p, 1.0); }`;
+void main() { vn = nm * n; vt = t; vm = m; gl_Position = mvp * vec4(p, 1.0); gl_PointSize = 7.0; }`;
 
 const FS = `#version 300 es
 precision highp float;
@@ -92,6 +92,8 @@ export class View {
     this.brush = null;
     /** The brush's reach, drawn on the shape: `{ point, normal, radius }`, or null. */
     this.ring = null;
+    /** Bones to mark in the view: `{ places: Float32Array, picked }`, or null. */
+    this.marks = null;
     this.ringVao = gl.createVertexArray();
     this.ringBuf = gl.createBuffer();
     gl.bindVertexArray(this.ringVao);
@@ -345,6 +347,12 @@ export class View {
     return { origin: eye, dir: dir.map((c) => c / l), back, alt: e.altKey };
   }
 
+  /** Mark where bones are (x, y, z each), one of them picked out; or with null mark none. */
+  bones(places, picked = -1) {
+    this.marks = places && places.length ? { places, picked } : null;
+    this.draw();
+  }
+
   /** Show the brush's reach on the shape, or with null stop showing it. */
   reach(ring) {
     this.ring = ring;
@@ -425,6 +433,25 @@ export class View {
         // The vertex array remembers its index buffer: give it back its faces.
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.ib);
       });
+    }
+    if (this.marks) {
+      // A dot where each bone is, over everything; the picked one stands out.
+      const { places, picked } = this.marks;
+      gl.bindVertexArray(this.ringVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.ringBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, places, gl.DYNAMIC_DRAW);
+      gl.disable(gl.DEPTH_TEST);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.uniform4f(this.uLine, 1, 1, 1, 0.55);
+      gl.drawArrays(gl.POINTS, 0, places.length / 3);
+      if (picked >= 0 && picked < places.length / 3) {
+        gl.uniform4f(this.uLine, 1, 0.75, 0.2, 1);
+        gl.drawArrays(gl.POINTS, picked, 1);
+      }
+      gl.disable(gl.BLEND);
+      gl.enable(gl.DEPTH_TEST);
+      gl.bufferData(gl.ARRAY_BUFFER, 64 * 3 * 4, gl.DYNAMIC_DRAW);
     }
     if (this.ring) {
       // A circle lying on the shape where the brush is, drawn over everything.

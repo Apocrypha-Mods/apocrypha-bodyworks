@@ -318,3 +318,72 @@ mod tests {
         assert_eq!(settled(&[(6, 3.0)])[0], (6, 1.0));
     }
 }
+
+/// One part of a skinned shape: the triangles the game shows or hides
+/// together, as a piece of armour covers part of a body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Part {
+    pub flags: u16,
+    /// Which part of the body it is, by the game's number for it.
+    pub part: u16,
+    pub triangles: Vec<[u16; 3]>,
+}
+
+/// The parts of the shape at `block`, in the file's order. None for a
+/// shape whose skin does not divide it.
+pub fn parts(nif: &Nif, block: usize) -> Result<Vec<Part>, NifError> {
+    let stream = nif.header.stream.version;
+    let at = blocks(nif, block)?;
+    let instance = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;
+    let partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
+    let Some(named) = instance.body_parts else {
+        return Ok(Vec::new());
+    };
+    Ok(named
+        .iter()
+        .zip(&partition.partitions)
+        .map(|((flags, part), p)| Part {
+            flags: *flags,
+            part: *part,
+            triangles: p.true_triangles.clone().unwrap_or_default(),
+        })
+        .collect())
+}
+
+/// Say which part of the body the `index`th part of a shape is.
+pub fn set_part(nif: &mut Nif, block: usize, index: usize, part: u16) -> Result<(), NifError> {
+    let at = blocks(nif, block)?;
+    let mut instance = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;
+    match instance.body_parts.as_mut().and_then(|p| p.get_mut(index)) {
+        Some(slot) => slot.1 = part,
+        None => return unsupported("the shape has no such part"),
+    }
+    nif.blocks[at.instance].data = instance.write();
+    Ok(())
+}
+
+/// Where each bone of a shape is, in the shape's own space, in the order
+/// its skin lists them.
+pub fn bone_places(nif: &Nif, block: usize) -> Result<Vec<[f32; 3]>, NifError> {
+    let at = blocks(nif, block)?;
+    let data = SkinData::read(&nif.blocks[at.data].data)?;
+    Ok(data
+        .bones
+        .iter()
+        .map(|b| {
+            // The bone's transform takes the shape's space into the bone's:
+            // the bone itself is what it takes to nothing.
+            let (t, m, s) = (
+                b.transform.translation,
+                b.transform.rotation,
+                b.transform.scale,
+            );
+            let s = if s == 0.0 { 1.0 } else { s };
+            [
+                -(m[0] * t[0] + m[3] * t[1] + m[6] * t[2]) / s,
+                -(m[1] * t[0] + m[4] * t[1] + m[7] * t[2]) / s,
+                -(m[2] * t[0] + m[5] * t[1] + m[8] * t[2]) / s,
+            ]
+        })
+        .collect())
+}

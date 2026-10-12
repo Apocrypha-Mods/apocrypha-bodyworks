@@ -36,6 +36,15 @@ struct Work {
     changed: bool,
 }
 
+/// Vertex numbers sent as a request's bytes, four bytes each.
+fn numbers(data: &[u8]) -> Vec<u16> {
+    data.as_chunks::<4>()
+        .0
+        .iter()
+        .filter_map(|c| u16::try_from(u32::from_le_bytes(*c)).ok())
+        .collect()
+}
+
 /// How many changes can be taken back.
 const UNDO: usize = 24;
 
@@ -113,7 +122,7 @@ impl Work {
                 ))),
             },
             Change::Conform { shape, body } => p
-                .conform(&shape, &body, files, Default::default())
+                .conform(&shape, &body, files, Default::default(), &numbers(data))
                 .map(drop),
             Change::Transform {
                 shape,
@@ -121,9 +130,9 @@ impl Work {
                 scale,
                 turn,
             } => p.transform(&shape, by, scale, turn),
-            Change::Weights { shape, body } => {
-                p.copy_weights(&shape, &body, Default::default()).map(drop)
-            }
+            Change::Weights { shape, body } => p
+                .copy_weights(&shape, &body, Default::default(), &numbers(data))
+                .map(drop),
             Change::ClearSlider { slider, shape } => p.clear_slider(&slider, &shape),
             Change::NegateSlider { slider } => p.negate_slider(&slider),
             Change::ConformAll { body } => {
@@ -160,6 +169,7 @@ impl Work {
                 p.separate(&shape, &to, &vertices)
             }
             Change::DropBone { shape, bone } => p.drop_bone(&shape, &bone),
+            Change::BodyPart { shape, index, part } => p.set_part(&shape, index, part),
             Change::Paint { shape, bone } => {
                 let painted: Vec<(u16, f32)> = data
                     .as_chunks::<8>()
@@ -345,6 +355,12 @@ enum Change {
         shape: String,
         bone: String,
     },
+    /// Say which part of the body one part of a shape is.
+    BodyPart {
+        shape: String,
+        index: usize,
+        part: u16,
+    },
     /// Set how much vertices of a shape follow a bone. The request's bytes
     /// are, for each vertex, its number and the weight, four bytes each.
     Paint {
@@ -447,6 +463,9 @@ enum Request {
         #[serde(default)]
         work: bool,
     },
+    /// A groups file (the request's bytes, or none yet) with a set added to
+    /// a group, as text to save.
+    GroupAdd { group: String, set: String },
     /// A presets file holding one preset, as text to save.
     PresetFile { preset: PresetIn },
 }
@@ -757,7 +776,27 @@ impl State {
                         .push(json!({ "slider": index, "vertices": vertices, "offsets": offsets }));
                 }
             }
+            let parts: Vec<Value> = apoc_nif::weights::parts(&nif, m.block)
+                .unwrap_or_default()
+                .iter()
+                .map(|p| {
+                    let triangles = put_u32(
+                        &mut bytes,
+                        &mut p.triangles.iter().flatten().map(|i| *i as u32),
+                    );
+                    json!({ "part": p.part, "flags": p.flags, "triangles": triangles })
+                })
+                .collect();
+            let places = put_f32(
+                &mut bytes,
+                &mut apoc_nif::weights::bone_places(&nif, m.block)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flatten(),
+            );
             shapes.push(json!({
+                "parts": parts,
+                "bonePlaces": places,
                 "name": m.name,
                 "positions": positions,
                 "triangles": triangles,
@@ -990,6 +1029,29 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 Ok(_) => Answer::failed("Nothing was made."),
                 Err(e) => Answer::failed(e),
             }
+        }
+        Request::GroupAdd { group: name, set } => {
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return Answer::failed("Give the group a name.");
+            }
+            let mut groups = if data.is_empty() {
+                Vec::new()
+            } else {
+                match group::read(data) {
+                    Ok(g) => g,
+                    Err(e) => return Answer::failed(e),
+                }
+            };
+            match groups.iter_mut().find(|g| g.name == name) {
+                Some(g) if !g.members.contains(&set) => g.members.push(set),
+                Some(_) => {}
+                None => groups.push(group::Group {
+                    name,
+                    members: vec![set],
+                }),
+            }
+            Answer::ok(json!(group::write(&groups)))
         }
         Request::PresetFile { preset: p } => {
             let values = p
