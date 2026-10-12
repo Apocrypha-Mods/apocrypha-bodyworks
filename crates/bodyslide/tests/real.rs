@@ -1017,6 +1017,20 @@ fn a_shape_is_mirrored_and_its_triangles_moved_between_parts() {
         (four.len(), four[3].part, four[3].triangles.len()),
         (4, 44, moved)
     );
+    // The new part taken out again, its triangles back where they came from.
+    let mut fewer = project.clone();
+    fewer.remove_part(&name, 3, largest).unwrap();
+    assert!(fewer.remove_part(&name, 3, 0).is_err());
+    assert!(fewer.remove_part(&name, 1, 1).is_err());
+    let nif = Nif::read(&fewer.nif.write()).unwrap();
+    let three = weights::parts(&nif, block(&nif)).unwrap();
+    assert_eq!(three.len(), 3);
+    assert_eq!(total(&three), total(&was_parts));
+    assert_eq!(
+        three[largest].triangles.len(),
+        was_parts[largest].triangles.len()
+    );
+
     // Nothing marked, or a whole part marked, is refused and changes nothing.
     assert!(project.move_to_part(&name, &[], Some(0), 0).is_err());
     let all: Vec<u16> = (0..was.positions.len() as u16).collect();

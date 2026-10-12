@@ -74,8 +74,6 @@ their documentation. Each line is something they do that this does not.
 
 BodySlide:
 
-- Taking an outfit out of a group, or deleting a group (an outfit can be
-  added to a group, old or new).
 - Building to a folder outside the mod manager.
 
 Outfit Studio:
@@ -88,9 +86,7 @@ Outfit Studio:
   a shape from an OBJ or FBX file.
 - Bones: adding a bone no shape of the mesh follows, custom bones,
   transferring selected weights between shapes.
-- Partitions (Skyrim): removing a part (triangles can be moved between
-  parts and into a new one, by masking them).
-  Segments (Fallout 4): viewing and editing.
+- Segments (Fallout 4): viewing and editing.
 - Sliders: combined sliders, importing and exporting slider data as BSD,
   TRI or FBX (OSD goes both ways).
 - Files: FBX in and out, head TRI files, physics data, packing projects for

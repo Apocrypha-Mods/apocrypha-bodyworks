@@ -532,3 +532,32 @@ pub fn across(bone: &str) -> String {
     }
     bone.to_string()
 }
+
+/// Take the `index`th part out of a shape, its triangles going to the
+/// `into`th. The parts after it move up by one.
+pub fn remove_part(nif: &mut Nif, block: usize, index: usize, into: usize) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    let at = blocks(nif, block)?;
+    let mut instance = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;
+    let mut partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
+    let Some(named) = instance.body_parts.as_mut() else {
+        return unsupported("the shape's skin does not divide it into parts");
+    };
+    let count = partition.partitions.len();
+    if named.len() != count || index >= count || into >= count || index == into {
+        return unsupported("the shape has no such two parts");
+    }
+    let (Some(going), Some(mut all)) = (
+        partition.partitions[index].true_triangles.clone(),
+        partition.partitions[into].true_triangles.clone(),
+    ) else {
+        return unsupported("a part keeps its triangles in a way this cannot change");
+    };
+    all.extend(going);
+    retriangled(&mut partition.partitions[into], all);
+    partition.partitions.remove(index);
+    named.remove(index);
+    nif.blocks[at.instance].data = instance.write();
+    nif.blocks[at.partition].data = partition.write(stream);
+    settle(nif, block)
+}

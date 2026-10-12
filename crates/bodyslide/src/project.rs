@@ -1193,6 +1193,21 @@ impl Project {
         moved.map_err(fail)
     }
 
+    /// Take the `index`th part out of a shape, its triangles going to the
+    /// `into`th.
+    pub fn remove_part(&mut self, shape: &str, index: usize, into: usize) -> Result<(), Error> {
+        self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let before = self.nif.clone();
+        let done = weights::remove_part(&mut self.nif, block, index, into);
+        if done.is_err() {
+            self.nif = before;
+        }
+        done.map_err(|e| Error::Invalid(e.to_string()))
+    }
+
     /// Mirror a shape across the middle of the body: every vertex to the
     /// other side, its triangles turned to face out again, what sliders do
     /// to it mirrored too, and each bone it follows changed for its twin on

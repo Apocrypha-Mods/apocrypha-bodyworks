@@ -175,6 +175,7 @@ impl Work {
                 p.move_to_part(&shape, &numbers(data), to, part).map(drop)
             }
             Change::ImportSlider { slider } => p.import_slider(&slider, data).map(drop),
+            Change::RemovePart { shape, index, into } => p.remove_part(&shape, index, into),
             Change::Paint { shape, bone } => {
                 let painted: Vec<(u16, f32)> = data
                     .as_chunks::<8>()
@@ -383,6 +384,12 @@ enum Change {
     ImportSlider {
         slider: String,
     },
+    /// Take one part out of a shape, its triangles going to another.
+    RemovePart {
+        shape: String,
+        index: usize,
+        into: usize,
+    },
     /// Set how much vertices of a shape follow a bone. The request's bytes
     /// are, for each vertex, its number and the weight, four bytes each.
     Paint {
@@ -491,6 +498,9 @@ enum Request {
     /// A groups file (the request's bytes, or none yet) with a set added to
     /// a group, as text to save.
     GroupAdd { group: String, set: String },
+    /// A groups file (the request's bytes) with a set taken out of a group,
+    /// as text to save. A group left with nothing goes too.
+    GroupRemove { group: String, set: String },
     /// A presets file holding one preset, as text to save.
     PresetFile { preset: PresetIn },
 }
@@ -1083,6 +1093,21 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                     members: vec![set],
                 }),
             }
+            Answer::ok(json!(group::write(&groups)))
+        }
+        Request::GroupRemove { group: name, set } => {
+            let theirs = || format!("{set} is in {name} by another mod, which it stays in.");
+            let Ok(mut groups) = group::read(data) else {
+                return Answer::failed(theirs());
+            };
+            let Some(g) = groups
+                .iter_mut()
+                .find(|g| g.name == name && g.members.contains(&set))
+            else {
+                return Answer::failed(theirs());
+            };
+            g.members.retain(|m| *m != set);
+            groups.retain(|g| !g.members.is_empty());
             Answer::ok(json!(group::write(&groups)))
         }
         Request::PresetFile { preset: p } => {

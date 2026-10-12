@@ -634,6 +634,32 @@ async function remove(what) {
   render();
 }
 
+/** BodySlide: take the outfit on screen out of the group shown, where it was put in it here. */
+async function outOfGroup() {
+  const set = state.set;
+  const group = state.group;
+  const rel = "SliderGroups/Apocrypha.xml";
+  const key = rel.toLowerCase();
+  try {
+    if (!state.kept.has(key) && state.paths.has(key)) state.kept.set(key, await host.request("files.read", { path: state.paths.get(key) }));
+    const had = state.kept.get(key);
+    const [text] = core.ask({ op: "groupRemove", group, set: set.name }, had ? new Uint8Array(had) : undefined);
+    const bytes = new TextEncoder().encode(text).buffer;
+    state.kept.set(key, bytes);
+    core.ask({ op: "put", path: rel }, new Uint8Array(bytes));
+    await host.request("output.write", { name: state.output, files: [{ path: `${TOOLS}/${rel}`, bytes: bytes.slice(0) }] });
+    set.groups = set.groups.filter((g) => g !== group);
+    if (!state.catalog.sets.some((s) => s.groups.includes(group))) {
+      state.catalog.groups = state.catalog.groups.filter((g) => g !== group);
+      state.group = null;
+    }
+    state.problem = null;
+  } catch (e) {
+    state.problem = e.message;
+  }
+  render();
+}
+
 function several() {
   const groups = new Set(state.set.groups);
   let group = state.set.groups[0] || null;
@@ -1108,6 +1134,7 @@ function studioSide() {
                     { name: "Change part…", value: "change" },
                     masked.length > 0 && { name: "Move masked triangles here", value: "here", rule: true },
                     masked.length > 0 && { name: "Move masked triangles to a new part…", value: "new" },
+                    picked.parts.length > 1 && { name: "Remove part…", value: "remove", danger: true, rule: true },
                   ].filter(Boolean),
                   (what) => {
                     if (what === "here") {
@@ -1118,6 +1145,15 @@ function studioSide() {
                         render();
                       }
                       return;
+                    }
+                    if (what === "remove") {
+                      // Its triangles go to another part: which, where there is a choice.
+                      const others = picked.parts.map((o, j) => ({ name: `Into ${o.part}${PARTS[o.part] ? ` · ${PARTS[o.part]}` : ""}`, value: j })).filter((o) => o.value !== i);
+                      const into = (j) => {
+                        showPart(null);
+                        attempt({ do: "removePart", shape: picked.name, index: i, into: j });
+                      };
+                      return others.length === 1 ? into(others[0].value) : menu(document.querySelector("#side .side-head"), others, into);
                     }
                     if (what === "new") {
                       return rename(
@@ -2426,9 +2462,11 @@ function render() {
               { name: "All", value: null, on: !state.group },
               ...state.catalog.groups.map((g) => ({ name: g, value: g, on: g === state.group })),
               set && { name: "Add this outfit to a group…", value: addToGroup, rule: true },
+              set && state.group && set.groups.includes(state.group) && { name: `Take this outfit out of ${state.group}`, value: outOfGroup },
             ].filter(Boolean),
             (g) => {
               if (g === addToGroup) return addToGroup();
+              if (g === outOfGroup) return outOfGroup();
               state.group = g;
               render();
             },
