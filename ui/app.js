@@ -1165,7 +1165,7 @@ function foot() {
             ? h("span.sub.cut", null, state.note)
             : state.busy
               ? h("span.sub.cut", { id: "busy" }, state.busy)
-              : null,
+              : "",
     h("span.grow"),
     h(
       "button.check.inline" + (state.morphs ? ".on" : ""),
