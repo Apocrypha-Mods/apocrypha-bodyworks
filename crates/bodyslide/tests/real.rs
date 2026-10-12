@@ -1840,6 +1840,35 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
     }
     assert!(without.drop_bone_everywhere(left).is_err());
 
+    // A slider turned round one way: what it does across goes the other
+    // way, the rest as before.
+    let slider = "Turned";
+    let mut turned = project.clone();
+    turned.add_slider(slider).unwrap();
+    turned
+        .move_vertices(
+            "Bra",
+            Some(slider),
+            &[apoc_bodyslide::osd::Diff {
+                vertex: 3,
+                offset: [1.0, 2.0, 3.0],
+            }],
+        )
+        .unwrap();
+    let moves = |p: &Project| {
+        apoc_bodyslide::osd::SliderData::read(&p.slider_data(slider).unwrap())
+            .unwrap()
+            .lists[0]
+            .1[0]
+            .offset
+    };
+    assert_eq!(moves(&turned), [1.0, 2.0, 3.0]);
+    turned.flip_slider(slider, 0).unwrap();
+    assert_eq!(moves(&turned), [-1.0, 2.0, 3.0]);
+    turned.flip_slider(slider, 2).unwrap();
+    assert_eq!(moves(&turned), [-1.0, 2.0, -3.0]);
+    assert!(turned.flip_slider(slider, 3).is_err());
+
     // A bone made up by hand: once, and where it was put.
     let mut boned = project.clone();
     boned

@@ -1518,6 +1518,9 @@ function studioSliders() {
             state.shapes[state.picked] && { name: `Clear for ${state.shapes[state.picked].name}`, value: "clear", rule: true },
             state.shapes[state.picked] && { name: "Mask what it moves", value: "mask" },
             { name: "Invert", value: "negate" },
+            { name: "Flip left to right", value: ["flip", 0] },
+            { name: "Flip front to back", value: ["flip", 1] },
+            { name: "Flip up and down", value: ["flip", 2] },
             { name: "Export data…", value: "out", rule: true },
             { name: "Import data…", value: "in" },
             { name: "Delete", value: "delete", danger: true, rule: true },
@@ -1526,6 +1529,7 @@ function studioSliders() {
             const on = state.shapes[state.picked];
             if (what === "clear") return attempt({ do: "clearSlider", slider: sl.name, shape: on.name });
             if (what === "negate") return attempt({ do: "negateSlider", slider: sl.name });
+            if (Array.isArray(what) && what[0] === "flip") return attempt({ do: "flipSlider", slider: sl.name, axis: what[1] });
             if (what === "out" || what === "in") return sliderFile(sl, what === "in");
             if (what === "mask") {
               // Covered: the vertices of the picked shape this slider moves.

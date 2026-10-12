@@ -946,6 +946,22 @@ impl Project {
 
     /// Turn what a slider does round: every vertex it moves goes as far the
     /// other way, on every shape where that is the project's own.
+    /// Turn what a slider does round one way only: every vertex it moves
+    /// goes as far the other way along `axis` (0 across, 1 front to back, 2
+    /// up and down), and as before along the other two.
+    pub fn flip_slider(&mut self, slider: &str, axis: usize) -> Result<(), Error> {
+        let index = self.slider(slider)?;
+        if axis > 2 {
+            return invalid("A slider is turned round across, front to back, or up and down.");
+        }
+        for own in &mut self.own[index] {
+            for d in Arc::make_mut(&mut own.diffs) {
+                d.offset[axis] = -d.offset[axis];
+            }
+        }
+        Ok(())
+    }
+
     pub fn negate_slider(&mut self, slider: &str) -> Result<(), Error> {
         let index = self.slider(slider)?;
         for own in &mut self.own[index] {

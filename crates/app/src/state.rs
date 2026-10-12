@@ -198,6 +198,7 @@ impl Work {
                 .map(drop),
             Change::ClearSlider { slider, shape } => p.clear_slider(&slider, &shape),
             Change::NegateSlider { slider } => p.negate_slider(&slider),
+            Change::FlipSlider { slider, axis } => p.flip_slider(&slider, axis),
             Change::ConformAll { body } => {
                 p.conform_all(&body, files, Default::default()).map(drop)
             }
@@ -515,6 +516,11 @@ enum Change {
         shape: String,
     },
     /// Turn what a slider does round.
+    /// Turn what a slider does round along one axis (0, 1 or 2).
+    FlipSlider {
+        slider: String,
+        axis: usize,
+    },
     NegateSlider {
         slider: String,
     },
