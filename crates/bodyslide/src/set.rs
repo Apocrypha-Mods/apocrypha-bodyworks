@@ -51,6 +51,24 @@ pub struct Shape {
     pub target: String,
     /// Its data folder, when not the set's.
     pub data_folder: Option<String>,
+    /// Its normals are kept as the mesh has them when it is built, not
+    /// worked out anew (`LockNormals`).
+    pub lock_normals: bool,
+    /// The angle, in degrees, within which the two sides of a seam are lit
+    /// as one when it is built, where that is not the usual sixty: the
+    /// text as the file has it (`SmoothSeamNormalsAngle`).
+    pub smooth_seam_angle: Option<String>,
+}
+
+impl Shape {
+    /// The angle within which a seam's two sides are lit as one.
+    pub fn seam_angle(&self) -> f32 {
+        self.smooth_seam_angle
+            .as_deref()
+            .and_then(|a| a.trim().parse::<f32>().ok())
+            .filter(|a| a.is_finite() && (0.0..=180.0).contains(a))
+            .unwrap_or(apoc_nif::shading::SMOOTH_ANGLE)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,6 +123,10 @@ pub fn read(bytes: &[u8]) -> Result<Vec<SliderSet>, Error> {
                     target: s.attribute("target").unwrap_or(&name).to_string(),
                     name,
                     data_folder: s.attribute("DataFolder").map(str::to_string),
+                    lock_normals: s
+                        .attribute("LockNormals")
+                        .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+                    smooth_seam_angle: s.attribute("SmoothSeamNormalsAngle").map(str::to_string),
                 }
             })
             .collect();
@@ -211,6 +233,14 @@ pub fn write(sets: &[SliderSet]) -> String {
                 .as_ref()
                 .map(|f| format!(" DataFolder=\"{}\"", escape(f)))
                 .unwrap_or_default();
+            // As the files that carry them have them: after the folder.
+            let mut folder = folder;
+            if let Some(angle) = &shape.smooth_seam_angle {
+                folder.push_str(&format!(" SmoothSeamNormalsAngle=\"{}\"", escape(angle)));
+            }
+            if shape.lock_normals {
+                folder.push_str(" LockNormals=\"true\"");
+            }
             out.push_str(&format!(
                 "        <Shape target=\"{}\"{folder}>{}</Shape>\n",
                 escape(&shape.target),

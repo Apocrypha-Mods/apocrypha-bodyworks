@@ -300,6 +300,8 @@ function showShapes(frame) {
       triangles: u32.slice(s.triangles[0], s.triangles[0] + s.triangles[1]),
       bones: s.bones || [],
       look: s.look || null,
+      lockNormals: Boolean(s.lockNormals),
+      seamAngle: s.seamAngle ?? 60,
       lookShared: s.lookShared || [],
       reference: Boolean(s.reference),
       hidden: hidden.has(s.name),
@@ -1324,6 +1326,7 @@ function studioSide() {
                     { name: sh.ghost ? "Solid" : "Ghost", value: "ghost" },
                     state.work && sh.textures.length > 0 && { name: "Textures…", value: "textures" },
                     state.work && sh.look && { name: "Material…", value: "material" },
+                    state.work && !sh.reference && { name: "Normals…", value: "normals" },
                     state.work && !sh.reference && !sh.colors.length && { name: "Add colours", value: "addColours" },
                     state.work && !sh.reference && sh.bones.length > 0 && { name: "Remove skinning", value: "unskin" },
                     state.work && { name: "Flip texture left to right", value: "flipU" },
@@ -1347,6 +1350,7 @@ function studioSide() {
                     }
                     if (what === "transform") return transform(sh);
                     if (what === "material") return material(sh);
+                    if (what === "normals") return normalsOf(sh);
                     if (what === "addColours") return attempt({ do: "addColours", shape: sh.name });
                     if (what === "unskin") return attempt({ do: "removeSkinning", shape: sh.name });
                     if (what === "mirror") return attempt({ do: "mirror", shape: sh.name });
@@ -2702,6 +2706,29 @@ function transform(sh) {
     [h("div.pair.three", null, move.map((f) => f[0])), h("div.pair.three", null, turn.map((f) => f[0])), h("div.pair.three", null, scaleField)],
     [said, h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"), go],
   );
+}
+
+/** Outfit Studio: how a shape is lit when built: its normals kept as they are, or a seam's sides lit as one within an angle. */
+function normalsOf(sh) {
+  const [lock, locked] = option("Keep as the mesh has them", sh.lockNormals);
+  const angle = h("input.input", { type: "number", step: "any", min: 0, max: 180, value: String(sh.seamAngle), "aria-label": "Seam angle, degrees" });
+  const go = h("button.btn.primary", { type: "button" }, "Done");
+  const said = h("span.sub.warn.grow.cut");
+  go.addEventListener("click", () => {
+    try {
+      const degrees = Number(angle.value);
+      if (angle.value.trim() === "" || !(degrees >= 0 && degrees <= 180)) throw new Error("The angle is 0 to 180.");
+      change({ do: "normals", shape: sh.name, lock: locked(), angle: degrees });
+      close(el);
+    } catch (e) {
+      said.textContent = e.message;
+    }
+  });
+  const el = sheet(sh.name, null, [h("label.field", null, h("span", null, "Seam angle, degrees"), angle), lock], [
+    said,
+    h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
+    go,
+  ]);
 }
 
 /** Outfit Studio: how a shape takes light: its glow, its shine, its gloss and how solid it is. */

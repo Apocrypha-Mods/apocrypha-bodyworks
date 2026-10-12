@@ -222,6 +222,7 @@ impl Work {
                 p.add_zap(&name, &shape, &vertices)
             }
             Change::Textures { shape, textures } => p.set_textures(&shape, &textures),
+            Change::Normals { shape, lock, angle } => p.set_normals_rule(&shape, lock, angle),
             Change::AddColours { shape } => p.add_colors(&shape),
             Change::Cloth => p.set_cloth(data),
             Change::RemoveSkinning { shape } => p.remove_skinning(&shape),
@@ -569,6 +570,14 @@ enum Change {
     /// Give a shape's vertices colours to carry, where they carry none.
     AddColours {
         shape: String,
+    },
+    /// Say how a shape is lit when built: its normals kept, or a seam's two
+    /// sides lit as one within an angle.
+    Normals {
+        shape: String,
+        lock: bool,
+        #[serde(default)]
+        angle: Option<f32>,
     },
     /// Name the texture files a shape is drawn with, slot by slot.
     Textures {
@@ -1187,6 +1196,8 @@ impl State {
                 "zaps": zaps,
                 "bones": mesh::bone_names(&nif, m.block),
                 "reference": shape.data_folder.is_some(),
+                "lockNormals": shape.lock_normals,
+                "seamAngle": shape.seam_angle(),
             }));
         }
         // Every bone the mesh has, followed by a shape or not.

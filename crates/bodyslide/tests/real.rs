@@ -2352,3 +2352,75 @@ fn a_head_parts_morph_file_becomes_sliders_and_goes_back_out() {
         .to_string()
         .contains("501"));
 }
+
+#[test]
+fn what_a_set_says_of_a_shapes_normals_is_kept_and_followed() {
+    use apoc_nif::{mesh, Nif};
+    // A real set that lights one shape's seams within another angle.
+    let tools = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/ube/fix/CalienteTools/Bodyslide");
+    let on_disk = |path: &str| std::fs::read(tools.join(path)).ok();
+    let Some(bytes) = on_disk("SliderSets/UBE SE 2.0 Release SoS Addon.osp") else {
+        return;
+    };
+    let sets = set::read(&bytes).unwrap();
+    let said = sets[0]
+        .shapes
+        .iter()
+        .find(|s| s.smooth_seam_angle.is_some())
+        .unwrap();
+    assert_eq!(said.seam_angle(), 120.0);
+    // Written and read again, it says the same.
+    let written = set::write(&sets);
+    assert!(written.contains("SmoothSeamNormalsAngle=\"120\""));
+    assert_eq!(set::read(written.as_bytes()).unwrap(), sets);
+
+    // Built as the set says, and with the shape's normals locked: locked,
+    // they are the mesh's own; and the angle changes what is worked out.
+    let name = said.name.clone();
+    let normals = |set: &set::SliderSet| {
+        let zeros = vec![0.0; set.sliders.len()];
+        let out = apoc_bodyslide::build::build_at(set, &zeros, &zeros, &on_disk).unwrap();
+        let nif = Nif::read(&out.outputs[0].bytes).unwrap();
+        mesh::shapes(&nif)
+            .into_iter()
+            .map(|at| mesh::read(&nif, at).unwrap())
+            .find(|m| m.name == name)
+            .unwrap()
+            .normals
+    };
+    let source = {
+        let nif = Nif::read(
+            &on_disk(&format!(
+                "ShapeData/{}/{}",
+                sets[0].data_folder, sets[0].source_file
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        mesh::shapes(&nif)
+            .into_iter()
+            .map(|at| mesh::read(&nif, at).unwrap())
+            .find(|m| m.name == name)
+            .unwrap()
+            .normals
+    };
+    let as_said = normals(&sets[0]);
+    let mut locked = sets[0].clone();
+    locked
+        .shapes
+        .iter_mut()
+        .find(|s| s.name == name)
+        .unwrap()
+        .lock_normals = true;
+    assert_eq!(normals(&locked), source);
+    assert!(set::write(&[locked]).contains("LockNormals=\"true\""));
+    let mut usual = sets[0].clone();
+    usual
+        .shapes
+        .iter_mut()
+        .find(|s| s.name == name)
+        .unwrap()
+        .smooth_seam_angle = None;
+    assert_ne!(normals(&usual), as_said);
+}

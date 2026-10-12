@@ -168,6 +168,8 @@ impl Project {
                     target: shape.clone(),
                     name: shape,
                     data_folder: None,
+                    lock_normals: false,
+                    smooth_seam_angle: None,
                 });
             }
         }
@@ -227,6 +229,8 @@ impl Project {
             name: to.to_string(),
             target: to.to_string(),
             data_folder: first.data_folder,
+            lock_normals: false,
+            smooth_seam_angle: None,
         });
         for (slider, own) in self.set.sliders.iter_mut().zip(&mut self.own) {
             let again: Vec<DataRef> = slider
@@ -300,6 +304,8 @@ impl Project {
                 name: theirs.name.clone(),
                 target: theirs.target.clone(),
                 data_folder: Some(folder),
+                lock_normals: false,
+                smooth_seam_angle: None,
             });
             for slider in &other.sliders {
                 let Some(d) = slider.data.iter().find(|d| d.target == theirs.target) else {
@@ -1123,6 +1129,27 @@ impl Project {
             *self = before;
         }
         done
+    }
+
+    /// Say how a shape is lit when it is built: its normals kept as the
+    /// mesh has them, or worked out with a seam's two sides lit as one
+    /// within `angle` degrees (nothing for the usual sixty).
+    pub fn set_normals_rule(
+        &mut self,
+        shape: &str,
+        lock: bool,
+        angle: Option<f32>,
+    ) -> Result<(), Error> {
+        let at = self.shape(shape)?;
+        if angle.is_some_and(|a| !(0.0..=180.0).contains(&a)) {
+            return invalid("The angle is 0 to 180 degrees.");
+        }
+        let said = &mut self.set.shapes[at];
+        said.lock_normals = lock;
+        said.smooth_seam_angle = angle
+            .filter(|a| *a != apoc_nif::shading::SMOOTH_ANGLE)
+            .map(|a| format!("{a}"));
+        Ok(())
     }
 
     /// Name the texture files a shape is drawn with, slot by slot.

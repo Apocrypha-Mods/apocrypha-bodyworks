@@ -138,8 +138,9 @@ Outfit Studio:
   same, `--example cloth`. A head part's morph file goes both ways: it becomes sliders, and
   sliders go out as one; all 87 of a real body mod's read and write back
   the same, `--example headtri`.)
-- View: bones drawn as more than a dot where each is, recalculating or
-  locking normals by hand.
+- View: bones drawn as more than a dot where each is. (What a set says of
+  a shape's normals is kept and followed when it is built: left as the
+  mesh has them, or a seam's sides lit as one within another angle.)
 - The original's own keyboard shortcuts: this has its own (undo and redo,
   Ctrl+S and Ctrl+E, Q and the digits for the brushes, the square brackets
   and minus and equals for a brush's size and strength, X for both sides,
