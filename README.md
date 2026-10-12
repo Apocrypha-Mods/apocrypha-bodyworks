@@ -74,8 +74,9 @@ their documentation. Each line is something they do that this does not.
 
 Outfit Studio:
 
-- Brushes: the vertex tools (collapse, flip or split an edge, weld, move one
-  vertex). Colour is painted only on a shape that already carries colours.
+- Brushes: the vertex tools that work on one edge or vertex at a time
+  (collapse, flip or split an edge); a whole shape's doubled vertices are
+  welded. Colour is painted only on a shape that already carries colours.
 - Shapes: refining only part of a mesh (the whole of one is refined),
   merging shapes that keep different things for each vertex, removing
   skinning, shader properties other than the texture files, a shape from an

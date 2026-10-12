@@ -1490,4 +1490,41 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
         panty.positions.len()
     );
     assert_eq!(shape(&made, "Bra").0.positions, was.positions);
+
+    // A mesh with every vertex doubled, welded: one of each again, the
+    // triangles the same, and nothing to weld the second time.
+    let n = panty.positions.len();
+    let mut doubled = panty.positions.clone();
+    doubled.extend(&panty.positions);
+    let mut doubled_uv = panty.uvs.clone();
+    doubled_uv.extend(&panty.uvs);
+    // Every other triangle on the second copy of its vertices.
+    let split: Vec<[u16; 3]> = panty
+        .triangles
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            if i % 2 == 0 {
+                *t
+            } else {
+                t.map(|v| v + n as u16)
+            }
+        })
+        .collect();
+    let mut welded = project.clone();
+    welded
+        .shape_from("Bra", "Doubled", &doubled, &doubled_uv, &split)
+        .unwrap();
+    assert_eq!(shape(&welded, "Doubled").0.positions.len(), n * 2);
+    let gone = welded.weld("Doubled").unwrap();
+    let (one, one_skin) = shape(&welded, "Doubled");
+    assert_eq!(one.positions.len() + gone, n * 2);
+    assert!(one.positions.len() <= n);
+    assert_eq!(one.triangles.len(), panty.triangles.len());
+    assert_eq!(one_skin.vertices.len(), one.positions.len());
+    assert_eq!(welded.weld("Doubled").unwrap(), 0);
+    assert_eq!(
+        built(&welded, "Doubled").positions.len(),
+        one.positions.len()
+    );
 }

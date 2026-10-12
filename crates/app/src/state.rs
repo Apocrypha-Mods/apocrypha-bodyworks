@@ -214,6 +214,7 @@ impl Work {
             }
             Change::DropBone { shape, bone } => p.drop_bone(&shape, &bone),
             Change::BodyPart { shape, index, part } => p.set_part(&shape, index, part),
+            Change::Weld { shape } => p.weld(&shape).map(drop),
             Change::Refine { shape } => p.refine(&shape).map(drop),
             Change::ShapeFrom { like, name } => match outside_mesh(data) {
                 Some((positions, uvs, triangles)) => {
@@ -470,6 +471,10 @@ enum Change {
         shape: String,
         index: usize,
         part: u16,
+    },
+    /// Weld a shape: vertices at one place become one.
+    Weld {
+        shape: String,
     },
     /// Refine a shape: every triangle made four.
     Refine {

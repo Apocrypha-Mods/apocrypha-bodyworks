@@ -1638,6 +1638,59 @@ impl Project {
         Ok(())
     }
 
+    /// Weld a shape: vertices at one place, with one place in the
+    /// texture, become one. What sliders did to the first of them is what
+    /// they do to the one. Returns how many vertices went.
+    pub fn weld(&mut self, shape: &str) -> Result<usize, Error> {
+        let at = self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let target = self.set.shapes[at].target.clone();
+        if self
+            .set
+            .sliders
+            .iter()
+            .any(|s| s.data.iter().any(|d| d.target == target))
+        {
+            return invalid(format!(
+                "What sliders do to {shape} is another project's, which counts on its vertices as they are."
+            ));
+        }
+        let before = self.nif.clone();
+        let now = match weights::weld(&mut self.nif, block) {
+            Ok(now) => now,
+            Err(e) => {
+                self.nif = before;
+                return Err(Error::Invalid(e.to_string()));
+            }
+        };
+        let left = now.iter().map(|v| *v as usize + 1).max().unwrap_or(0);
+        let gone = now.len() - left;
+        if gone == 0 {
+            return Ok(0);
+        }
+        for own in &mut self.own {
+            for o in own.iter_mut().filter(|o| o.target == target) {
+                let mut seen = vec![false; left];
+                let mut diffs: Vec<Diff> = o
+                    .diffs
+                    .iter()
+                    .filter_map(|d| {
+                        let vertex = *now.get(d.vertex as usize)?;
+                        (!std::mem::replace(&mut seen[vertex as usize], true)).then_some(Diff {
+                            vertex,
+                            offset: d.offset,
+                        })
+                    })
+                    .collect();
+                diffs.sort_by_key(|d| d.vertex);
+                o.diffs = Arc::new(diffs);
+            }
+        }
+        Ok(gone)
+    }
+
     /// Mirror a shape across the middle of the body: every vertex to the
     /// other side, its triangles turned to face out again, what sliders do
     /// to it mirrored too, and each bone it follows changed for its twin on

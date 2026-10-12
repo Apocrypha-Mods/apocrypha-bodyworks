@@ -1288,6 +1288,7 @@ function studioSide() {
                     state.work && { name: "Move, turn, scale…", value: "transform" },
                     state.work && !sh.reference && { name: "Mirror", value: "mirror" },
                     state.work && !sh.reference && { name: "Refine", value: "refine" },
+                    state.work && !sh.reference && { name: "Weld doubled points", value: "weld" },
                     state.work && !sh.reference && state.shapes.some((o) => o !== sh && !o.reference) && { name: "Merge into…", value: "merge" },
                     state.work && !sh.reference && { name: "New shape from OBJ…", value: "fromObj" },
                     ...(state.work ? bodies.map((o) => ({ name: `Conform to ${o.name}`, value: ["conform", o.name] })) : []),
@@ -1315,6 +1316,7 @@ function studioSide() {
                     if (what === "transform") return transform(sh);
                     if (what === "mirror") return attempt({ do: "mirror", shape: sh.name });
                     if (what === "refine") return attempt({ do: "refine", shape: sh.name });
+                    if (what === "weld") return attempt({ do: "weld", shape: sh.name });
                     if (what === "fromObj") return shapeFromObj(sh);
                     if (what === "merge") {
                       // Into which: it is drawn as that one is, and goes by its name.

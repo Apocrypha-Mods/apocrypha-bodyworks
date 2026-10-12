@@ -913,3 +913,65 @@ pub fn refine(nif: &mut Nif, block: usize) -> Result<Vec<(u16, u16)>, NifError> 
     rebuild(nif, block, view.vertex_data, refined, &skin, None)?;
     Ok(between)
 }
+
+/// Weld a shape: vertices at one place, with one place in the texture,
+/// become one vertex (the first of them), and a triangle left with two
+/// corners at one vertex goes. Returns where each old vertex now is.
+pub fn weld(nif: &mut Nif, block: usize) -> Result<Vec<u16>, NifError> {
+    let stream = nif.header.stream.version;
+    let (bytes, layout, parts) = packed(nif, block)?;
+    let stride = layout.stride.max(1);
+    let count = bytes.len() / stride;
+    let skin = read(nif, block)?;
+    let mut view = TriShape::read(&nif.blocks[block].data, stream)?;
+    view.vertex_data = bytes;
+    // Told apart to a two-thousandth of a unit in place, and a
+    // four-thousandth of the texture.
+    let mut first: std::collections::HashMap<[i32; 5], u16> = std::collections::HashMap::new();
+    let mut now = Vec::with_capacity(count);
+    let mut kept: Vec<usize> = Vec::new();
+    for v in 0..count {
+        let p = view.position(&layout, v).unwrap_or([0.0; 3]);
+        let uv = view.uv(&layout, v).unwrap_or([0.0; 2]);
+        let key = [
+            (p[0] * 2000.0).round() as i32,
+            (p[1] * 2000.0).round() as i32,
+            (p[2] * 2000.0).round() as i32,
+            (uv[0] * 4096.0).round() as i32,
+            (uv[1] * 4096.0).round() as i32,
+        ];
+        let at = *first.entry(key).or_insert_with(|| {
+            kept.push(v);
+            (kept.len() - 1) as u16
+        });
+        now.push(at);
+    }
+    if kept.len() == count {
+        return Ok(now);
+    }
+    let mut data = Vec::with_capacity(kept.len() * stride);
+    let mut vertices = Vec::with_capacity(kept.len());
+    for v in &kept {
+        data.extend_from_slice(&view.vertex_data[v * stride..(v + 1) * stride]);
+        vertices.push(skin.vertices[*v]);
+    }
+    let parts: Vec<Vec<[u16; 3]>> = parts
+        .iter()
+        .map(|triangles| {
+            triangles
+                .iter()
+                .map(|t| t.map(|v| now[v as usize]))
+                .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+                .collect()
+        })
+        .collect();
+    if parts.iter().any(Vec::is_empty) {
+        return unsupported("welded, a part of the shape would have no triangle left");
+    }
+    let skin = Skin {
+        bones: skin.bones,
+        vertices,
+    };
+    rebuild(nif, block, data, parts, &skin, None)?;
+    Ok(now)
+}
