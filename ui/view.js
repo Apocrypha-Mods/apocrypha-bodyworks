@@ -115,6 +115,15 @@ export class View {
     gl.bindVertexArray(null);
     this.pointers();
     new ResizeObserver(() => this.draw()).observe(canvas);
+    // Come back to, from a system dialog or another window, the view paints
+    // again: what it had drawn may be gone, and a frame asked for while it
+    // was covered may never have come.
+    const again = () => {
+      this.queued = false;
+      this.draw();
+    };
+    window.addEventListener("focus", again);
+    document.addEventListener("visibilitychange", again);
   }
 
   pointers() {

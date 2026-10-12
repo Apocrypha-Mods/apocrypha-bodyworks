@@ -3562,14 +3562,24 @@ function renderStudio() {
   studioSliders();
 }
 
+/**
+ * The screen, drawn anew. The view is drawn again after it: put back into the
+ * page, a canvas can come back blank (WebKit, with a system dialog having
+ * been over it), and nothing else would tell the view to paint.
+ */
 function render() {
+  renderPage();
+  view?.draw();
+}
+
+function renderPage() {
   if (!state.catalog.sets.length) {
     root.replaceChildren(
       h(
         "div.empty",
         null,
         state.busy
-          ? h("span", { id: "status" }, state.busy)
+          ? h("span", { id: "busy" }, state.busy)
           : [h("strong", null, "No bodies or outfits"), h("span", null, state.problem || "Install a body mod that comes with BodySlide files.")],
       ),
     );
