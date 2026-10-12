@@ -309,6 +309,29 @@ pub fn bone_names(nif: &Nif, block: usize) -> Vec<String> {
     } else {
         TriShape::read(&nif.blocks[block].data, stream).map(|s| s.skin)
     };
+    let named = |bones: &[i32]| -> Vec<String> {
+        bones
+            .iter()
+            .map(|bone| {
+                usize::try_from(*bone)
+                    .ok()
+                    .filter(|i| *i < nif.blocks.len() && crate::node::is_node(nif.kind_of(*i)))
+                    .and_then(|i| crate::node::Node::read(&nif.blocks[i].data, stream).ok())
+                    .map(|n| name_of(nif, n.av.name))
+                    .unwrap_or_default()
+            })
+            .collect()
+    };
+    // Fallout 4 keeps a skin of its own kind.
+    if let Some(at) = skin
+        .as_ref()
+        .ok()
+        .and_then(|l| block_of(nif, *l, &["BSSkin::Instance"]))
+    {
+        return crate::skin::Fo4Instance::read(&nif.blocks[at].data)
+            .map(|i| named(&i.bones))
+            .unwrap_or_default();
+    }
     let Some(at) = skin
         .ok()
         .and_then(|l| block_of(nif, l, &["NiSkinInstance", "BSDismemberSkinInstance"]))

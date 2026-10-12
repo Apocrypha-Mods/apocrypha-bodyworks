@@ -260,6 +260,50 @@ fn main() {
             }
             note("part from its bones", done);
         }
+        // A weight painted: the vertex follows the bone that much, the
+        // shape is otherwise as it was, and the file reads back.
+        if let Some(skin) = block
+            .and_then(|b| apoc_nif::weights::read(&project.nif, b).ok())
+            .filter(|s| !s.bones.is_empty())
+        {
+            let mut p = project.clone();
+            let bone = skin.bones[skin.bones.len() / 2].clone();
+            let done = p.paint_weights(&shape, &bone, &[(0, 0.5)]).map_err(said);
+            if done.is_ok() {
+                let nif = Nif::read(&p.nif.write()).unwrap();
+                let at = mesh::shapes(&nif)
+                    .into_iter()
+                    .find(|at| mesh::name(&nif, *at).as_deref() == Some(shape.as_str()));
+                let now = at.and_then(|a| apoc_nif::weights::read(&nif, a).ok());
+                let got = now.as_ref().and_then(|n| {
+                    let k = n.bones.iter().position(|b| *b == bone)?;
+                    n.vertices
+                        .first()?
+                        .iter()
+                        .find(|x| x.0 as usize == k && x.1 > 0.0)
+                        .map(|x| x.1)
+                });
+                let rest = now.as_ref().is_some_and(|n| {
+                    n.vertices.len() == skin.vertices.len()
+                        && n.vertices[1..]
+                            .iter()
+                            .zip(&skin.vertices[1..])
+                            .all(|(a, b)| a == b)
+                });
+                let m = block.and_then(|b| mesh::read(&project.nif, b).ok());
+                let n = at.and_then(|a| mesh::read(&nif, a).ok());
+                let same = m.zip(n).is_some_and(|(m, n)| {
+                    m.positions == n.positions && m.triangles == n.triangles && m.uvs == n.uvs
+                });
+                note(
+                    "painted: half to the bone, the rest as it was, read back",
+                    (got.is_some_and(|w| (0.49..0.7).contains(&w)) && rest && same)
+                        .then_some(())
+                        .ok_or(format!("{path}: got {got:?} rest {rest} same {same}")),
+                );
+            }
+            note("paint a weight", done);
+        }
         let mut p = project.clone();
         note("new slider", p.add_slider("Probe").map_err(said));
         note("save", project.save("Probe").map(drop).map_err(said));

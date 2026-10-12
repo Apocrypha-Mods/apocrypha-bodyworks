@@ -614,3 +614,119 @@ impl SkinPartition {
         w.out
     }
 }
+
+/// Fallout 4's skin for one shape (`BSSkin::Instance`), as measured over its
+/// files (`--example fo4skin`): the skeleton's root, the block of its
+/// bones' places, the bones' nodes, and three numbers for each of some
+/// scales.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fo4Instance {
+    pub skeleton_root: Ref,
+    pub data: Ref,
+    pub bones: Vec<Ref>,
+    pub scales: Vec<[f32; 3]>,
+}
+
+impl Fo4Instance {
+    pub fn read(data: &[u8]) -> Result<Self, NifError> {
+        let mut r = Reader::new(data);
+        let skeleton_root = r.i32()?;
+        let bone_data = r.i32()?;
+        let n = r.count(4)?;
+        let bones = (0..n).map(|_| r.i32()).collect::<Result<_, _>>()?;
+        let m = r.count(12)?;
+        let scales = (0..m)
+            .map(|_| Ok([r.f32()?, r.f32()?, r.f32()?]))
+            .collect::<Result<_, NifError>>()?;
+        if r.left() != 0 {
+            return Err(NifError::Corrupt(
+                "a skin with more in it than its counts say".into(),
+            ));
+        }
+        Ok(Fo4Instance {
+            skeleton_root,
+            data: bone_data,
+            bones,
+            scales,
+        })
+    }
+
+    pub fn write(&self) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.i32(self.skeleton_root);
+        w.i32(self.data);
+        w.u32(self.bones.len() as u32);
+        for b in &self.bones {
+            w.i32(*b);
+        }
+        w.u32(self.scales.len() as u32);
+        for s in self.scales.iter().flatten() {
+            w.f32(*s);
+        }
+        w.out
+    }
+}
+
+/// One bone of a Fallout 4 skin: a sphere round what it moves, and the
+/// transform that takes the shape's space into the bone's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fo4Bone {
+    pub bound_center: [f32; 3],
+    pub bound_radius: f32,
+    pub transform: Transform,
+}
+
+/// Fallout 4's bones for one shape (`BSSkin::BoneData`), in the order its
+/// instance lists their nodes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fo4BoneData {
+    pub bones: Vec<Fo4Bone>,
+}
+
+impl Fo4BoneData {
+    pub fn read(data: &[u8]) -> Result<Self, NifError> {
+        let mut r = Reader::new(data);
+        let n = r.count(68)?;
+        let mut bones = Vec::with_capacity(n);
+        for _ in 0..n {
+            let bound_center = [r.f32()?, r.f32()?, r.f32()?];
+            let bound_radius = r.f32()?;
+            let mut rotation = [0.0; 9];
+            for v in &mut rotation {
+                *v = r.f32()?;
+            }
+            let translation = [r.f32()?, r.f32()?, r.f32()?];
+            let scale = r.f32()?;
+            bones.push(Fo4Bone {
+                bound_center,
+                bound_radius,
+                transform: Transform {
+                    translation,
+                    rotation,
+                    scale,
+                },
+            });
+        }
+        if r.left() != 0 {
+            return Err(NifError::Corrupt(
+                "bones with more in them than their count says".into(),
+            ));
+        }
+        Ok(Fo4BoneData { bones })
+    }
+
+    pub fn write(&self) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.u32(self.bones.len() as u32);
+        for b in &self.bones {
+            for v in b.bound_center.iter().chain([&b.bound_radius]) {
+                w.f32(*v);
+            }
+            for v in b.transform.rotation.iter().chain(&b.transform.translation) {
+                w.f32(*v);
+            }
+            w.f32(b.transform.scale);
+        }
+        w.out
+    }
+}

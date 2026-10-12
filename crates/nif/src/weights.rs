@@ -15,7 +15,9 @@ use crate::geometry::{
 };
 use crate::mesh;
 use crate::node::{is_node, Node, Transform};
-use crate::skin::{BoneData, SkinData, SkinInstance, SkinPartition};
+use crate::skin::{
+    BoneData, Fo4Bone, Fo4BoneData, Fo4Instance, SkinData, SkinInstance, SkinPartition,
+};
 use crate::{Nif, NifError};
 use std::collections::BTreeSet;
 
@@ -40,6 +42,199 @@ struct Blocks {
 
 fn unsupported<T>(why: &str) -> Result<T, NifError> {
     Err(NifError::Unsupported(why.into()))
+}
+
+/// Where Fallout 4 keeps the skin of the shape at `block`: its instance and
+/// its bones' places. The vertices' own share of it is in the shape.
+/// Nothing for a shape skinned another way, or not at all.
+struct Fo4 {
+    instance: usize,
+    data: usize,
+}
+
+fn fo4(nif: &Nif, block: usize) -> Result<Option<Fo4>, NifError> {
+    let stream = nif.header.stream.version;
+    if !is_tri_shape(nif.kind_of(block)) {
+        return Ok(None);
+    }
+    let Some(instance) = TriShape::skin_of(&nif.blocks[block].data, stream)
+        .and_then(|l| usize::try_from(l).ok())
+        .filter(|i| *i < nif.blocks.len() && nif.kind_of(*i) == "BSSkin::Instance")
+    else {
+        return Ok(None);
+    };
+    let read = Fo4Instance::read(&nif.blocks[instance].data)?;
+    let Some(data) = usize::try_from(read.data)
+        .ok()
+        .filter(|i| *i < nif.blocks.len() && nif.kind_of(*i) == "BSSkin::BoneData")
+    else {
+        return unsupported("the shape's skin has no bones' places");
+    };
+    Ok(Some(Fo4 { instance, data }))
+}
+
+/// A Fallout 4 shape's vertices, each with what it follows, as [`read`]
+/// gives them.
+fn fo4_vertices(nif: &Nif, block: usize) -> Result<Vec<[(u16, f32); MOST]>, NifError> {
+    let stream = nif.header.stream.version;
+    let shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let Some(layout) = Layout::of(shape.vertex_desc, stream) else {
+        return unsupported("the shape keeps no vertices this can read");
+    };
+    let count = shape.vertex_data.len() / layout.stride.max(1);
+    let mut vertices = Vec::with_capacity(count);
+    for v in 0..count {
+        let Some((weights, bones)) = skin_weights_in(&shape.vertex_data, &layout, v) else {
+            return unsupported("the shape's vertices carry no bone weights");
+        };
+        let mut slots = [(0u16, 0.0f32); MOST];
+        for k in 0..MOST {
+            if weights[k] > 0.0 && weights[k].is_finite() {
+                slots[k] = (bones[k] as u16, weights[k]);
+            }
+        }
+        vertices.push(slots);
+    }
+    Ok(vertices)
+}
+
+/// Give a Fallout 4 shape this skin: what each vertex follows in the shape
+/// itself, the bones' nodes in its instance, and their places beside them.
+/// A bone the shape did not follow is placed as `like` places it; with no
+/// shape to say, it is refused (a bone's node in these files was found not
+/// to say where the skin has it, `--example fo4bind`).
+fn fo4_write(
+    nif: &mut Nif,
+    block: usize,
+    at: &Fo4,
+    skin: &Skin,
+    like: Option<usize>,
+) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    // The skin is the shape's own, or it is not this shape's to change.
+    for other in 0..nif.blocks.len() {
+        if other != block
+            && is_tri_shape(nif.kind_of(other))
+            && TriShape::skin_of(&nif.blocks[other].data, stream) == Some(at.instance as i32)
+        {
+            return unsupported("the shape shares its skin with another shape");
+        }
+    }
+    if skin.bones.len() > 255 {
+        return unsupported("a shape follows 255 bones at most");
+    }
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let Some(layout) = Layout::of(shape.vertex_desc, stream) else {
+        return unsupported("the shape keeps no vertices this can read");
+    };
+    let count = shape.vertex_data.len() / layout.stride.max(1);
+    if skin.vertices.len() != count {
+        return unsupported("the skin is for another number of vertices");
+    }
+    // A vertex left as the file has it stays so, to the byte: these files'
+    // own weights were found not always to add up to one, and are not
+    // made to. One that is changed is laid down as [`settled`] lays it.
+    let was = fo4_vertices(nif, block)?;
+    let vertices: Vec<[(u16, f32); MOST]> = skin
+        .vertices
+        .iter()
+        .zip(&was)
+        .map(|(v, old)| if v == old { *v } else { settled(v) })
+        .collect();
+    if vertices
+        .iter()
+        .flatten()
+        .any(|(b, w)| *w > 0.0 && *b as usize >= skin.bones.len())
+    {
+        return unsupported("a vertex follows a bone the skin does not list");
+    }
+    let mut instance = Fo4Instance::read(&nif.blocks[at.instance].data)?;
+    let mut data = Fo4BoneData::read(&nif.blocks[at.data].data)?;
+    let had = mesh::bone_names(nif, block);
+    let other = match like.map(|shape| (shape, fo4(nif, shape))) {
+        Some((shape, Ok(Some(theirs)))) => Some((
+            mesh::bone_names(nif, shape),
+            Fo4BoneData::read(&nif.blocks[theirs.data].data)?,
+        )),
+        _ => None,
+    };
+    let names = node_names(nif);
+    let positions = mesh::read(nif, block)?.positions;
+    let mut nodes = Vec::with_capacity(skin.bones.len());
+    let mut bones = Vec::with_capacity(skin.bones.len());
+    for (i, name) in skin.bones.iter().enumerate() {
+        let node = names
+            .get(name.as_bytes())
+            .copied()
+            .filter(|n| is_node(nif.kind_of(*n)))
+            .ok_or_else(|| NifError::Unsupported(format!("the mesh has no bone named {name}")))?;
+        nodes.push(node as i32);
+        let old = had
+            .iter()
+            .position(|n| n == name)
+            .and_then(|k| data.bones.get(k));
+        let theirs = other.as_ref().and_then(|(names, data)| {
+            names
+                .iter()
+                .position(|n| n == name)
+                .and_then(|k| data.bones.get(k))
+        });
+        let Some(place) = old.or(theirs) else {
+            return Err(NifError::Unsupported(format!(
+                "nothing here says where the bone {name} is"
+            )));
+        };
+        // A bone it followed keeps its sphere; a new one gets the sphere
+        // round what it now moves, as the bone sees it.
+        let (bound_center, bound_radius) = match old {
+            Some(old) => (old.bound_center, old.bound_radius),
+            None => {
+                let moved: Vec<[f32; 3]> = vertices
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, slots)| slots.iter().any(|(b, w)| *w > 0.0 && *b as usize == i))
+                    .filter_map(|(v, _)| positions.get(v))
+                    .map(|p| place.transform.apply(*p))
+                    .collect();
+                if moved.is_empty() {
+                    (place.bound_center, place.bound_radius)
+                } else {
+                    mesh::bounding_sphere(&moved)
+                }
+            }
+        };
+        bones.push(Fo4Bone {
+            bound_center,
+            bound_radius,
+            transform: place.transform,
+        });
+    }
+    for (v, slots) in vertices.iter().enumerate() {
+        if was.get(v) == Some(slots) {
+            continue;
+        }
+        let weights = [slots[0].1, slots[1].1, slots[2].1, slots[3].1];
+        let numbers = [0, 1, 2, 3].map(|k| {
+            if slots[k].1 > 0.0 {
+                slots[k].0 as u8
+            } else {
+                0
+            }
+        });
+        if !set_skin_weights_in(&mut shape.vertex_data, &layout, v, weights, numbers) {
+            return unsupported("the shape's vertices carry no bone weights");
+        }
+    }
+    // As many scales as bones, where it kept one for each.
+    if instance.scales.len() == instance.bones.len() {
+        instance.scales.resize(nodes.len(), [1.0; 3]);
+    }
+    instance.bones = nodes;
+    data.bones = bones;
+    nif.blocks[block].data = shape.write(stream);
+    nif.blocks[at.instance].data = instance.write();
+    nif.blocks[at.data].data = data.write();
+    Ok(())
 }
 
 fn blocks(nif: &Nif, block: usize) -> Result<Blocks, NifError> {
@@ -108,6 +303,20 @@ pub fn owned(nif: &Nif, block: usize) -> Result<(), NifError> {
 /// The skin of the shape at `block`.
 pub fn read(nif: &Nif, block: usize) -> Result<Skin, NifError> {
     let stream = nif.header.stream.version;
+    if fo4(nif, block)?.is_some() {
+        let vertices = fo4_vertices(nif, block)?;
+        let bones = mesh::bone_names(nif, block);
+        if vertices
+            .iter()
+            .flatten()
+            .any(|(b, w)| *w > 0.0 && *b as usize >= bones.len())
+        {
+            return Err(NifError::Corrupt(
+                "a vertex follows a bone the skin does not list".into(),
+            ));
+        }
+        return Ok(Skin { bones, vertices });
+    }
     let at = blocks(nif, block)?;
     let partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
     let Some(layout) = partition.vertex_desc.and_then(|d| Layout::of(d, stream)) else {
@@ -188,6 +397,9 @@ pub fn write(
     like: Option<usize>,
 ) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
+    if let Some(at) = fo4(nif, block)? {
+        return fo4_write(nif, block, &at, skin, like);
+    }
     owned(nif, block)?;
     let at = blocks(nif, block)?;
     if skin.bones.len() > 255 {
@@ -450,6 +662,12 @@ pub fn set_part(nif: &mut Nif, block: usize, index: usize, part: u16) -> Result<
 /// Where each bone of a shape is, in the shape's own space, in the order
 /// its skin lists them.
 pub fn bone_places(nif: &Nif, block: usize) -> Result<Vec<[f32; 3]>, NifError> {
+    if fo4(nif, block)?.is_some() {
+        return Ok(bone_binds(nif, block)?
+            .into_iter()
+            .map(|t| t.translation)
+            .collect());
+    }
     let at = blocks(nif, block)?;
     let data = SkinData::read(&nif.blocks[at.data].data)?;
     Ok(data
@@ -478,6 +696,13 @@ pub fn bone_places(nif: &Nif, block: usize) -> Result<Vec<[f32; 3]>, NifError> {
 /// bone's own transform. A bone whose transform cannot be undone stands
 /// at nothing, unturned.
 pub fn bone_binds(nif: &Nif, block: usize) -> Result<Vec<Transform>, NifError> {
+    if let Some(at) = fo4(nif, block)? {
+        return Ok(Fo4BoneData::read(&nif.blocks[at.data].data)?
+            .bones
+            .iter()
+            .map(|b| crate::copy::inverse(&b.transform).unwrap_or(Transform::IDENTITY))
+            .collect());
+    }
     let at = blocks(nif, block)?;
     let data = SkinData::read(&nif.blocks[at.data].data)?;
     Ok(data

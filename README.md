@@ -60,9 +60,11 @@ option's files), with `TOOLS=data/tools/bodyslide/` for the same examples:
 the original's file byte for byte. The rest differ by a few bytes each: a
 handful of vertices with no direction to face, and where the reference to
 the morph file sits among a mesh's other extra data. Building, the preview
-and saving presets work; in the Studio, moving vertices, sliders and
-transforms work, and what needs a shape's bones or its segments does not
-yet.
+and saving presets work. In the Studio, moving vertices, sliders,
+transforms, bones and their weights (painted, copied, sent to FBX) work:
+all 3,253 of its skins read and write back as they were
+(`--example skinsame`). What changes a shape's triangles does not yet: its
+segments are kept as bytes, not understood.
 
 ## How fast it is
 
