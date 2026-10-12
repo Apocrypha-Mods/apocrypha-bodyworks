@@ -158,6 +158,34 @@ export function erase(positions, left, reached, amount) {
   }
 }
 
+/** A mask grown by one ring of vertices, or with `less` shrunk by one. */
+export function spread(mask, weld, near, less) {
+  const full = (v) => (mask[v] >= 0.5) !== Boolean(less);
+  const out = new Float32Array(mask);
+  for (let v = 0; v < mask.length; v++) {
+    if (full(v)) continue;
+    const g = weld[v];
+    for (let n = near.start[g]; n < near.start[g + 1]; n++) {
+      if (full(near.next[n])) {
+        out[v] = less ? 0 : 1;
+        break;
+      }
+    }
+  }
+  // Vertices at one place are covered alike.
+  for (let v = 0; v < mask.length; v++) if (weld[v] !== v && out[weld[v]] !== out[v]) out[v] = out[weld[v]];
+  return out;
+}
+
+/** The bone on the other side of the body, as the games name theirs; the same name for one of the middle. */
+export function twin(bone) {
+  for (const [l, r] of [[" L ", " R "], ["Left", "Right"], ["left", "right"]]) {
+    if (bone.includes(l)) return bone.replaceAll(l, r).replaceAll("[L", "[R");
+    if (bone.includes(r)) return bone.replaceAll(r, l).replaceAll("[R", "[L");
+  }
+  return bone;
+}
+
 /** Push what the brush reaches out along its normals (or in, with a negative `amount`). */
 export function inflate(positions, normals, reached, amount) {
   const { vertices, weights } = reached;

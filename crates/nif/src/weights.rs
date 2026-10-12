@@ -306,6 +306,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_bone_has_its_twin_across_the_body() {
+        assert_eq!(across("NPC L Thigh [LThg]"), "NPC R Thigh [RThg]");
+        assert_eq!(
+            across("NPC R UpperarmTwist1 [RUt1]"),
+            "NPC L UpperarmTwist1 [LUt1]"
+        );
+        assert_eq!(across("NPC Spine2 [Spn2]"), "NPC Spine2 [Spn2]");
+        assert_eq!(across("LeftArm"), "RightArm");
+        assert_eq!(across(&across("NPC L Breast")), "NPC L Breast");
+    }
+
+    #[test]
     fn weights_settle_to_the_heaviest_four_adding_up_to_one() {
         let got = settled(&[(3, 0.1), (1, 0.4), (2, 0.2), (7, 0.05), (9, 0.2), (1, 0.05)]);
         assert_eq!(got.map(|x| x.0), [1, 2, 9, 3]);
@@ -386,4 +398,137 @@ pub fn bone_places(nif: &Nif, block: usize) -> Result<Vec<[f32; 3]>, NifError> {
             ]
         })
         .collect())
+}
+
+/// Give a partition new triangles; [`settle`] then fills its copy of the
+/// weights.
+fn retriangled(p: &mut crate::skin::Partition, triangles: Vec<[u16; 3]>) {
+    p.retriangle(triangles);
+}
+
+/// Write a shape's skin back as it reads: after its partitions' vertices
+/// have changed, what each partition keeps of the weights is made again.
+fn settle(nif: &mut Nif, block: usize) -> Result<(), NifError> {
+    let skin = read(nif, block)?;
+    write(nif, block, &skin, None)
+}
+
+/// Move triangles of a shape into its `to`th part, or with `None` into a
+/// new part numbered `new_part`: every triangle whose three vertices are
+/// all marked in `vertices`. A part is never left with nothing. Returns how
+/// many triangles moved.
+pub fn move_to_part(
+    nif: &mut Nif,
+    block: usize,
+    vertices: &[bool],
+    to: Option<usize>,
+    new_part: u16,
+) -> Result<usize, NifError> {
+    let stream = nif.header.stream.version;
+    let at = blocks(nif, block)?;
+    let mut instance = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;
+    let mut partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
+    let Some(named) = instance.body_parts.as_mut() else {
+        return unsupported("the shape's skin does not divide it into parts");
+    };
+    if named.len() != partition.partitions.len() || to.is_some_and(|t| t >= named.len()) {
+        return unsupported("the shape has no such part");
+    }
+    let marked = |t: &[u16; 3]| {
+        t.iter()
+            .all(|v| vertices.get(*v as usize).copied().unwrap_or(false))
+    };
+    let mut moved = Vec::new();
+    for (i, p) in partition.partitions.iter_mut().enumerate() {
+        if Some(i) == to {
+            continue;
+        }
+        let Some(all) = p.true_triangles.clone() else {
+            return unsupported("a part keeps its triangles in a way this cannot change");
+        };
+        let (going, staying): (Vec<_>, Vec<_>) = all.into_iter().partition(marked);
+        if going.is_empty() {
+            continue;
+        }
+        if staying.is_empty() {
+            return unsupported("that would leave a part with nothing in it");
+        }
+        moved.extend(going);
+        retriangled(p, staying);
+    }
+    if moved.is_empty() {
+        return unsupported("no whole triangle is marked that is not in that part already");
+    }
+    let count = moved.len();
+    match to {
+        Some(t) => {
+            let p = &mut partition.partitions[t];
+            let mut all = p.true_triangles.clone().unwrap_or_default();
+            all.extend(moved);
+            retriangled(p, all);
+        }
+        None => {
+            let mut p = partition.partitions[0].clone();
+            retriangled(&mut p, moved);
+            partition.partitions.push(p);
+            let flags = named[0].0;
+            named.push((flags, new_part));
+        }
+    }
+    nif.blocks[at.instance].data = instance.write();
+    nif.blocks[at.partition].data = partition.write(stream);
+    settle(nif, block)?;
+    Ok(count)
+}
+
+/// Turn every triangle of a shape to face the other way: what a shape
+/// needs when it has been mirrored, or it would be seen from inside.
+pub fn flip_facing(nif: &mut Nif, block: usize) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    if !is_tri_shape(nif.kind_of(block)) {
+        return unsupported("triangles are turned on a shape of Special Edition's kind");
+    }
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    for t in &mut shape.triangles {
+        t.swap(1, 2);
+    }
+    let skinned = shape.skin >= 0;
+    nif.blocks[block].data = shape.write(stream);
+    if !skinned {
+        return Ok(());
+    }
+    let at = blocks(nif, block)?;
+    let mut partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
+    for p in &mut partition.partitions {
+        let Some(mut all) = p.true_triangles.clone() else {
+            return unsupported("a part keeps its triangles in a way this cannot change");
+        };
+        for t in &mut all {
+            t.swap(1, 2);
+        }
+        retriangled(p, all);
+    }
+    nif.blocks[at.partition].data = partition.write(stream);
+    settle(nif, block)
+}
+
+/// The bone on the other side of the body from one named as the games name
+/// theirs (`NPC L Thigh [LThg]` and `NPC R Thigh [RThg]`), or the same
+/// name for a bone of the middle.
+pub fn across(bone: &str) -> String {
+    let swap = |text: &str, a: &str, b: &str| -> Option<String> {
+        text.contains(a).then(|| text.replace(a, b))
+    };
+    for (l, r) in [(" L ", " R "), ("Left", "Right"), ("left", "right")] {
+        if let Some(found) = swap(bone, l, r).or_else(|| swap(bone, r, l)) {
+            // The short name in brackets follows the long one.
+            let from_left = bone.contains(l);
+            return if from_left {
+                found.replace("[L", "[R")
+            } else {
+                found.replace("[R", "[L")
+            };
+        }
+    }
+    bone.to_string()
 }

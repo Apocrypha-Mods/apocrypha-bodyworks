@@ -920,3 +920,133 @@ fn what_is_spared_keeps_its_sliders_and_its_bones() {
     assert!(compared > 20 && a != b);
     assert!(!shipped.sliders.is_empty());
 }
+
+#[test]
+fn a_shape_is_mirrored_and_its_triangles_moved_between_parts() {
+    use apoc_bodyslide::project::Project;
+    use apoc_nif::{mesh, weights, Nif};
+
+    let tools = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/cbbe/@required/Data/CalienteTools/BodySlide");
+    let on_disk = |path: &str| std::fs::read(tools.join(path)).ok();
+    let Some(sets) = on_disk("SliderSets/CBBE.osp").and_then(|b| set::read(&b).ok()) else {
+        return;
+    };
+    let set = sets.iter().find(|s| s.name == "CBBE Body").unwrap();
+    let mut project = Project::open(set, &on_disk).unwrap();
+    let name = set.shapes[0].name.clone();
+    let block = |nif: &Nif| {
+        mesh::shapes(nif)
+            .into_iter()
+            .find(|at| mesh::name(nif, *at).as_deref() == Some(name.as_str()))
+            .unwrap()
+    };
+    let was = mesh::read(&project.nif, block(&project.nif)).unwrap();
+    let was_skin = weights::read(&project.nif, block(&project.nif)).unwrap();
+    let was_parts = weights::parts(&project.nif, block(&project.nif)).unwrap();
+    assert_eq!(was_parts.len(), 3);
+
+    // The vertices of the first hundred triangles of the largest part, to
+    // the first part, and then to a part of their own.
+    let largest = (0..3)
+        .max_by_key(|i| was_parts[*i].triangles.len())
+        .unwrap();
+    let other = (largest + 1) % 3;
+    let marked: Vec<u16> = was_parts[largest].triangles[..100]
+        .iter()
+        .flatten()
+        .copied()
+        .collect();
+    let moved = project
+        .move_to_part(&name, &marked, Some(other), 0)
+        .unwrap();
+    assert!(moved >= 100);
+    let nif = Nif::read(&project.nif.write()).unwrap();
+    let now_parts = weights::parts(&nif, block(&nif)).unwrap();
+    assert_eq!(
+        now_parts[other].triangles.len(),
+        was_parts[other].triangles.len() + moved
+    );
+    assert_eq!(
+        now_parts[largest].triangles.len(),
+        was_parts[largest].triangles.len() - moved
+    );
+    let total = |p: &[weights::Part]| p.iter().map(|x| x.triangles.len()).sum::<usize>();
+    assert_eq!(total(&now_parts), total(&was_parts));
+    // The shape and its skin are what they were.
+    assert_eq!(
+        mesh::read(&nif, block(&nif)).unwrap().positions,
+        was.positions
+    );
+    // Written again its weights add up to one, which the file's did not
+    // quite: the same bones, each within a hair of what it was.
+    let near = |a: &weights::Skin, b: &weights::Skin| {
+        a.vertices.iter().zip(&b.vertices).all(|(x, y)| {
+            x.iter().filter(|s| s.1 > 0.01).all(|(bone, w)| {
+                y.iter()
+                    .any(|(other, v)| other == bone && (w - v).abs() < 0.01)
+            })
+        })
+    };
+    let kept = weights::read(&nif, block(&nif)).unwrap();
+    assert_eq!(kept.bones, was_skin.bones);
+    assert!(near(&was_skin, &kept));
+    let again = project.move_to_part(&name, &marked, None, 44).unwrap();
+    assert_eq!(again, moved);
+    let nif = Nif::read(&project.nif.write()).unwrap();
+    let four = weights::parts(&nif, block(&nif)).unwrap();
+    assert_eq!(
+        (four.len(), four[3].part, four[3].triangles.len()),
+        (4, 44, moved)
+    );
+    // Nothing marked, or a whole part marked, is refused and changes nothing.
+    assert!(project.move_to_part(&name, &[], Some(0), 0).is_err());
+    let all: Vec<u16> = (0..was.positions.len() as u16).collect();
+    assert!(project.move_to_part(&name, &all, Some(0), 0).is_err());
+    assert_eq!(
+        weights::parts(&project.nif, block(&project.nif)).unwrap(),
+        four
+    );
+
+    // Mirrored: every vertex across, every triangle turned, each bone its twin.
+    let mut mirrored = Project::open(set, &on_disk).unwrap();
+    mirrored.mirror_shape(&name).unwrap();
+    let nif = Nif::read(&mirrored.nif.write()).unwrap();
+    let now = mesh::read(&nif, block(&nif)).unwrap();
+    assert!(was
+        .positions
+        .iter()
+        .zip(&now.positions)
+        .all(|(a, b)| (a[0] + b[0]).abs() < 0.01 && a[1] == b[1] && a[2] == b[2]));
+    let turned = |t: &[u16; 3]| {
+        let mut t = *t;
+        t.sort_unstable();
+        t
+    };
+    let mut a: Vec<[u16; 3]> = was.triangles.iter().map(turned).collect();
+    let mut b: Vec<[u16; 3]> = now.triangles.iter().map(turned).collect();
+    a.sort_unstable();
+    b.sort_unstable();
+    assert_eq!(a, b);
+    assert!(was
+        .triangles
+        .iter()
+        .zip(&now.triangles)
+        .any(|(x, y)| x != y));
+    let now_skin = weights::read(&nif, block(&nif)).unwrap();
+    let left = was_skin
+        .bones
+        .iter()
+        .position(|b| b.contains(" L Thigh"))
+        .unwrap();
+    assert!(now_skin.bones[left].contains(" R Thigh"));
+    assert!(near(&was_skin, &now_skin));
+    // Twice is back where it began.
+    mirrored.mirror_shape(&name).unwrap();
+    let twice = mesh::read(&mirrored.nif, block(&mirrored.nif)).unwrap();
+    assert!(twice
+        .positions
+        .iter()
+        .zip(&was.positions)
+        .all(|(a, b)| (0..3).all(|k| (a[k] - b[k]).abs() < 0.01)));
+}

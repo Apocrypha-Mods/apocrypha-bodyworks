@@ -130,3 +130,15 @@ test("joined keeps what is reached through the surface, and erase takes a slider
   brush.erase(p, left, { vertices: new Uint32Array([0]), weights: new Float32Array([1]) }, 9);
   assert.equal(p[2], 0);
 });
+
+test("a mask grows and shrinks by a ring, and a bone has its twin", () => {
+  // A strip of four vertices in a row: 0-1-2-3.
+  const weld = new Uint32Array([0, 1, 2, 3]);
+  const near = brush.neighbours(new Uint32Array([0, 1, 1, 1, 2, 2, 2, 3, 3]), weld);
+  const grown = brush.spread(new Float32Array([1, 0, 0, 0]), weld, near, false);
+  assert.deepEqual([...grown], [1, 1, 0, 0]);
+  assert.deepEqual([...brush.spread(grown, weld, near, true)], [1, 0, 0, 0]);
+  assert.equal(brush.twin("NPC L Thigh [LThg]"), "NPC R Thigh [RThg]");
+  assert.equal(brush.twin("NPC R Clavicle [RClv]"), "NPC L Clavicle [LClv]");
+  assert.equal(brush.twin("NPC Spine2 [Spn2]"), "NPC Spine2 [Spn2]");
+});

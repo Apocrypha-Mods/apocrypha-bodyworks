@@ -170,6 +170,10 @@ impl Work {
             }
             Change::DropBone { shape, bone } => p.drop_bone(&shape, &bone),
             Change::BodyPart { shape, index, part } => p.set_part(&shape, index, part),
+            Change::Mirror { shape } => p.mirror_shape(&shape),
+            Change::ToPart { shape, to, part } => {
+                p.move_to_part(&shape, &numbers(data), to, part).map(drop)
+            }
             Change::Paint { shape, bone } => {
                 let painted: Vec<(u16, f32)> = data
                     .as_chunks::<8>()
@@ -359,6 +363,19 @@ enum Change {
     BodyPart {
         shape: String,
         index: usize,
+        part: u16,
+    },
+    /// Mirror a shape across the middle of the body.
+    Mirror {
+        shape: String,
+    },
+    /// Move the triangles among the vertices in the request's bytes to a
+    /// part of the shape, or with no `to` to a new part numbered `part`.
+    ToPart {
+        shape: String,
+        #[serde(default)]
+        to: Option<usize>,
+        #[serde(default)]
         part: u16,
     },
     /// Set how much vertices of a shape follow a bone. The request's bytes

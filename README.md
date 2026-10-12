@@ -68,21 +68,20 @@ Outfit Studio:
 
 - Brushes: painting vertex colour and alpha, and the vertex tools (collapse,
   flip or split an edge, weld, move one vertex).
-- Brush settings: focus and spacing, mirroring a weight stroke onto the
-  opposite bone.
-- Shapes: refining (subdividing) a mesh, mirroring a shape, merging shapes,
+- Brush settings: focus and spacing.
+- Shapes: refining (subdividing) a mesh, merging shapes,
   removing skinning, shader properties other than the texture files, making
   a shape from an OBJ or FBX file.
 - Bones: adding a bone no shape of the mesh follows, custom bones,
   transferring selected weights between shapes.
-- Partitions (Skyrim): moving triangles from one part to another, adding and
-  removing parts (each part can be seen alone and given another body part).
+- Partitions (Skyrim): removing a part (triangles can be moved between
+  parts and into a new one, by masking them).
   Segments (Fallout 4): viewing and editing.
 - Sliders: combined sliders, importing and exporting slider data as BSD,
   OSD, TRI or FBX.
 - Files: FBX in and out, head TRI files, physics data, packing projects for
   sharing, making a conversion reference.
-- View: bones drawn as more than a dot where each is, ghosting a shape, field of view and lighting
+- View: bones drawn as more than a dot where each is, field of view and lighting
   settings, recalculating or locking normals by hand.
 - Most keyboard shortcuts: there are undo and redo, Q and 1 to 7 for the
   brushes, the square brackets for a brush's size, W and T for how the

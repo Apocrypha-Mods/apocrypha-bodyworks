@@ -247,6 +247,7 @@ function showShapes(frame) {
   const studio = state.mode === "studio" && Boolean(state.work);
   const hidden = new Set(studio ? state.shapes.filter((sh) => sh.hidden).map((sh) => sh.name) : []);
   const masks = new Map(studio ? state.shapes.map((sh) => [sh.name, sh.mask]) : []);
+  const ghosts = new Set(studio ? state.shapes.filter((sh) => sh.ghost).map((sh) => sh.name) : []);
   const [preview, numbers] = core.ask({ op: "preview", set: state.set.name, work: studio });
   const f32 = new Float32Array(numbers);
   const u32 = new Uint32Array(numbers);
@@ -263,6 +264,7 @@ function showShapes(frame) {
       bones: s.bones || [],
       reference: Boolean(s.reference),
       hidden: hidden.has(s.name),
+      ghost: ghosts.has(s.name),
       uvs: f32.slice(s.uvs[0], s.uvs[0] + s.uvs[1]),
       texture: (s.textures || [])[0] || null,
       textures: s.textures || [],
@@ -291,7 +293,10 @@ function showShapes(frame) {
   });
   if (!view) return;
   view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs, mask: s.mask })));
-  state.shapes.forEach((sh, i) => sh.hidden && view.hide(i, true));
+  state.shapes.forEach((sh, i) => {
+    if (sh.hidden) view.hide(i, true);
+    if (sh.ghost) view.ghost(i, true);
+  });
   state.picked = Math.min(state.picked, Math.max(0, state.shapes.length - 1));
   view.look({ picked: state.mode === "studio" ? state.picked : -1 });
   if (!state.shapes.length) return;
@@ -1060,7 +1065,46 @@ function studioSide() {
               oncontextmenu: (e) => {
                 e.preventDefault();
                 if (!state.work) return;
-                menu(e.currentTarget, [{ name: "Change part…", value: 1 }], () =>
+                const masked = [];
+                picked.mask.forEach((m, v) => m >= 0.5 && masked.push(v));
+                const toPart = (to, number) => {
+                  const [work] = core.ask({ op: "change", change: { do: "toPart", shape: picked.name, to, part: number } }, new Uint8Array(Uint32Array.from(masked).buffer));
+                  showPart(null);
+                  taken(work);
+                };
+                menu(
+                  e.currentTarget,
+                  [
+                    { name: "Change part…", value: "change" },
+                    masked.length > 0 && { name: "Move masked triangles here", value: "here", rule: true },
+                    masked.length > 0 && { name: "Move masked triangles to a new part…", value: "new" },
+                  ].filter(Boolean),
+                  (what) => {
+                    if (what === "here") {
+                      try {
+                        toPart(i, 0);
+                      } catch (err) {
+                        state.problem = err.message;
+                        render();
+                      }
+                      return;
+                    }
+                    if (what === "new") {
+                      return rename(
+                        "New part",
+                        "32",
+                        (to) => {
+                          const number = Number(to);
+                          if (!Number.isInteger(number) || number < 0 || number > 65535) throw new Error("A part is a whole number, 30 to 61 for most armour.");
+                          toPart(null, number);
+                        },
+                        "Add",
+                      );
+                    }
+                    partNumber();
+                  },
+                );
+                const partNumber = () =>
                   rename(
                     "Body part",
                     String(part.part),
@@ -1070,8 +1114,7 @@ function studioSide() {
                       change({ do: "bodyPart", shape: picked.name, index: i, part: number });
                     },
                     "Done",
-                  ),
-                );
+                  );
               },
             },
             h("span.nm.cut", null, `${part.part}${PARTS[part.part] ? ` · ${PARTS[part.part]}` : ""}`),
@@ -1124,10 +1167,12 @@ function studioSide() {
                     state.work && { name: "Rename…", value: "rename" },
                     state.work && { name: "Duplicate…", value: "duplicate" },
                     state.work && { name: "Move, turn, scale…", value: "transform" },
+                    state.work && !sh.reference && { name: "Mirror", value: "mirror" },
                     ...(state.work ? bodies.map((o) => ({ name: `Conform to ${o.name}`, value: ["conform", o.name] })) : []),
                     ...(state.work ? bodies.map((o) => ({ name: `Copy weights from ${o.name}`, value: ["weights", o.name] })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
                     { name: sh.hidden ? "Show" : "Hide", value: "hide" },
+                    { name: sh.ghost ? "Solid" : "Ghost", value: "ghost" },
                     state.work && sh.textures.length > 0 && { name: "Textures…", value: "textures" },
                     state.work && { name: "Flip texture left to right", value: "flipU" },
                     state.work && { name: "Flip texture top to bottom", value: "flipV" },
@@ -1146,6 +1191,12 @@ function studioSide() {
                       return rename("Duplicate shape", `${sh.name} copy`, (to) => change({ do: "duplicate", name: sh.name, to }), "Duplicate");
                     }
                     if (what === "transform") return transform(sh);
+                    if (what === "mirror") return attempt({ do: "mirror", shape: sh.name });
+                    if (what === "ghost") {
+                      sh.ghost = !sh.ghost;
+                      view.ghost(i, sh.ghost);
+                      return studioSide();
+                    }
                     if (what === "conformAll") return attempt({ do: "conformAll", body: sh.name });
                     if (what === "textures") return texturesOf(sh);
                     if (what === "part") {
@@ -1436,7 +1487,20 @@ function brushing(what, ray) {
   if (what === "over") return false;
   if (state.tool === "weights") {
     if (!state.heat || !state.bone) return false;
-    if (what === "down") stroke = { tool: "weights", shape: s, before: new Float32Array(state.heat), amount: 1 };
+    if (what === "down") {
+      stroke = { tool: "weights", shape: s, before: new Float32Array(state.heat), amount: 1 };
+      // Both sides: the same stroke across the body, for the bone's twin there.
+      const other = brush.twin(state.bone);
+      if (state.mirror && other !== state.bone) {
+        try {
+          const [, numbers] = core.ask({ op: "boneWeights", shape: s.name, bone: other });
+          stroke.twin = { bone: other, heat: new Float32Array(numbers.slice(0)) };
+          stroke.twin.before = new Float32Array(stroke.twin.heat);
+        } catch {
+          // Without its twin it paints the one side.
+        }
+      }
+    }
     const far = stroke.last ? Math.hypot(...found.point.map((c, k) => c - stroke.last[k])) : Infinity;
     if (far < r * 0.25) return true;
     stroke.last = found.point;
@@ -1445,6 +1509,12 @@ function brushing(what, ray) {
     reached.vertices.forEach((v, k) => {
       state.heat[v] = Math.max(0, Math.min(1, state.heat[v] + by * reached.weights[k]));
     });
+    if (stroke.twin) {
+      const there = brush.spared(brush.reach(brush.across(found.point), r, s.now), s.mask);
+      there.vertices.forEach((v, k) => {
+        stroke.twin.heat[v] = Math.max(0, Math.min(1, stroke.twin.heat[v] + by * there.weights[k]));
+      });
+    }
     view.mask(state.picked, state.heat);
     return true;
   }
@@ -1543,23 +1613,26 @@ function endStroke() {
   }
   if (done.tool === "weights") {
     // What changed, as each vertex's new weight for the bone.
-    const changed = [];
-    state.heat.forEach((w, v) => w !== done.before[v] && changed.push(v));
-    if (changed.length) {
+    const painted = (bone, now, before) => {
+      const changed = [];
+      now.forEach((w, v) => w !== before[v] && changed.push(v));
+      if (!changed.length) return;
       const bytes = new Uint8Array(changed.length * 8);
       const data = new DataView(bytes.buffer);
       changed.forEach((v, i) => {
         data.setUint32(i * 8, v, true);
-        data.setFloat32(i * 8 + 4, state.heat[v], true);
+        data.setFloat32(i * 8 + 4, now[v], true);
       });
-      try {
-        [state.work] = core.ask({ op: "change", change: { do: "paint", shape: done.shape.name, bone: state.bone } }, bytes);
-        state.problem = null;
-        state.saved = null;
-        state.exported = null;
-      } catch (e) {
-        state.problem = e.message;
-      }
+      [state.work] = core.ask({ op: "change", change: { do: "paint", shape: done.shape.name, bone } }, bytes);
+      state.problem = null;
+      state.saved = null;
+      state.exported = null;
+    };
+    try {
+      painted(state.bone, state.heat, done.before);
+      if (done.twin) painted(done.twin.bone, done.twin.heat, done.twin.before);
+    } catch (e) {
+      state.problem = e.message;
     }
     heat();
     render();
@@ -1704,7 +1777,7 @@ function brushBar() {
         null,
         knob("Size", "size"),
         state.tool !== "mask" && state.tool !== "move" && knob("Strength", "strength"),
-        state.tool !== "weights" && mirror,
+        (state.tool !== "weights" || (state.bone && brush.twin(state.bone) !== state.bone)) && mirror,
         state.tool !== "weights" && state.tool !== "mask" && connected,
         state.tool === "weights" &&
           state.heat &&
@@ -1750,6 +1823,22 @@ function brushBar() {
             },
             "Invert mask",
           ),
+        ...(state.tool === "mask" && state.shapes[state.picked]?.mask.some((m) => m > 0)
+          ? [false, true].map((less) =>
+              h(
+                "button.btn.ghost.small",
+                {
+                  type: "button",
+                  onclick: () => {
+                    const sh = state.shapes[state.picked];
+                    sh.mask.set(brush.spread(sh.mask, sh.weld, brush.neighbours(sh.shown, sh.weld), less));
+                    view.mask(state.picked, sh.mask);
+                  },
+                },
+                less ? "Shrink" : "Grow",
+              ),
+            )
+          : []),
       ),
     h("div.seg", { role: "group", "aria-label": "Tool" }, tool(null, "Orbit"), ...BRUSHES.map(([id, label]) => tool(id, label))),
   );

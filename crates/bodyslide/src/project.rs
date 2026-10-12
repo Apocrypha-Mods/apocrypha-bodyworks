@@ -1163,6 +1163,100 @@ impl Project {
             .map_err(|e| Error::Invalid(e.to_string()))
     }
 
+    /// Move the triangles of a shape whose vertices are all in `vertices`
+    /// into its `to`th part, or into a new part numbered `new_part`.
+    /// Returns how many moved.
+    pub fn move_to_part(
+        &mut self,
+        shape: &str,
+        vertices: &[u16],
+        to: Option<usize>,
+        new_part: u16,
+    ) -> Result<usize, Error> {
+        self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let count = mesh::read(&self.nif, block).map_err(fail)?.positions.len();
+        let mut marked = vec![false; count];
+        for v in vertices {
+            if let Some(m) = marked.get_mut(*v as usize) {
+                *m = true;
+            }
+        }
+        let before = self.nif.clone();
+        let moved = weights::move_to_part(&mut self.nif, block, &marked, to, new_part);
+        if moved.is_err() {
+            self.nif = before;
+        }
+        moved.map_err(fail)
+    }
+
+    /// Mirror a shape across the middle of the body: every vertex to the
+    /// other side, its triangles turned to face out again, what sliders do
+    /// to it mirrored too, and each bone it follows changed for its twin on
+    /// the other side where the mesh has one.
+    pub fn mirror_shape(&mut self, shape: &str) -> Result<(), Error> {
+        let at = self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let target = self.set.shapes[at].target.clone();
+        if self
+            .set
+            .sliders
+            .iter()
+            .any(|s| s.data.iter().any(|d| d.target == target))
+        {
+            return invalid(format!(
+                "What sliders do to {shape} is another project's, which would not be mirrored with it."
+            ));
+        }
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let before = self.nif.clone();
+        let done = (|| {
+            let mut positions = mesh::read(&self.nif, block)?.positions;
+            for p in &mut positions {
+                p[0] = -p[0];
+            }
+            mesh::set_positions(&mut self.nif, block, &positions)?;
+            weights::flip_facing(&mut self.nif, block)?;
+            // Its bones, each for its twin: all of them or, where one has
+            // no twin to be placed by, none.
+            if let Ok(mut skin) = weights::read(&self.nif, block) {
+                let twins: Vec<String> = skin.bones.iter().map(|b| weights::across(b)).collect();
+                if twins != skin.bones {
+                    let like = mesh::shapes(&self.nif).into_iter().find(|other| {
+                        let theirs = mesh::bone_names(&self.nif, *other);
+                        *other != block
+                            && twins
+                                .iter()
+                                .all(|t| theirs.contains(t) || skin.bones.contains(t))
+                    });
+                    skin.bones = twins;
+                    let mut swapped = self.nif.clone();
+                    if weights::write(&mut swapped, block, &skin, like).is_ok() {
+                        self.nif = swapped;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        if done.is_err() {
+            self.nif = before;
+            return done.map_err(fail);
+        }
+        for own in &mut self.own {
+            for o in own.iter_mut().filter(|o| o.target == target) {
+                for d in &mut o.diffs {
+                    d.offset[0] = -d.offset[0];
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Where a build of the project goes, and whether as two meshes.
     pub fn output(&mut self, folder: &str, file: &str, weights: bool) -> Result<(), Error> {
         let file = file_name(file.trim().trim_end_matches(".nif"));

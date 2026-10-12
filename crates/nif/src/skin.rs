@@ -231,6 +231,31 @@ impl Partition {
         self.triangle_count = triangles.len() as u16;
         self.true_triangles = Some(triangles);
     }
+
+    /// Give this partition other triangles over the shape's vertices: its
+    /// own list of vertices, its triangles over those, and room for its
+    /// copy of their weights (left at nothing, for the caller to fill) all
+    /// follow.
+    pub fn retriangle(&mut self, triangles: Vec<[u16; 3]>) {
+        let mut map: Vec<u16> = triangles.iter().flatten().copied().collect();
+        map.sort_unstable();
+        map.dedup();
+        let own = |v: u16| map.binary_search(&v).unwrap_or(0) as u16;
+        if self.triangles.is_some() {
+            self.triangles = Some(triangles.iter().map(|t| t.map(own)).collect());
+        }
+        let slots = map.len() * self.weights_per_vertex as usize;
+        if self.vertex_weights.is_some() {
+            self.vertex_weights = Some(vec![0.0; slots]);
+        }
+        if self.bone_indices.is_some() {
+            self.bone_indices = Some(vec![0; slots]);
+        }
+        self.vertex_count = map.len() as u16;
+        self.vertex_map = Some(map);
+        self.triangle_count = triangles.len() as u16;
+        self.true_triangles = Some(triangles);
+    }
 }
 
 /// The rows of `values`, `per` to a vertex, for the vertices kept.

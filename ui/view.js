@@ -10,7 +10,7 @@ void main() { vn = nm * n; vt = t; vm = m; gl_Position = mvp * vec4(p, 1.0); gl_
 const FS = `#version 300 es
 precision highp float;
 in vec3 vn; in vec2 vt; in float vm; out vec4 o;
-uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat;
+uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha;
 void main() {
   // The lines of a wireframe are one flat colour.
   if (line.a > 0.0) { o = line; return; }
@@ -32,7 +32,7 @@ void main() {
   } else {
     c *= mix(1.0, 0.3, m);
   }
-  o = vec4(pow(c, vec3(1.0 / 2.2)), 1.0);
+  o = vec4(pow(c, vec3(1.0 / 2.2)), alpha);
 }`;
 
 /** A little to one side of straight on. */
@@ -76,6 +76,7 @@ export class View {
     this.uPainted = gl.getUniformLocation(prog, "painted");
     this.uLine = gl.getUniformLocation(prog, "line");
     this.uHeat = gl.getUniformLocation(prog, "heat");
+    this.uAlpha = gl.getUniformLocation(prog, "alpha");
     /** How shapes are drawn: with their textures, with their edges, and which one is picked out. */
     this.looks = { painted: true, wire: false, picked: -1, heat: false };
     this.shapes = [];
@@ -218,6 +219,12 @@ export class View {
     if (!s) return;
     gl.bindBuffer(gl.ARRAY_BUFFER, s.mb);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, covered);
+    this.draw();
+  }
+
+  /** Draw shape `i` as a ghost, seen through, or solid again. */
+  ghost(i, on) {
+    if (this.shapes[i]) this.shapes[i].ghost = on;
     this.draw();
   }
 
@@ -404,8 +411,7 @@ export class View {
     gl.enable(gl.POLYGON_OFFSET_FILL);
     gl.polygonOffset(1, 1);
     gl.uniform4f(this.uLine, 0, 0, 0, 0);
-    this.shapes.forEach((s, i) => {
-      if (!s.shown) return;
+    const face = (s, i) => {
       gl.bindVertexArray(s.vao);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.ib);
       const skinned = painted && s.skin;
@@ -417,7 +423,20 @@ export class View {
       gl.uniform3f(this.uTint, this.tint[0] * dim, this.tint[1] * dim, this.tint[2] * dim);
       if (skinned) gl.bindTexture(gl.TEXTURE_2D, s.skin);
       gl.drawElements(gl.TRIANGLES, s.count, gl.UNSIGNED_INT, 0);
-    });
+    };
+    gl.uniform1f(this.uAlpha, 1);
+    this.shapes.forEach((s, i) => s.shown && !s.ghost && face(s, i));
+    // Ghosts after everything solid, seen through and hiding nothing.
+    if (this.shapes.some((s) => s.shown && s.ghost)) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      gl.uniform1f(this.uAlpha, 0.42);
+      this.shapes.forEach((s, i) => s.shown && s.ghost && face(s, i));
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
+      gl.uniform1f(this.uAlpha, 1);
+    }
     gl.disable(gl.POLYGON_OFFSET_FILL);
     if (wire) {
       this.shapes.forEach((s, i) => {
