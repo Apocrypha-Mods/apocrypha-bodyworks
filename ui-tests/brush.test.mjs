@@ -108,3 +108,25 @@ test("shapes go out as OBJ and a shape's vertices come back as they went", async
   assert.deepEqual([...obj.positions("vn 0 0 1\r\nv 1 2 3 0.5\r\nvt 0 0\n")], [1, 2, 3]);
   assert.throws(() => obj.positions("v 1 two 3"));
 });
+
+test("joined keeps what is reached through the surface, and erase takes a slider's effect back", () => {
+  // Two squares apart in z, one above the other: the brush reaches both.
+  const two = new Float32Array([...square, 0, 0, 0.1, 1, 0, 0.1, 1, 1, 0.1, 0, 1, 0.1]);
+  const tris = new Uint32Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+  const weld = new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7]);
+  const near = brush.neighbours(tris, weld);
+  const reached = brush.reach([0, 0, 0], 5, two);
+  assert.equal(reached.vertices.length, 8);
+  const top = brush.joined(reached, weld, near, [0, 1, 2]);
+  assert.deepEqual([...top.vertices], [0, 1, 2, 3]);
+  assert.equal(top.weights[0], reached.weights[0]);
+  assert.equal(brush.hit([0.25, 0.5, 5], [0, 0, -1], two, tris).corners.length, 3);
+
+  const p = new Float32Array([0, 0, 2, 5, 5, 5]);
+  const left = new Float32Array([0, 0, 2, 0, 0, 0]);
+  brush.erase(p, left, { vertices: new Uint32Array([0]), weights: new Float32Array([1]) }, 0.5);
+  assert.deepEqual([...p], [0, 0, 1, 5, 5, 5]);
+  assert.deepEqual([...left], [0, 0, 1, 0, 0, 0]);
+  brush.erase(p, left, { vertices: new Uint32Array([0]), weights: new Float32Array([1]) }, 9);
+  assert.equal(p[2], 0);
+});

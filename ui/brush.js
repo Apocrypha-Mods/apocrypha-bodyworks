@@ -40,7 +40,7 @@ export function hit(origin, dir, positions, triangles) {
   n = [n[0] / l, n[1] / l, n[2] / l];
   // Toward where the ray came from, whichever way the triangle is wound.
   if (n[0] * dx + n[1] * dy + n[2] * dz > 0) n = [-n[0], -n[1], -n[2]];
-  return { t: best, point: [ox + dx * best, oy + dy * best, oz + dz * best], normal: n };
+  return { t: best, point: [ox + dx * best, oy + dy * best, oz + dz * best], normal: n, corners: [triangles[found], triangles[found + 1], triangles[found + 2]] };
 }
 
 /**
@@ -106,6 +106,55 @@ export function cover(mask, reached, off) {
     const much = Math.min(1, weights[k] * 4);
     const v = vertices[k];
     mask[v] = off ? Math.min(mask[v], 1 - much) : Math.max(mask[v], much);
+  }
+}
+
+/**
+ * Of what a brush reaches, only what is joined to `from` (vertices of the
+ * triangle under the brush) through other vertices it reaches: the sleeve
+ * under the brush and not the body behind it.
+ */
+export function joined(reached, weld, near, from) {
+  const inside = new Map();
+  reached.vertices.forEach((v, k) => {
+    const g = weld[v];
+    if (!inside.has(g)) inside.set(g, []);
+    inside.get(g).push(k);
+  });
+  const seen = new Set();
+  const todo = from.map((v) => weld[v]).filter((g) => inside.has(g));
+  for (const g of todo) seen.add(g);
+  while (todo.length) {
+    const g = todo.pop();
+    for (let n = near.start[g]; n < near.start[g + 1]; n++) {
+      const to = near.next[n];
+      if (inside.has(to) && !seen.has(to)) {
+        seen.add(to);
+        todo.push(to);
+      }
+    }
+  }
+  const keep = [];
+  for (const g of seen) keep.push(...inside.get(g));
+  keep.sort((a, b) => a - b);
+  return { vertices: Uint32Array.from(keep, (k) => reached.vertices[k]), weights: Float32Array.from(keep, (k) => reached.weights[k]) };
+}
+
+/**
+ * Take back some of what a slider has done to what the brush reaches.
+ * `left` is how far the slider still has each vertex from where it started,
+ * x, y, z a vertex, and is brought down with the positions.
+ */
+export function erase(positions, left, reached, amount) {
+  const { vertices, weights } = reached;
+  for (let k = 0; k < vertices.length; k++) {
+    const i = vertices[k] * 3;
+    const by = Math.min(1, amount * weights[k]);
+    for (let c = 0; c < 3; c++) {
+      const back = left[i + c] * by;
+      positions[i + c] -= back;
+      left[i + c] -= back;
+    }
   }
 }
 

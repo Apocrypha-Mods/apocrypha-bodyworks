@@ -8,6 +8,7 @@ import * as brush from "./brush.js";
 import * as obj from "./obj.js";
 
 const TOOLS = "Data/CalienteTools/BodySlide";
+/** The mod builds go into, unless another is chosen. */
 const OUTPUT = "BodySlide output";
 const FOLDERS = ["SliderSets", "SliderPresets", "SliderGroups", "SliderCategories"];
 
@@ -67,6 +68,12 @@ const state = {
   shut: new Set(),
   shapes: [],
   built: null,
+  /** The mod builds go into. */
+  output: remembered.get("output") || OUTPUT,
+  /** BodySlide: the group whose outfits are listed, or null for all. */
+  group: null,
+  /** Brushes work only on what is joined to what is under them. */
+  connected: remembered.get("brush.connected") === "1",
   /** Whether a build also writes the morph file RaceMenu reads. */
   morphs: remembered.get("morphs") === "1",
   /** Which of the two tools is showing: "bodyslide" or "studio". */
@@ -367,7 +374,7 @@ function filesOf(built, bytes) {
 async function write(files) {
   await host.request(
     "output.write",
-    { name: OUTPUT, files },
+    { name: state.output, files },
     files.map((f) => f.bytes),
   );
 }
@@ -519,7 +526,7 @@ function savePreset() {
       const bytes = new TextEncoder().encode(text).buffer;
       const rel = `SliderPresets/${wanted}.xml`;
       core.ask({ op: "put", path: rel }, new Uint8Array(bytes));
-      await host.request("output.write", { name: OUTPUT, files: [{ path: `${TOOLS}/${rel}`, bytes }] }, [bytes]);
+      await host.request("output.write", { name: state.output, files: [{ path: `${TOOLS}/${rel}`, bytes }] }, [bytes]);
       const made = {
         name: wanted,
         set: preset.set,
@@ -861,8 +868,31 @@ function foot() {
     state.problem
       ? h("span.sub.warn.cut", null, state.problem)
       : state.built !== null
-        ? h("span.sub.cut", null, `${state.built} ${state.built === 1 ? "file" : "files"} built into ${OUTPUT}`)
-        : h("span.sub.cut", { id: "status" }, state.busy || `Into ${OUTPUT}`),
+        ? h("span.sub.cut", null, `${state.built} ${state.built === 1 ? "file" : "files"} built into ${state.output}`)
+        : state.busy
+          ? h("span.sub.cut", { id: "status" }, state.busy)
+          : h(
+              "button.btn.ghost.small",
+              {
+                type: "button",
+                id: "status",
+                title: "The mod builds go into",
+                onclick: () =>
+                  rename(
+                    "Build into",
+                    state.output,
+                    (to) => {
+                      const name = to.trim();
+                      if (!name || name.length > 80 || /^[.]|[\\/:*?"<>|]/.test(name)) throw new Error('A mod\'s name, without \\ / : * ? " < > |');
+                      state.output = name;
+                      remembered.set("output", name);
+                      foot();
+                    },
+                    "Done",
+                  ),
+              },
+              `Into ${state.output}`,
+            ),
     h("span.grow"),
     h(
       "button.check.inline" + (state.morphs ? ".on" : ""),
@@ -924,7 +954,9 @@ function outfitPick(label) {
   return pickButton(label, cur()?.name || "", (b) =>
     menu(
       b,
-      state.catalog.sets.map((s) => ({ name: s.name, note: s.groups[0], value: s, on: s === state.set })),
+      state.catalog.sets
+        .filter((s) => label === "Project" || !state.group || s.groups.includes(state.group))
+        .map((s) => ({ name: s.name, note: s.groups[0], value: s, on: s === state.set })),
       (s) => leaving(() => choose(s)),
       label === "Project" ? "Search projects" : "Search outfits",
     ),
@@ -993,6 +1025,8 @@ function studioSide() {
                     ...(state.work ? bodies.map((o) => ({ name: `Copy weights from ${o.name}`, value: ["weights", o.name] })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
                     { name: sh.hidden ? "Show" : "Hide", value: "hide" },
+                    state.work && { name: "Flip texture left to right", value: "flipU" },
+                    state.work && { name: "Flip texture top to bottom", value: "flipV" },
                     { name: "Export OBJ…", value: "export", rule: true },
                     state.work && { name: "Import OBJ…", value: "import" },
                     state.work && sh.reference && { name: "Conform all to this", value: "conformAll" },
@@ -1020,6 +1054,7 @@ function studioSide() {
                       }
                       return;
                     }
+                    if (what === "flipU" || what === "flipV") return attempt({ do: "flipUv", shape: sh.name, across: what === "flipU" });
                     if (what === "export") return exportObj(sh);
                     if (what === "import") return importObj(sh);
                     if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
@@ -1166,15 +1201,32 @@ function studioSliders() {
             "button.btn.ghost.small",
             {
               type: "button",
-              onclick: () =>
-                rename("New slider", "", (name) => {
-                  change({ do: "addSlider", name });
-                  // What the brushes do next is this slider, shown in full.
-                  const at = state.work.sliders.findIndex((sl) => sl.name === name.trim());
-                  state.editing = at;
-                  state.at[at] = 100;
-                  render();
-                }, "Add"),
+              onclick: (e) => {
+                const on = state.shapes[state.picked];
+                const masked = [];
+                on?.mask.forEach((m, v) => m >= 0.5 && masked.push(v));
+                if (!masked.length) return newSlider();
+                menu(
+                  e.currentTarget,
+                  [
+                    { name: "Slider…", value: "slider" },
+                    { name: "Zap of what is masked…", value: "zap" },
+                  ],
+                  (what) =>
+                    what === "slider"
+                      ? newSlider()
+                      : rename(
+                          "New zap",
+                          "",
+                          (name) => {
+                            const [work] = core.ask({ op: "change", change: { do: "addZap", name, shape: on.name } }, new Uint8Array(Uint32Array.from(masked).buffer));
+                            on.mask.fill(0);
+                            taken(work);
+                          },
+                          "Add",
+                        ),
+                );
+              },
             },
             "New…",
             ),
@@ -1186,6 +1238,23 @@ function studioSliders() {
   el.querySelector(".rows").scrollTop = top;
 }
 
+/** Outfit Studio: a new slider, which the brushes then shape. */
+function newSlider() {
+  rename(
+    "New slider",
+    "",
+    (name) => {
+      change({ do: "addSlider", name });
+      // What the brushes do next is this slider, shown in full.
+      const at = state.work.sliders.findIndex((sl) => sl.name === name.trim());
+      state.editing = at;
+      state.at[at] = 100;
+      render();
+    },
+    "Add",
+  );
+}
+
 // ── Brushes ────────────────────────────────────────────────────────────────
 
 const BRUSHES = [
@@ -1193,6 +1262,7 @@ const BRUSHES = [
   ["deflate", "Deflate"],
   ["move", "Move"],
   ["smooth", "Smooth"],
+  ["erase", "Erase"],
   ["mask", "Mask"],
   ["weights", "Weights"],
 ];
@@ -1261,9 +1331,23 @@ function brushing(what, ray) {
     // A slider standing at nothing shows nothing of what a stroke would do to it.
     if (amount === 0) return false;
     stroke = { tool: state.tool, shape: s, before: new Float32Array(s.now), amount, last: null, near: null };
+    if (stroke.tool === "erase") {
+      // How far the slider has each vertex from where it starts, to take back.
+      const list = s.sliders.find((d) => d.slider === k);
+      if (k < 0 || !list) {
+        stroke = null;
+        state.problem = k < 0 ? "Erase takes back what a slider does: choose the slider under Changes." : null;
+        if (state.problem) render();
+        return false;
+      }
+      stroke.left = new Float32Array(s.now.length);
+      list.vertices.forEach((v, i) => {
+        for (let c = 0; c < 3; c++) stroke.left[v * 3 + c] = list.offsets[i * 3 + c] * amount;
+      });
+    }
     if (stroke.tool === "move") {
       const pick = (p) => {
-        const reached = brush.spared(brush.reach(p, r, s.now), s.mask);
+        const reached = within(s, brush.reach(p, r, s.now), p === found.point ? found.corners : null);
         const from = new Float32Array(reached.vertices.length * 3);
         reached.vertices.forEach((v, i) => from.set(s.now.subarray(v * 3, v * 3 + 3), i * 3));
         return [reached, from];
@@ -1282,8 +1366,10 @@ function brushing(what, ray) {
   stroke.last = found.point;
   const strength = state.strength / 100;
   for (const point of state.mirror ? [found.point, brush.across(found.point)] : [found.point]) {
-    const reached = brush.spared(brush.reach(point, r, s.now), s.mask);
-    if (stroke.tool === "smooth") {
+    const reached = within(s, brush.reach(point, r, s.now), point === found.point ? found.corners : null);
+    if (stroke.tool === "erase") {
+      brush.erase(s.now, stroke.left, reached, strength);
+    } else if (stroke.tool === "smooth") {
       stroke.near ||= brush.neighbours(s.shown, s.weld);
       // Vertices at one place go to one place: each to its group's first.
       brush.smooth(s.now, s.weld, stroke.near, reached, strength * 0.6);
@@ -1293,6 +1379,19 @@ function brushing(what, ray) {
   }
   redraw(s);
   return true;
+}
+
+/**
+ * What a brush reaches of a shape, less what its mask covers, and with
+ * `corners` (the triangle under the brush) only what is joined to them when
+ * that is asked for.
+ */
+function within(s, reached, corners) {
+  if (state.connected && corners) {
+    stroke.near ||= brush.neighbours(s.shown, s.weld);
+    reached = brush.joined(reached, s.weld, stroke.near, corners);
+  }
+  return brush.spared(reached, s.mask);
 }
 
 function redraw(s) {
@@ -1439,6 +1538,13 @@ function brushBar() {
     state.mirror = !state.mirror;
     remembered.set("brush.mirror", state.mirror ? "1" : "0");
   });
+  const [connected] = option("Connected", state.connected);
+  connected.classList.add("inline");
+  connected.title = "Only what is joined to what is under the brush";
+  connected.addEventListener("click", () => {
+    state.connected = !state.connected;
+    remembered.set("brush.connected", state.connected ? "1" : "0");
+  });
   const sliders = cur()
     .sliders.map((sl, i) => ({ name: sl.name, value: i, on: i === state.editing, skip: sl.zap || sl.uv }))
     .filter((it) => !it.skip);
@@ -1467,6 +1573,22 @@ function brushBar() {
         knob("Size", "size"),
         state.tool !== "mask" && state.tool !== "move" && knob("Strength", "strength"),
         state.tool !== "weights" && mirror,
+        state.tool !== "weights" && state.tool !== "mask" && connected,
+        state.tool === "weights" &&
+          state.heat &&
+          h(
+            "button.btn.ghost.small",
+            {
+              type: "button",
+              title: "Cover what follows this bone",
+              onclick: () => {
+                const sh = state.shapes[state.picked];
+                state.heat.forEach((w, v) => w > 0 && (sh.mask[v] = 1));
+                render();
+              },
+            },
+            "Mask it",
+          ),
         state.tool === "mask" ? h("span.sub.quiet", null, "Alt uncovers") : state.tool === "weights" ? h("span.sub.quiet.cut", null, `${state.bone || "No bone"} · Alt takes away`) : target,
         state.shapes[state.picked]?.mask.some((m) => m > 0) &&
           h(
@@ -1922,7 +2044,7 @@ function renderStudio() {
             h(
               "div.bar",
               null,
-              h("span.sub.cut", null, `${state.saved} saved into ${OUTPUT}`),
+              h("span.sub.cut", null, `${state.saved} saved into ${state.output}`),
               h("span.grow"),
               h("button.btn.primary", { type: "button", onclick: () => host.request("apply.review").catch(() => {}) }, "Apply"),
             ),
@@ -1932,7 +2054,7 @@ function renderStudio() {
             h(
               "div.bar",
               null,
-              h("span.sub.cut", null, `${state.exported} exported into ${OUTPUT}`),
+              h("span.sub.cut", null, `${state.exported} exported into ${state.output}`),
               h("span.grow"),
               h("button.btn.primary", { type: "button", onclick: () => host.request("apply.review").catch(() => {}) }, "Apply"),
             ),
@@ -1983,6 +2105,18 @@ function render() {
       "div.bar",
       null,
       modes(),
+      state.catalog.groups.length > 1 &&
+        pickButton("Group", state.group || "All", (b) =>
+          menu(
+            b,
+            [{ name: "All", value: null, on: !state.group }, ...state.catalog.groups.map((g) => ({ name: g, value: g, on: g === state.group }))],
+            (g) => {
+              state.group = g;
+              render();
+            },
+            "Search groups",
+          ),
+        ),
       outfitPick("Outfit"),
       fits.length > 0 &&
         pickButton("Preset", state.preset?.name || "None", (b) =>
@@ -2063,6 +2197,26 @@ async function start() {
   const first = sets.find((s) => s.name === last) || sets.find((s) => /\bbody\b/i.test(s.name)) || sets[0];
   await choose(first, remembered.get(`preset.${state.game?.id}`));
 }
+
+// Outfit Studio: Q puts the brush down, 1 and up take one in hand in the
+// order they are shown, the square brackets size it, W and T change how the
+// outfit is drawn.
+addEventListener("keydown", (e) => {
+  if (state.mode !== "studio" || !state.work || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.closest?.("input, textarea, .scrim") || document.querySelector(".scrim")) return;
+  const key = e.key.toLowerCase();
+  const tool = BRUSHES[Number(key) - 1];
+  if (key === "q") hold(null);
+  else if (tool) hold(tool[0]);
+  else if (key === "[" || key === "]") {
+    state.size = Math.max(1, Math.min(100, state.size + (key === "[" ? -5 : 5)));
+    remembered.set("brush.size", String(state.size));
+    render();
+  } else if (key === "w") view.look({ wire: !view.looks.wire }), render();
+  else if (key === "t") view.look({ painted: !view.looks.painted }), render();
+  else return;
+  e.preventDefault();
+});
 
 // Outfit Studio: a change is taken back and put back from the keyboard too.
 addEventListener("keydown", (e) => {
