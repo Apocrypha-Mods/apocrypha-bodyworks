@@ -1740,6 +1740,88 @@ impl Project {
         Ok(gone)
     }
 
+    /// Collapse, split or flip the edge between two vertices of a shape.
+    /// What sliders do follows: a vertex put in the middle of an edge, or
+    /// made of its two ends, does half of what each end did.
+    pub fn edge(&mut self, shape: &str, a: u16, b: u16, op: weights::EdgeOp) -> Result<(), Error> {
+        let at = self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let target = self.set.shapes[at].target.clone();
+        if self
+            .set
+            .sliders
+            .iter()
+            .any(|s| s.data.iter().any(|d| d.target == target))
+        {
+            return invalid(format!(
+                "What sliders do to {shape} is another project's, which counts on its vertices as they are."
+            ));
+        }
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let had = mesh::read(&self.nif, block).map_err(fail)?.positions.len();
+        let before = self.nif.clone();
+        let done = match weights::edge(&mut self.nif, block, a, b, op) {
+            Ok(done) => done,
+            Err(e) => {
+                self.nif = before;
+                return Err(fail(e));
+            }
+        };
+        if done == weights::EdgeDone::Same {
+            return Ok(());
+        }
+        for own in &mut self.own {
+            for o in own.iter_mut().filter(|o| o.target == target) {
+                let mut did: HashMap<u16, [f32; 3]> = HashMap::new();
+                for d in o.diffs.iter() {
+                    let sum = did.entry(d.vertex).or_insert([0.0; 3]);
+                    for (c, by) in sum.iter_mut().zip(d.offset) {
+                        *c += by;
+                    }
+                }
+                // Half of what each end of the edge did, where either did anything.
+                let half = (did.contains_key(&a) || did.contains_key(&b)).then(|| {
+                    let (x, y) = (
+                        did.get(&a).copied().unwrap_or([0.0; 3]),
+                        did.get(&b).copied().unwrap_or([0.0; 3]),
+                    );
+                    [0, 1, 2].map(|k| (x[k] + y[k]) / 2.0)
+                });
+                let mut diffs: Vec<Diff> = match &done {
+                    weights::EdgeDone::Added(..) => {
+                        let mut all = o.diffs.to_vec();
+                        if let (Some(offset), Ok(vertex)) = (half, u16::try_from(had)) {
+                            all.push(Diff { vertex, offset });
+                        }
+                        all
+                    }
+                    weights::EdgeDone::Renumbered(now) => {
+                        let (keep, gone) = (a.min(b), a.max(b));
+                        did.remove(&gone);
+                        match half {
+                            Some(offset) => did.insert(keep, offset),
+                            None => did.remove(&keep),
+                        };
+                        did.into_iter()
+                            .filter_map(|(v, offset)| {
+                                now.get(v as usize).map(|vertex| Diff {
+                                    vertex: *vertex,
+                                    offset,
+                                })
+                            })
+                            .collect()
+                    }
+                    weights::EdgeDone::Same => o.diffs.to_vec(),
+                };
+                diffs.sort_by_key(|d| d.vertex);
+                o.diffs = Arc::new(diffs);
+            }
+        }
+        Ok(())
+    }
+
     /// Mirror a shape across the middle of the body: every vertex to the
     /// other side, its triangles turned to face out again, what sliders do
     /// to it mirrored too, and each bone it follows changed for its twin on

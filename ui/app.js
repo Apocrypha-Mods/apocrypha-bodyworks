@@ -98,6 +98,8 @@ const state = {
   focus: Number(remembered.get("brush.focus")) || 50,
   /** The slider the brushes change (its place in the list), or -1 for the shape itself. */
   editing: -1,
+  /** What a click on an edge does with the edge tool in hand: "collapse", "split" or "flip". */
+  edgeOp: "split",
   /** The colour brush's colour ("#rrggbb") and how solid it paints, 0 to 100. */
   colour: remembered.get("brush.colour") || "#c8643c",
   alpha: Number(remembered.get("brush.alpha") ?? 100),
@@ -1608,6 +1610,7 @@ const BRUSHES = [
   ["mask", "Mask"],
   ["weights", "Weights"],
   ["colour", "Colour"],
+  ["edge", "Edges"],
 ];
 
 /** How far the brush reaches, in the mesh's units. */
@@ -1645,6 +1648,13 @@ function brushing(what, ray) {
   }
   view.reach({ point: found.point, normal: found.normal, radius: r });
   if (what === "over") return false;
+  if (state.tool === "edge") {
+    // No stroke: one click, on the edge of the triangle under it nearest the click.
+    if (what !== "down") return false;
+    const [a, b] = brush.nearestEdge(found.corners, found.point, s.now);
+    attempt({ do: "edge", shape: s.name, a, b, op: state.edgeOp });
+    return true;
+  }
   if (state.tool === "colour") {
     if (!s.colors.length) return false;
     const reached = alive(s, brush.spared(brush.reach(found.point, r, s.now), s.mask));
@@ -2062,7 +2072,29 @@ function brushBar() {
   return h(
     "div.tools",
     null,
+    state.tool === "edge" &&
+      h(
+        "div.brush",
+        null,
+        h(
+          "div.seg",
+          { role: "group", "aria-label": "What a click does" },
+          ...[
+            ["collapse", "Collapse"],
+            ["split", "Split"],
+            ["flip", "Flip"],
+          ].map(([id, label]) =>
+            h(
+              "button" + (state.edgeOp === id ? ".on" : ""),
+              { type: "button", "aria-pressed": state.edgeOp === id ? "true" : "false", onclick: () => ((state.edgeOp = id), render()) },
+              label,
+            ),
+          ),
+        ),
+        h("span.sub.quiet", null, "Click an edge"),
+      ),
     state.tool &&
+      state.tool !== "edge" &&
       h(
         "div.brush",
         null,

@@ -1012,3 +1012,176 @@ pub fn weld(nif: &mut Nif, block: usize) -> Result<Vec<u16>, NifError> {
     rebuild(nif, block, data, parts, &skin, None)?;
     Ok(now)
 }
+
+/// What is done to one edge of a shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeOp {
+    /// Its two vertices become one, halfway between them.
+    Collapse,
+    /// A vertex is put in its middle, and each triangle on it made two.
+    Split,
+    /// The two triangles on it are cut the other way across.
+    Flip,
+}
+
+/// What an edge operation did to a shape's vertices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdgeDone {
+    /// Where each old vertex now is.
+    Renumbered(Vec<u16>),
+    /// A vertex was added after the others, between these two.
+    Added(u16, u16),
+    /// The vertices are as they were.
+    Same,
+}
+
+/// Do `op` to the edge between vertices `a` and `b` of the shape at `block`.
+pub fn edge(nif: &mut Nif, block: usize, a: u16, b: u16, op: EdgeOp) -> Result<EdgeDone, NifError> {
+    let stream = nif.header.stream.version;
+    let (bytes, layout, mut parts) = packed(nif, block)?;
+    let stride = layout.stride.max(1);
+    let count = bytes.len() / stride;
+    let skin = read(nif, block)?;
+    if skin.vertices.len() != count {
+        return unsupported("the shape and its skin disagree about its vertices");
+    }
+    let on = |t: &[u16; 3]| t.contains(&a) && t.contains(&b);
+    if a == b || a as usize >= count || b as usize >= count || !parts.iter().flatten().any(on) {
+        return unsupported("that is not an edge of the shape");
+    }
+    let mut view = TriShape::read(&nif.blocks[block].data, stream)?;
+    view.vertex_data = bytes;
+    let middle = |view: &mut TriShape, at: usize| {
+        if let (Some(p), Some(q)) = (
+            view.position(&layout, a as usize),
+            view.position(&layout, b as usize),
+        ) {
+            view.set_position(&layout, at, [0, 1, 2].map(|k| (p[k] + q[k]) / 2.0));
+        }
+        if let (Some(p), Some(q)) = (view.uv(&layout, a as usize), view.uv(&layout, b as usize)) {
+            view.set_uv(&layout, at, [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0]);
+        }
+    };
+    let shared = |skin: &Skin| {
+        let both: Vec<(u16, f32)> = skin.vertices[a as usize]
+            .iter()
+            .chain(&skin.vertices[b as usize])
+            .filter(|x| x.1 > 0.0)
+            .map(|x| (x.0, x.1 / 2.0))
+            .collect();
+        settled(&both)
+    };
+    match op {
+        EdgeOp::Flip => {
+            // The one part that has the edge, and in it exactly two
+            // triangles on it, one each way round.
+            let mut done = false;
+            for triangles in &mut parts {
+                let with: Vec<usize> = (0..triangles.len())
+                    .filter(|i| on(&triangles[*i]))
+                    .collect();
+                if with.is_empty() {
+                    continue;
+                }
+                let third = |t: &[u16; 3]| t.iter().copied().find(|v| *v != a && *v != b);
+                // Which way round a triangle has the edge: a then b, or b then a.
+                let forward = |t: &[u16; 3]| (0..3).any(|k| t[k] == a && t[(k + 1) % 3] == b);
+                let [i, j] = with[..] else {
+                    return unsupported("an edge is flipped between exactly two triangles");
+                };
+                let (one, two) = if forward(&triangles[i]) {
+                    (i, j)
+                } else {
+                    (j, i)
+                };
+                if !forward(&triangles[one]) || forward(&triangles[two]) {
+                    return unsupported("the two triangles on the edge do not face the same way");
+                }
+                let (Some(c), Some(d)) = (third(&triangles[one]), third(&triangles[two])) else {
+                    return unsupported("that is not an edge of the shape");
+                };
+                if c == d {
+                    return unsupported("the two triangles on the edge are the same triangle");
+                }
+                triangles[one] = [a, d, c];
+                triangles[two] = [d, b, c];
+                done = true;
+            }
+            if !done {
+                return unsupported("that is not an edge of the shape");
+            }
+            rebuild(nif, block, view.vertex_data, parts, &skin, None)?;
+            Ok(EdgeDone::Same)
+        }
+        EdgeOp::Split => {
+            if count >= u16::MAX as usize {
+                return unsupported("the shape has as many vertices as can be numbered");
+            }
+            let new = count as u16;
+            let row = view.vertex_data[a as usize * stride..(a as usize + 1) * stride].to_vec();
+            view.vertex_data.extend(row);
+            middle(&mut view, count);
+            for triangles in &mut parts {
+                let mut out = Vec::with_capacity(triangles.len() + 2);
+                for t in triangles.iter() {
+                    if !on(t) {
+                        out.push(*t);
+                        continue;
+                    }
+                    // Each half keeps the triangle's way round.
+                    out.push(t.map(|v| if v == b { new } else { v }));
+                    out.push(t.map(|v| if v == a { new } else { v }));
+                }
+                *triangles = out;
+            }
+            let mut vertices = skin.vertices.clone();
+            vertices.push(shared(&skin));
+            let skin = Skin {
+                bones: skin.bones,
+                vertices,
+            };
+            rebuild(nif, block, view.vertex_data, parts, &skin, None)?;
+            Ok(EdgeDone::Added(a, b))
+        }
+        EdgeOp::Collapse => {
+            // The first of the two stays, halfway between where they were;
+            // the other goes, and those after it move up by one.
+            let (keep, gone) = (a.min(b), a.max(b));
+            middle(&mut view, keep as usize);
+            let weights = shared(&skin);
+            let now: Vec<u16> = (0..count as u32)
+                .map(|v| {
+                    let v = v as u16;
+                    if v == gone {
+                        keep
+                    } else if v > gone {
+                        v - 1
+                    } else {
+                        v
+                    }
+                })
+                .collect();
+            let from = gone as usize * stride;
+            view.vertex_data.drain(from..from + stride);
+            let mut vertices = skin.vertices.clone();
+            vertices[keep as usize] = weights;
+            vertices.remove(gone as usize);
+            for triangles in &mut parts {
+                *triangles = triangles
+                    .iter()
+                    .map(|t| t.map(|v| now[v as usize]))
+                    .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+                    .collect();
+                if triangles.is_empty() {
+                    return unsupported("that would leave a part of the shape with no triangle");
+                }
+            }
+            let skin = Skin {
+                bones: skin.bones,
+                vertices,
+            };
+            rebuild(nif, block, view.vertex_data, parts, &skin, None)?;
+            Ok(EdgeDone::Renumbered(now))
+        }
+    }
+}

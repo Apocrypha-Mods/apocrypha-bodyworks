@@ -214,6 +214,20 @@ impl Work {
             }
             Change::DropBone { shape, bone } => p.drop_bone(&shape, &bone),
             Change::BodyPart { shape, index, part } => p.set_part(&shape, index, part),
+            Change::Edge { shape, a, b, op } => {
+                let op = match op.as_str() {
+                    "collapse" => Some(apoc_nif::weights::EdgeOp::Collapse),
+                    "split" => Some(apoc_nif::weights::EdgeOp::Split),
+                    "flip" => Some(apoc_nif::weights::EdgeOp::Flip),
+                    _ => None,
+                };
+                match op {
+                    Some(op) => p.edge(&shape, a, b, op),
+                    None => Err(apoc_bodyslide::Error::Invalid(
+                        "An edge is collapsed, split or flipped.".into(),
+                    )),
+                }
+            }
             Change::Weld { shape } => p.weld(&shape).map(drop),
             Change::Refine { shape } => p.refine(&shape).map(drop),
             Change::ShapeFrom { like, name } => match outside_mesh(data) {
@@ -471,6 +485,14 @@ enum Change {
         shape: String,
         index: usize,
         part: u16,
+    },
+    /// Collapse, split or flip the edge between two vertices of a shape:
+    /// `op` is "collapse", "split" or "flip".
+    Edge {
+        shape: String,
+        a: u16,
+        b: u16,
+        op: String,
     },
     /// Weld a shape: vertices at one place become one.
     Weld {

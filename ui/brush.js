@@ -186,6 +186,26 @@ export function twin(bone) {
   return bone;
 }
 
+/** Of a triangle's three edges, the one nearest a point on it: its two vertices. */
+export function nearestEdge(corners, point, positions) {
+  let best = null;
+  let least = Infinity;
+  for (let k = 0; k < 3; k++) {
+    const [a, b] = [corners[k], corners[(k + 1) % 3]];
+    const p = [0, 1, 2].map((c) => positions[a * 3 + c]);
+    const d = [0, 1, 2].map((c) => positions[b * 3 + c] - p[c]);
+    const w = [0, 1, 2].map((c) => point[c] - p[c]);
+    const length = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] || 1;
+    const t = Math.max(0, Math.min(1, (w[0] * d[0] + w[1] * d[1] + w[2] * d[2]) / length));
+    const off = Math.hypot(...[0, 1, 2].map((c) => w[c] - d[c] * t));
+    if (off < least) {
+      least = off;
+      best = [a, b];
+    }
+  }
+  return best;
+}
+
 /** Push what the brush reaches out along its normals (or in, with a negative `amount`). */
 export function inflate(positions, normals, reached, amount) {
   const { vertices, weights } = reached;

@@ -1491,6 +1491,54 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
     );
     assert_eq!(shape(&made, "Bra").0.positions, was.positions);
 
+    // One edge of the bra, split, flipped and collapsed: the shape builds
+    // each time, and its vertices and triangles count as they should.
+    use apoc_nif::weights::EdgeOp;
+    let mut edged = project.clone();
+    let t = was.triangles[0];
+    let (a, b) = (t[0], t[1]);
+    let on = |m: &mesh::Mesh| {
+        m.triangles
+            .iter()
+            .filter(|t| t.contains(&a) && t.contains(&b))
+            .count()
+    };
+    let shared = on(&was);
+    edged.edge("Bra", a, b, EdgeOp::Split).unwrap();
+    let (split, split_skin) = shape(&edged, "Bra");
+    assert_eq!(split.positions.len(), was.positions.len() + 1);
+    assert_eq!(split.triangles.len(), was.triangles.len() + shared);
+    assert_eq!(split_skin.vertices.len(), split.positions.len());
+    let new = was.positions.len();
+    let (p, q) = (was.positions[a as usize], was.positions[b as usize]);
+    assert!((0..3).all(|k| (split.positions[new][k] - (p[k] + q[k]) / 2.0).abs() < 0.02));
+    assert_eq!(built(&edged, "Bra").positions.len(), split.positions.len());
+    // The new vertex follows a slider by half of what each end does.
+    let breasts = osd::SliderData::read(&edged.slider_data("Breasts").unwrap()).unwrap();
+    let does = |v: u16| {
+        breasts
+            .list("BraBreasts")
+            .and_then(|l| l.iter().find(|d| d.vertex == v).map(|d| d.offset))
+            .unwrap_or([0.0; 3])
+    };
+    let (da, db, dn) = (does(a), does(b), does(new as u16));
+    assert!((0..3).all(|k| (dn[k] - (da[k] + db[k]) / 2.0).abs() < 0.0001));
+    if shared == 2 {
+        edged.edge("Bra", a, new as u16, EdgeOp::Flip).ok();
+        assert_eq!(
+            shape(&edged, "Bra").0.triangles.len(),
+            split.triangles.len()
+        );
+    }
+    edged.edge("Bra", b, new as u16, EdgeOp::Collapse).unwrap();
+    let (collapsed, _) = shape(&edged, "Bra");
+    assert_eq!(collapsed.positions.len(), was.positions.len());
+    assert!(collapsed.triangles.len() < split.triangles.len());
+    assert_eq!(built(&edged, "Bra").positions.len(), was.positions.len());
+    assert!(edged.edge("Bra", 0, 0, EdgeOp::Split).is_err());
+    assert!(edged.edge("Bra", 0, 60000, EdgeOp::Split).is_err());
+    assert!(edged.edge("CBBE", 0, 1, EdgeOp::Split).is_err());
+
     // A mesh with every vertex doubled, welded: one of each again, the
     // triangles the same, and nothing to weld the second time.
     let n = panty.positions.len();

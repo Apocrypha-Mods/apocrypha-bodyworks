@@ -186,3 +186,9 @@ test("an OBJ file's odd numbers are refused or made safe", async () => {
   const got = obj.mesh("v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 1e100 0\nf 1/1 2/1 3/1");
   assert.ok([...got.uvs].every(Number.isFinite));
 });
+
+test("the edge nearest a click on a triangle is found", () => {
+  assert.deepEqual(brush.nearestEdge([0, 1, 2], [0.5, 0.05, 0], square), [0, 1]);
+  assert.deepEqual(brush.nearestEdge([0, 1, 2], [0.95, 0.5, 0], square), [1, 2]);
+  assert.deepEqual(brush.nearestEdge([0, 1, 2], [0.45, 0.55, 0], square), [2, 0]);
+});
