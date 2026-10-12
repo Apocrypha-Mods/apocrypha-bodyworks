@@ -1138,6 +1138,10 @@ impl State {
                 "triangles": triangles,
                 "uvs": uvs,
                 "textures": m.textures,
+                "lookShared": mesh::look_shared(&nif, m.block)
+                    .into_iter()
+                    .filter_map(|at| mesh::name(&nif, at))
+                    .collect::<Vec<_>>(),
                 "look": mesh::look(&nif, m.block).map(|l| json!({
                     "glow": l.glow, "glowStrength": l.glow_strength, "alpha": l.alpha,
                     "gloss": l.gloss, "shine": l.shine, "shineStrength": l.shine_strength,

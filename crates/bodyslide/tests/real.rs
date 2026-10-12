@@ -1664,8 +1664,9 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
         .filter(|(a, b)| a.data != b.data)
         .count();
     assert_eq!(changed, 1);
-    look.alpha = 2.0;
+    look.alpha = 2000.0;
     assert!(glowing.set_look("Bra", &look).is_err());
+    assert!(boned_name_refused(&project));
     built(&glowing, "Bra");
 
     // A bone made up by hand: once, and where it was put.
@@ -1866,4 +1867,11 @@ fn a_mesh_that_follows_no_bones_takes_the_changes_a_skinned_one_does() {
         read(&made, "From outside").positions.len(),
         was.positions.len()
     );
+}
+
+/// A bone's name is letters a file can hold: none that end it early.
+fn boned_name_refused(project: &apoc_bodyslide::project::Project) -> bool {
+    let mut p = project.clone();
+    let unturned = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+    p.new_bone("Review\0hidden", [0.0; 3], unturned).is_err()
 }

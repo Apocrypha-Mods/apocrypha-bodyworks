@@ -490,14 +490,21 @@ async function meshes(bytes) {
   // scale taken out. Nothing where the file's directions make a left hand of a right one: that is no turn.
   const stood = (m) => {
     if (flipped || !(m instanceof Float64Array) || m.length !== 16 || m.some((c) => !Number.isFinite(c))) return null;
-    const turn = new Array(9);
-    for (let c = 0; c < 3; c++) {
-      // Each direction of the bone's own, a unit long, laid as the games lay theirs.
-      const far = Math.hypot(m[c * 4], m[c * 4 + 1], m[c * 4 + 2]);
-      if (!(far > 1e-9)) return null;
-      const [x, y, z] = laid([m[c * 4] / far, m[c * 4 + 1] / far, m[c * 4 + 2] / far]).map((v) => v / unit);
-      [turn[c], turn[3 + c], turn[6 + c]] = [x, y, z];
-    }
+    // The bone's first two directions as the games lay theirs, made a unit long and square to each other
+    // (an object scaled unevenly above it leaves them neither); the third is square to both.
+    const far = (v) => Math.hypot(v[0], v[1], v[2]);
+    const a = laid([m[0], m[1], m[2]]);
+    const la = far(a);
+    if (!(la > 1e-9)) return null;
+    const x = a.map((v) => v / la);
+    const b = laid([m[4], m[5], m[6]]);
+    const along = b[0] * x[0] + b[1] * x[1] + b[2] * x[2];
+    const square = b.map((v, k) => v - along * x[k]);
+    const lb = far(square);
+    if (!(lb > 1e-9 * Math.max(1, far(b)))) return null;
+    const y = square.map((v) => v / lb);
+    const z = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
+    const turn = [x[0], y[0], z[0], x[1], y[1], z[1], x[2], y[2], z[2]];
     const at = laid([m[12], m[13], m[14]]);
     return at.every((c) => Number.isFinite(Math.fround(c))) ? { at, turn } : null;
   };

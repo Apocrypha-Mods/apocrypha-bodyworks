@@ -87,6 +87,18 @@ fn shader_of(nif: &Nif, block: usize) -> Option<usize> {
     block_of(nif, shader, &["BSLightingShaderProperty"])
 }
 
+/// The other shapes of the file drawn by the same lighting as the shape at
+/// `block`: a change to how it takes light is a change to theirs.
+pub fn look_shared(nif: &Nif, block: usize) -> Vec<usize> {
+    let Some(at) = shader_of(nif, block) else {
+        return Vec::new();
+    };
+    shapes(nif)
+        .into_iter()
+        .filter(|other| *other != block && shader_of(nif, *other) == Some(at))
+        .collect()
+}
+
 /// How the shape at `block` takes light; nothing for one drawn another way.
 pub fn look(nif: &Nif, block: usize) -> Option<Look> {
     let at = shader_of(nif, block)?;

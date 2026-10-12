@@ -286,6 +286,7 @@ function showShapes(frame) {
       triangles: u32.slice(s.triangles[0], s.triangles[0] + s.triangles[1]),
       bones: s.bones || [],
       look: s.look || null,
+      lookShared: s.lookShared || [],
       reference: Boolean(s.reference),
       hidden: hidden.has(s.name),
       ghost: ghosts.has(s.name),
@@ -2682,29 +2683,33 @@ function material(sh) {
   const rgb = (text) => [1, 3, 5].map((i) => parseInt(text.slice(i, i + 2), 16) / 255);
   const field = (label, input) => [h("label.field", null, h("span", null, label), input), input];
   const colour = (label, value) => field(label, h("input.input.swatch", { type: "color", value: hex(value), "aria-label": label }));
-  const number = (label, value, max) => field(label, h("input.input", { type: "number", step: "any", min: 0, max, value: String(Math.round(value * 1000) / 1000), "aria-label": label }));
+  // A number is shown to three places, and one left alone goes back as it came, not as it was shown.
+  const shown = (value, by) => String(Math.round(value * by * 1000) / 1000);
+  const number = (label, value, by = 1) => field(label, h("input.input", { type: "number", step: "any", min: 0, value: shown(value, by), "aria-label": label }));
   const look = sh.look;
-  const [glow, glowStrength] = [colour("Glow", look.glow), number("Glow strength", look.glowStrength, 1000)];
-  const [shine, shineStrength] = [colour("Shine", look.shine), number("Shine strength", look.shineStrength, 1000)];
-  const [gloss, alpha] = [number("Gloss", look.gloss, 1000), number("Opacity, percent", look.alpha * 100, 100)];
+  const [glow, glowStrength] = [colour("Glow", look.glow), number("Glow strength", look.glowStrength)];
+  const [shine, shineStrength] = [colour("Shine", look.shine), number("Shine strength", look.shineStrength)];
+  const [gloss, alpha] = [number("Gloss", look.gloss), number("Opacity, percent", look.alpha, 100)];
   const go = h("button.btn.primary", { type: "button" }, "Done");
   const said = h("span.sub.warn.grow.cut");
   go.addEventListener("click", () => {
     try {
-      const percent = Number(alpha[1].value);
-      if (!(percent >= 0 && percent <= 100)) throw new Error("Opacity is 0 to 100.");
-      if (![glowStrength, shineStrength, gloss].every(([, input]) => Number(input.value) >= 0 && Number(input.value) <= 1000)) throw new Error("Strengths and gloss are 0 to 1,000.");
-      // A colour left alone goes back as it came, not as the nearest of 256 a picker holds.
       const kept = (input, was) => (input.value === hex(was) ? was : rgb(input.value));
+      const amount = ([, input], was, by = 1) => {
+        if (input.value === shown(was, by)) return was;
+        const n = Number(input.value);
+        if (input.value.trim() === "" || !(n >= 0 && n <= 1000 * by)) throw new Error(`${input.getAttribute("aria-label").replace(", percent", "")} is 0 to ${(1000 * by).toLocaleString()}.`);
+        return n / by;
+      };
       change({
         do: "look",
         shape: sh.name,
         glow: kept(glow[1], look.glow),
-        glowStrength: Number(glowStrength[1].value),
-        alpha: Number(alpha[1].value) / 100,
-        gloss: Number(gloss[1].value),
+        glowStrength: amount(glowStrength, look.glowStrength),
+        alpha: amount(alpha, look.alpha, 100),
+        gloss: amount(gloss, look.gloss),
         shine: kept(shine[1], look.shine),
-        shineStrength: Number(shineStrength[1].value),
+        shineStrength: amount(shineStrength, look.shineStrength),
       });
       close(el);
     } catch (e) {
@@ -2712,7 +2717,9 @@ function material(sh) {
     }
   });
   const pair = (a, b) => h("div.pair", null, [a[0], b[0]]);
-  const el = sheet(sh.name, null, [pair(glow, glowStrength), pair(shine, shineStrength), pair(gloss, alpha)], [
+  // What else is drawn by the same lighting changes with it.
+  const also = sh.lookShared?.length ? [h("span.sub", null, `Shared with ${sh.lookShared.join(", ")}`)] : [];
+  const el = sheet(sh.name, null, [pair(glow, glowStrength), pair(shine, shineStrength), pair(gloss, alpha), ...also], [
     said,
     h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
     go,

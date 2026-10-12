@@ -131,3 +131,20 @@ test("bones two shapes follow stand in one place for both", async () => {
   while ((at = text.indexOf("TransformLink", at + 1)) >= 0) stands.push(new DataView(bytes.buffer, bytes.byteOffset).getFloat64(at + 13 + 13 + 12 * 8, true));
   assert.deepEqual(stands, [0, 0]);
 });
+
+test("a bone under an unevenly scaled object still stands as a turn", async () => {
+  const slots = new Uint8Array(4 * 32);
+  new DataView(slots.buffer).setFloat32(4, 1, true);
+  const bone = [{ name: "Spine", turn: [0.7071068, -0.7071068, 0, 0.7071068, 0.7071068, 0, 0, 0, 1], at: [1, 2, 3], scale: 1 }];
+  const bytes = write([{ ...square, rig: { bones: bone, slots } }]);
+  // Its standing place sheared, as a parent scaled along one axis leaves it.
+  const at = new TextDecoder("latin1").decode(bytes).indexOf("TransformLink") + 13 + 13;
+  const view = new DataView(bytes.buffer, bytes.byteOffset);
+  for (const k of [0, 4, 8]) view.setFloat64(at + k * 8, view.getFloat64(at + k * 8, true) * 2, true);
+  const [back] = await read(bytes);
+  const t = back.followed[0].stands.turn;
+  const row = (r) => [t[r * 3], t[r * 3 + 1], t[r * 3 + 2]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  for (const r of [0, 1, 2]) assert.ok(Math.abs(dot(row(r), row(r)) - 1) < 1e-9);
+  assert.ok(Math.abs(dot(row(0), row(1))) < 1e-9 && Math.abs(dot(row(0), row(2))) < 1e-9 && Math.abs(dot(row(1), row(2))) < 1e-9);
+});

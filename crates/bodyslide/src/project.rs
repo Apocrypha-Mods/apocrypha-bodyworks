@@ -1149,14 +1149,20 @@ impl Project {
             .block(shape)
             .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
         let colours = look.glow.iter().chain(&look.shine);
+        // How solid may pass all of it: files use that for how it fades at
+        // its edges.
         if colours.clone().any(|c| !(0.0..=1.0).contains(c))
-            || !(0.0..=1.0).contains(&look.alpha)
-            || [look.glow_strength, look.gloss, look.shine_strength]
-                .iter()
-                .any(|v| !(0.0..=1000.0).contains(v))
+            || [
+                look.alpha,
+                look.glow_strength,
+                look.gloss,
+                look.shine_strength,
+            ]
+            .iter()
+            .any(|v| !(0.0..=1000.0).contains(v))
         {
             return invalid(
-                "Colours and opacity run from 0 to 1, strengths and gloss from 0 to 1000.",
+                "Colours run from 0 to 1; opacity, strengths and gloss from 0 to 1000.",
             );
         }
         mesh::set_look(&mut self.nif, block, look).map_err(|e| Error::Invalid(e.to_string()))
@@ -1332,8 +1338,8 @@ impl Project {
     /// it is put (`turn` a row at a time), for shapes to be painted onto.
     pub fn new_bone(&mut self, bone: &str, at: [f32; 3], turn: [f32; 9]) -> Result<(), Error> {
         let bone = bone.trim();
-        if bone.is_empty() || bone.len() > 255 {
-            return invalid("Give the bone a name.");
+        if bone.is_empty() || bone.len() > 255 || bone.chars().any(char::is_control) {
+            return invalid("Give the bone a name, of letters a file can hold.");
         }
         if at.iter().chain(&turn).any(|c| !c.is_finite()) {
             return invalid("Where the bone stands is not numbers a mesh can hold.");
@@ -1567,6 +1573,10 @@ impl Project {
                 stands,
             }) = given
             {
+                // Names as the mesh will hold them: without the space round
+                // them a file may carry.
+                let trimmed: Vec<String> = names.iter().map(|n| n.trim().to_string()).collect();
+                let names = &trimmed[..];
                 // A bone of the file's is one of the mesh's by its name; one
                 // the mesh has not got is left out, and a vertex left with
                 // nothing keeps what its likeness follows.
