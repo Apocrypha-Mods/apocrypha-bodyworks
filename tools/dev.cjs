@@ -55,6 +55,9 @@ const answers = {
   "files.picture": async (a) => { const r = await fetch("/picture?longest=" + (a.longest || 2048) + "&path=" + encodeURIComponent(a.path)); if (!r.ok) throw new Error("No such texture."); return r.arrayBuffer(); },
   "files.read": async (a) => { const r = await fetch("/read?path=" + encodeURIComponent(a.path)); if (!r.ok) throw new Error("No such file."); return r.arrayBuffer(); },
   "output.write": async (a) => { for (const f of a.files) await fetch("/write?path=" + encodeURIComponent(f.path), { method: "POST", body: f.bytes }); window.written = (window.written || []).concat(a.files.map((f) => f.path)); return { files: a.files.length }; },
+  // No dialogs here: a save lands under the output folder, and an open hands back what a test put in window.toOpen.
+  "disk.save": async (a) => { await fetch("/write?path=" + encodeURIComponent("disk/" + a.name), { method: "POST", body: a.bytes }); window.saved = a.name; return { saved: true }; },
+  "disk.open": async () => window.toOpen || null,
   "apply.review": async () => { window.reviewed = true; },
 };
 addEventListener("message", async (e) => {

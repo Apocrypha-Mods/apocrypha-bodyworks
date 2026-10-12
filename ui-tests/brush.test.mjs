@@ -88,3 +88,23 @@ test("a mask covers what it is painted on, and the brushes leave that alone", ()
   assert.equal(mask[0], 0);
   assert.ok(mask[1] < 1);
 });
+
+test("shapes go out as OBJ and a shape's vertices come back as they went", async () => {
+  const obj = await import("../ui/obj.js");
+  const uvs = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
+  const text = obj.write([
+    { name: "A shape", positions: square, uvs, triangles: faces },
+    { name: "Bare", positions: square, uvs: null, triangles: faces.subarray(0, 3) },
+  ]);
+  const lines = text.trim().split("\n");
+  assert.equal(lines.filter((l) => l.startsWith("v ")).length, 8);
+  assert.equal(lines.filter((l) => l.startsWith("vt ")).length, 4);
+  assert.ok(lines.includes("o A_shape"));
+  assert.ok(lines.includes("vt 1 0"));
+  assert.ok(lines.includes("f 1/1 2/2 3/3"));
+  // The second shape's triangles count on from the first's vertices.
+  assert.ok(lines.includes("f 5 6 7"));
+  assert.deepEqual([...obj.positions(text)], [...square, ...square]);
+  assert.deepEqual([...obj.positions("vn 0 0 1\r\nv 1 2 3 0.5\r\nvt 0 0\n")], [1, 2, 3]);
+  assert.throws(() => obj.positions("v 1 two 3"));
+});

@@ -7,6 +7,8 @@
 //   files.read  { path }           ArrayBuffer
 //   files.picture { path, longest } ArrayBuffer       a texture, as a PNG no longer than `longest` a side
 //   output.write { name, files }   { files }          files: [{ path, bytes }], into the mod `name`
+//   disk.save   { name, bytes }    { saved }          a file, where the person says; false if they close the dialog
+//   disk.open   { extensions }     { name, bytes }    one file the person picks, or null
 //   apply.review                   opens the mod manager's own review of what Apply will do
 //
 // Paths are relative to the game folder, with forward slashes, in any case.

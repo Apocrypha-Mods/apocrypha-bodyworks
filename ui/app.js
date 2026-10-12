@@ -5,6 +5,7 @@ import * as host from "./host.js";
 import * as core from "./core.js";
 import { View, welded, shade } from "./view.js";
 import * as brush from "./brush.js";
+import * as obj from "./obj.js";
 
 const TOOLS = "Data/CalienteTools/BodySlide";
 const OUTPUT = "BodySlide output";
@@ -912,6 +913,8 @@ function studioSide() {
                     ...(state.work ? bodies.map((o) => ({ name: `Copy weights from ${o.name}`, value: ["weights", o.name] })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
                     { name: sh.hidden ? "Show" : "Hide", value: "hide" },
+                    { name: "Export OBJ…", value: "export", rule: true },
+                    state.work && { name: "Import OBJ…", value: "import" },
                     state.work && state.shapes.length > 1 && { name: "Delete", value: "delete", danger: true, rule: true },
                   ].filter(Boolean),
                   (what) => {
@@ -922,6 +925,8 @@ function studioSide() {
                       return rename("Duplicate shape", `${sh.name} copy`, (to) => change({ do: "duplicate", name: sh.name, to }), "Duplicate");
                     }
                     if (what === "transform") return transform(sh);
+                    if (what === "export") return exportObj(sh);
+                    if (what === "import") return importObj(sh);
                     if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
                     if (Array.isArray(what)) return attempt({ do: what[0], shape: sh.name, body: what[1] });
                     if (what === "hide") hide(i, !sh.hidden);
@@ -1171,11 +1176,21 @@ function endStroke() {
     render();
     return false;
   }
-  const s = done.shape;
+  moved(done.shape, done.before, done.amount);
+  render();
+  return false;
+}
+
+/**
+ * A shape's vertices now stand where `s.now` has them, having stood at
+ * `before`: make that a change to the project, to the shape itself or to
+ * the slider the brushes change, which stood at `amount`.
+ */
+function moved(s, before, amount) {
   const k = state.editing;
   // What a slider does is what was seen to move, over how far the slider stood.
-  const { bytes, vertices, offsets } = brush.moved(done.before, s.now, 1 / done.amount);
-  if (!vertices.length) return false;
+  const { bytes, vertices, offsets } = brush.moved(before, s.now, 1 / amount);
+  if (!vertices.length) return;
   try {
     const [work] = core.ask({ op: "change", change: { do: "stroke", shape: s.name, slider: k < 0 ? null : cur().sliders[k].name } }, bytes);
     state.work = work;
@@ -1199,11 +1214,50 @@ function endStroke() {
     state.exported = null;
   } catch (e) {
     state.problem = e.message;
-    s.now.set(done.before);
-    redraw(s);
+    s.now.set(before);
+    shade(s.now, s.shown, s.weld, s.normals, s.sum);
+    view.move(state.shapes.indexOf(s), s.now, s.normals);
+  }
+}
+
+/** Outfit Studio: a shape as it stands, as an OBJ file saved where the person says. */
+async function exportObj(sh) {
+  const text = obj.write([{ name: sh.name, positions: sh.now, uvs: sh.uvs, triangles: sh.shown }]);
+  try {
+    await host.request("disk.save", { name: `${sh.name}.obj`, bytes: new TextEncoder().encode(text).buffer });
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
+}
+
+/**
+ * Outfit Studio: move a shape's vertices to where an OBJ file has them: the
+ * shape as exported, changed in another program and brought back. It becomes
+ * a change to the shape, or to the slider the brushes change.
+ */
+async function importObj(sh) {
+  try {
+    const picked = await host.request("disk.open", { extensions: ["obj"] });
+    if (!picked) return;
+    const to = obj.positions(new TextDecoder().decode(picked.bytes));
+    if (to.length !== sh.now.length) {
+      const points = (n) => `${n.toLocaleString()} ${n === 1 ? "point" : "points"}`;
+      throw new Error(`${picked.name} has ${points(to.length / 3)}, and ${sh.name} ${points(sh.now.length / 3)}.`);
+    }
+    const k = state.editing;
+    const amount = k < 0 ? 1 : applied(cur().sliders[k], state.at[k]);
+    if (amount === 0) throw new Error(`Move ${cur().sliders[k].name} off nothing first.`);
+    const before = new Float32Array(sh.now);
+    sh.now.set(to);
+    state.problem = null;
+    moved(sh, before, amount);
+    shade(sh.now, sh.shown, sh.weld, sh.normals, sh.sum);
+    view.move(state.shapes.indexOf(sh), sh.now, sh.normals);
+  } catch (e) {
+    state.problem = e.message;
   }
   render();
-  return false;
 }
 
 /** The brushes, under the view, and with one in hand its size, its strength and what it changes. */
