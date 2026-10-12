@@ -4,6 +4,7 @@
 import * as host from "./host.js";
 import * as core from "./core.js";
 import { View, welded, shade } from "./view.js";
+import * as brush from "./brush.js";
 
 const TOOLS = "Data/CalienteTools/BodySlide";
 const OUTPUT = "BodySlide output";
@@ -70,6 +71,14 @@ const state = {
   /** Outfit Studio: the shape picked in the list, and which list is showing. */
   picked: 0,
   side: "shapes",
+  /** Outfit Studio: the brush in hand ("inflate", "deflate", "move", "smooth"), or null to turn the view. */
+  tool: null,
+  /** The brush's size and strength, each 1 to 100, and whether it works both sides of the body at once. */
+  size: Number(remembered.get("brush.size")) || 30,
+  strength: Number(remembered.get("brush.strength")) || 40,
+  mirror: remembered.get("brush.mirror") !== "0",
+  /** The slider the brushes change (its place in the list), or -1 for the shape itself. */
+  editing: -1,
   /** Outfit Studio: the open project as it stands, changes and all. */
   work: null,
   /** Files saved here that the mods do not have yet, by lower-case path. */
@@ -267,6 +276,8 @@ function showShapes(frame) {
 async function choose(set, presetName) {
   state.set = set;
   state.work = null;
+  state.editing = -1;
+  stroke = null;
   state.exported = null;
   state.saved = null;
   state.built = null;
@@ -403,7 +414,7 @@ function close(el) {
 }
 
 /** A list to pick one of, dropped from `anchor`. Items: `{ name, note, on, value }`. */
-function menu(anchor, items, onPick, placeholder) {
+function menu(anchor, items, onPick, placeholder, above) {
   const box = anchor.getBoundingClientRect();
   const rows = h("div.rows");
   const fill = (query) => {
@@ -433,7 +444,10 @@ function menu(anchor, items, onPick, placeholder) {
   const input = h("input", { type: "text", placeholder, "aria-label": placeholder, oninput: () => fill(input.value) });
   const panel = h(
     "div.menu",
-    { role: "dialog", style: `left: ${Math.max(8, Math.min(box.left, innerWidth - 328))}px; top: ${box.bottom + 6}px` },
+    {
+      role: "dialog",
+      style: `left: ${Math.max(8, Math.min(box.left, innerWidth - 328))}px; ${above ? `bottom: ${innerHeight - box.top + 6}px` : `top: ${box.bottom + 6}px`}`,
+    },
     items.length > 8 && h("label.search", { html: GLASS }, input),
     rows,
   );
@@ -815,6 +829,12 @@ function modes() {
     // Each tool draws every shape in its own way to begin with, and the
     // project may no longer be the set it was opened from.
     view?.look({ wire: false, painted: true });
+    if (view) {
+      state.tool = null;
+      view.brush = null;
+      view.reach(null);
+      canvas.style.cursor = "";
+    }
     try {
       showShapes(false);
     } catch (e) {
@@ -1004,11 +1024,199 @@ function studioSliders() {
   el.querySelector(".rows").scrollTop = top;
 }
 
+// ── Brushes ────────────────────────────────────────────────────────────────
+
+const BRUSHES = [
+  ["inflate", "Inflate"],
+  ["deflate", "Deflate"],
+  ["move", "Move"],
+  ["smooth", "Smooth"],
+];
+
+/** How far the brush reaches, in the mesh's units. */
+function radius() {
+  return view.size * (0.005 + (state.size / 100) ** 2 * 0.25);
+}
+
+/** The stroke under way: what it started from and where the brush last was. */
+let stroke = null;
+
+/** The pointer over the view with a brush in hand (see `View.pointers`). */
+function brushing(what, ray) {
+  const s = state.shapes[state.picked];
+  if (what === "out" || !s || s.hidden || !state.tool) {
+    if (!stroke) view.reach(null);
+    return false;
+  }
+  if (what === "up") return endStroke();
+  const r = radius();
+  if (what === "drag" && stroke?.tool === "move") {
+    // The middle of the brush follows the pointer, across the view.
+    const { origin, dir, back } = ray;
+    const along = (k) => stroke.at[k] - origin[k];
+    const t = (along(0) * back[0] + along(1) * back[1] + along(2) * back[2]) / (dir[0] * back[0] + dir[1] * back[1] + dir[2] * back[2]);
+    const by = [0, 1, 2].map((k) => origin[k] + dir[k] * t - stroke.at[k]);
+    brush.carry(s.now, stroke.from, stroke.reached, by);
+    if (stroke.other) brush.carry(s.now, stroke.otherFrom, stroke.other, brush.across(by));
+    view.reach({ point: stroke.at.map((c, k) => c + by[k]), normal: stroke.normal, radius: r });
+    return redraw(s);
+  }
+  const found = brush.hit(ray.origin, ray.dir, s.now, s.shown);
+  if (!found) {
+    if (!stroke) view.reach(null);
+    return false;
+  }
+  view.reach({ point: found.point, normal: found.normal, radius: r });
+  if (what === "over") return false;
+  if (what === "down") {
+    const k = state.editing;
+    const amount = k < 0 ? 1 : applied(cur().sliders[k], state.at[k]);
+    // A slider standing at nothing shows nothing of what a stroke would do to it.
+    if (amount === 0) return false;
+    stroke = { tool: state.tool, shape: s, before: new Float32Array(s.now), amount, last: null, near: null };
+    if (stroke.tool === "move") {
+      const pick = (p) => {
+        const reached = brush.reach(p, r, s.now);
+        const from = new Float32Array(reached.vertices.length * 3);
+        reached.vertices.forEach((v, i) => from.set(s.now.subarray(v * 3, v * 3 + 3), i * 3));
+        return [reached, from];
+      };
+      stroke.at = found.point;
+      stroke.normal = found.normal;
+      [stroke.reached, stroke.from] = pick(found.point);
+      // Both sides only where they are apart: across the middle they are one hold.
+      if (state.mirror && Math.abs(found.point[0]) > r) [stroke.other, stroke.otherFrom] = pick(brush.across(found.point));
+      return true;
+    }
+  }
+  // A dab each time the brush has gone a quarter of its reach.
+  const far = stroke.last ? Math.hypot(...found.point.map((c, k) => c - stroke.last[k])) : Infinity;
+  if (far < r * 0.25) return true;
+  stroke.last = found.point;
+  const strength = state.strength / 100;
+  for (const point of state.mirror ? [found.point, brush.across(found.point)] : [found.point]) {
+    const reached = brush.reach(point, r, s.now);
+    if (stroke.tool === "smooth") {
+      stroke.near ||= brush.neighbours(s.shown, s.weld);
+      // Vertices at one place go to one place: each to its group's first.
+      brush.smooth(s.now, s.weld, stroke.near, reached, strength * 0.6);
+    } else {
+      brush.inflate(s.now, s.normals, reached, (stroke.tool === "deflate" ? -1 : 1) * r * 0.06 * strength);
+    }
+  }
+  redraw(s);
+  return true;
+}
+
+function redraw(s) {
+  shade(s.now, s.shown, s.weld, s.normals, s.sum);
+  view.move(state.picked, s.now, s.normals);
+  return true;
+}
+
+/** The stroke is over: what it moved becomes a change to the project. */
+function endStroke() {
+  const done = stroke;
+  stroke = null;
+  if (!done) return false;
+  const s = done.shape;
+  const k = state.editing;
+  // What a slider does is what was seen to move, over how far the slider stood.
+  const { bytes, vertices, offsets } = brush.moved(done.before, s.now, 1 / done.amount);
+  if (!vertices.length) return false;
+  try {
+    const [work] = core.ask({ op: "change", change: { do: "stroke", shape: s.name, slider: k < 0 ? null : cur().sliders[k].name } }, bytes);
+    state.work = work;
+    if (k < 0) {
+      for (let i = 0; i < vertices.length; i++) for (let c = 0; c < 3; c++) s.base[vertices[i] * 3 + c] += offsets[i * 3 + c];
+    } else {
+      // The slider's list for this shape, with the stroke added to it.
+      const list = new Map();
+      const had = s.sliders.find((d) => d.slider === k);
+      if (had) had.vertices.forEach((v, i) => list.set(v, [had.offsets[i * 3], had.offsets[i * 3 + 1], had.offsets[i * 3 + 2]]));
+      vertices.forEach((v, i) => {
+        const o = list.get(v) || [0, 0, 0];
+        list.set(v, [o[0] + offsets[i * 3], o[1] + offsets[i * 3 + 1], o[2] + offsets[i * 3 + 2]]);
+      });
+      const made = { slider: k, vertices: Uint32Array.from(list.keys()), offsets: Float32Array.from([...list.values()].flat()) };
+      if (had) s.sliders[s.sliders.indexOf(had)] = made;
+      else s.sliders.push(made);
+    }
+    state.problem = null;
+    state.saved = null;
+    state.exported = null;
+  } catch (e) {
+    state.problem = e.message;
+    s.now.set(done.before);
+    redraw(s);
+  }
+  render();
+  return false;
+}
+
+/** The brushes, under the view, and with one in hand its size, its strength and what it changes. */
+function brushBar() {
+  const tool = (id, label) =>
+    h("button" + (state.tool === id ? ".on" : ""), { type: "button", "aria-pressed": state.tool === id ? "true" : "false", onclick: () => hold(id) }, label);
+  const knob = (label, key) => {
+    const input = h("input", { type: "range", min: 1, max: 100, step: 1, value: state[key], "aria-label": label });
+    const fill = () => input.style.setProperty("--at", `${input.value}%`);
+    fill();
+    input.addEventListener("input", () => {
+      state[key] = Number(input.value);
+      remembered.set(`brush.${key}`, input.value);
+      fill();
+    });
+    return h("label.knob", null, h("span", null, label), input);
+  };
+  const [mirror] = option("Both sides", state.mirror);
+  mirror.classList.add("inline");
+  mirror.addEventListener("click", () => {
+    state.mirror = !state.mirror;
+    remembered.set("brush.mirror", state.mirror ? "1" : "0");
+  });
+  const sliders = cur()
+    .sliders.map((sl, i) => ({ name: sl.name, value: i, on: i === state.editing, skip: sl.zap || sl.uv }))
+    .filter((it) => !it.skip);
+  const target = pickButton("Changes", state.editing < 0 ? "The shape" : cur().sliders[state.editing].name, (b) =>
+    menu(
+      b,
+      [{ name: "The shape", value: -1, on: state.editing < 0 }, ...sliders],
+      (i) => {
+        state.editing = i;
+        // A slider is changed where its effect shows: at nothing it would show none.
+        if (i >= 0 && applied(cur().sliders[i], state.at[i]) === 0) state.at[i] = cur().sliders[i].invert ? 0 : 100;
+        render();
+        reshape();
+      },
+      "Search sliders",
+      true,
+    ),
+  );
+  return h(
+    "div.tools",
+    null,
+    state.tool && h("div.brush", null, knob("Size", "size"), knob("Strength", "strength"), mirror, target),
+    h("div.seg", { role: "group", "aria-label": "Tool" }, tool(null, "Orbit"), ...BRUSHES.map(([id, label]) => tool(id, label))),
+  );
+}
+
+/** Take a brush in hand, or with null put it down. */
+function hold(tool) {
+  state.tool = tool;
+  view.brush = tool ? brushing : null;
+  view.reach(null);
+  canvas.style.cursor = tool ? "crosshair" : "";
+  render();
+}
+
 /** Take a description of the project after a change, keeping each slider where it stood. */
 function taken(work, renamed) {
   const stood = new Map(state.work.sliders.map((sl, i) => [sl.name, state.at[i]]));
   if (renamed) stood.set(renamed[1], stood.get(renamed[0]));
+  const edited = state.work.sliders[state.editing]?.name;
   state.work = work;
+  state.editing = work.sliders.findIndex((sl) => sl.name === (renamed && edited === renamed[0] ? renamed[1] : edited));
   state.at = work.sliders.map((sl) => stood.get(sl.name) ?? (sl.zap ? sl.big : 0));
   state.problem = null;
   showShapes(false);
@@ -1250,7 +1458,13 @@ function renderStudio() {
       "div.main.studio",
       null,
       h("div.card.list", { id: "side" }),
-      h("div.view", null, canvas, h("div.looks", null, h("div.seg", { role: "group", "aria-label": "How it is drawn" }, flag("Textures", "painted"), flag("Wireframe", "wire")))),
+      h(
+        "div.view",
+        null,
+        canvas,
+        h("div.looks", null, h("div.seg", { role: "group", "aria-label": "How it is drawn" }, flag("Textures", "painted"), flag("Wireframe", "wire"))),
+        state.work && state.shapes.length > 0 && brushBar(),
+      ),
       h("div.card.list", { id: "list" }),
     ),
     ...(state.problem

@@ -77,6 +77,18 @@ export class View {
     this.tall = 1;
     this.tint = [0.78, 0.6, 0.5];
     this.queued = false;
+    /** A brush, when one is in hand: told of the pointer over the view (see `pointers`). */
+    this.brush = null;
+    /** The brush's reach, drawn on the shape: `{ point, normal, radius }`, or null. */
+    this.ring = null;
+    this.ringVao = gl.createVertexArray();
+    this.ringBuf = gl.createBuffer();
+    gl.bindVertexArray(this.ringVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.ringBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, 64 * 3 * 4, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
     this.pointers();
     new ResizeObserver(() => this.draw()).observe(canvas);
   }
@@ -84,12 +96,22 @@ export class View {
   pointers() {
     const c = this.canvas;
     let held = null;
+    // With a brush in hand, the main button on the shape is a stroke, and
+    // anywhere else, or any other button, still turns and moves the view.
+    // The brush is told "over" as the pointer passes, "down" (and answers
+    // whether it took the stroke), "drag", "up" and "out".
     c.addEventListener("pointerdown", (e) => {
-      held = { x: e.clientX, y: e.clientY, pan: e.button !== 0 || e.shiftKey };
       c.setPointerCapture(e.pointerId);
+      if (this.brush && e.button === 0 && !e.shiftKey && this.brush("down", this.ray(e))) {
+        held = { stroke: true };
+        return;
+      }
+      held = { x: e.clientX, y: e.clientY, pan: e.button !== 0 || e.shiftKey };
     });
+    c.addEventListener("pointerleave", () => !held && this.brush?.("out"));
     c.addEventListener("pointermove", (e) => {
-      if (!held) return;
+      if (!held) return void this.brush?.("over", this.ray(e));
+      if (held.stroke) return void this.brush("drag", this.ray(e));
       const dx = e.clientX - held.x;
       const dy = e.clientY - held.y;
       held.x = e.clientX;
@@ -105,7 +127,10 @@ export class View {
       }
       this.draw();
     });
-    const up = () => (held = null);
+    const up = () => {
+      if (held?.stroke) this.brush?.("up");
+      held = null;
+    };
     c.addEventListener("pointerup", up);
     c.addEventListener("pointercancel", up);
     c.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -256,6 +281,49 @@ export class View {
     this.draw();
   }
 
+  /** Where the eye is and which way it looks, for a canvas `aspect` times as wide as tall. */
+  camera(aspect) {
+    // The games' meshes stand along Z and face +Y. The eye circles Z, far
+    // enough that the whole of it fits the canvas either way.
+    const fov = 0.6;
+    const f = 1 / Math.tan(fov / 2);
+    const d = Math.max(this.tall * f, (this.wide * f) / aspect) * 0.56 * this.far;
+    const near = d * 0.05;
+    const farP = d * 4 + this.size;
+    const proj = new Float32Array([
+      f / aspect, 0, 0, 0,
+      0, f, 0, 0,
+      0, 0, (farP + near) / (near - farP), -1,
+      0, 0, (2 * farP * near) / (near - farP), 0,
+    ]);
+    const ct = Math.cos(this.turn), st = Math.sin(this.turn);
+    const cp = Math.cos(this.tilt), sp = Math.sin(this.tilt);
+    // Camera axes in the mesh's space: right, up, and back toward the eye.
+    const right = [ct, st, 0];
+    const back = [st * cp, -ct * cp, sp];
+    const up = [-st * sp, ct * sp, cp];
+    const eye = [this.at[0] + back[0] * d, this.at[1] + back[1] * d, this.at[2] + back[2] * d];
+    return { f, proj, right, up, back, eye };
+  }
+
+  /** The line from the eye through where a pointer event is, in the mesh's space: `{ origin, dir, back }`. */
+  ray(e) {
+    const box = this.canvas.getBoundingClientRect();
+    const aspect = box.width / Math.max(1, box.height);
+    const { f, right, up, back, eye } = this.camera(aspect);
+    const x = (((e.clientX - box.left) / box.width) * 2 - 1) * (aspect / f);
+    const y = (1 - ((e.clientY - box.top) / box.height) * 2) / f;
+    const dir = [0, 1, 2].map((k) => right[k] * x + up[k] * y - back[k]);
+    const l = Math.hypot(dir[0], dir[1], dir[2]);
+    return { origin: eye, dir: dir.map((c) => c / l), back };
+  }
+
+  /** Show the brush's reach on the shape, or with null stop showing it. */
+  reach(ring) {
+    this.ring = ring;
+    this.draw();
+  }
+
   draw() {
     if (this.queued) return;
     this.queued = true;
@@ -281,26 +349,7 @@ export class View {
     gl.enable(gl.DEPTH_TEST);
     if (!this.shapes.length) return;
 
-    // The games' meshes stand along Z and face +Y. The eye circles Z, far
-    // enough that the whole of it fits the canvas either way.
-    const fov = 0.6;
-    const f = 1 / Math.tan(fov / 2);
-    const d = Math.max(this.tall * f, (this.wide * f) / (w / h)) * 0.56 * this.far;
-    const near = d * 0.05;
-    const farP = d * 4 + this.size;
-    const proj = new Float32Array([
-      f / (w / h), 0, 0, 0,
-      0, f, 0, 0,
-      0, 0, (farP + near) / (near - farP), -1,
-      0, 0, (2 * farP * near) / (near - farP), 0,
-    ]);
-    const ct = Math.cos(this.turn), st = Math.sin(this.turn);
-    const cp = Math.cos(this.tilt), sp = Math.sin(this.tilt);
-    // Camera axes in the mesh's space: right, up, and back toward the eye.
-    const right = [ct, st, 0];
-    const back = [st * cp, -ct * cp, sp];
-    const up = [-st * sp, ct * sp, cp];
-    const eye = [this.at[0] + back[0] * d, this.at[1] + back[1] * d, this.at[2] + back[2] * d];
+    const { proj, right, up, back, eye } = this.camera(w / h);
     const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     const view = new Float32Array([
       right[0], up[0], back[0], 0,
@@ -347,6 +396,30 @@ export class View {
         // The vertex array remembers its index buffer: give it back its faces.
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.ib);
       });
+    }
+    if (this.ring) {
+      // A circle lying on the shape where the brush is, drawn over everything.
+      const { point, normal: n, radius } = this.ring;
+      const side = Math.abs(n[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      let a = [n[1] * side[2] - n[2] * side[1], n[2] * side[0] - n[0] * side[2], n[0] * side[1] - n[1] * side[0]];
+      const l = Math.hypot(a[0], a[1], a[2]) || 1;
+      a = a.map((c) => c / l);
+      const b = [n[1] * a[2] - n[2] * a[1], n[2] * a[0] - n[0] * a[2], n[0] * a[1] - n[1] * a[0]];
+      const round = new Float32Array(64 * 3);
+      for (let i = 0; i < 64; i++) {
+        const t = (i / 64) * Math.PI * 2;
+        for (let k = 0; k < 3; k++) round[i * 3 + k] = point[k] + (a[k] * Math.cos(t) + b[k] * Math.sin(t)) * radius;
+      }
+      gl.bindVertexArray(this.ringVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.ringBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, round);
+      gl.disable(gl.DEPTH_TEST);
+      gl.uniform4f(this.uLine, 1, 1, 1, 0.9);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.drawArrays(gl.LINE_LOOP, 0, 64);
+      gl.disable(gl.BLEND);
+      gl.enable(gl.DEPTH_TEST);
     }
     gl.bindVertexArray(null);
   }

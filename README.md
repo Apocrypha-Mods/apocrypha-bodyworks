@@ -71,6 +71,7 @@ may ask of the mod manager is listed at the top of `ui/host.js`.
 cargo test --workspace
 cargo clippy --workspace --all-targets
 cargo fmt --all --check
+node --test ui-tests/
 ```
 
 Tests that need real meshes look in `scratch/` (not tracked) and are skipped

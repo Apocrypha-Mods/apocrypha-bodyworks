@@ -167,9 +167,14 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bo
 .side-head + .rows .shape:not(:has(.eye)) { padding-left: 12px; min-height: 28px; }
 .tag { display: inline-flex; align-items: center; flex-shrink: 0; padding: 1px 6px; border-radius: 6px; background: var(--accent-muted); color: var(--text-secondary); font-size: 12px; line-height: 18px; font-weight: 500; }
 .view .looks { position: absolute; left: 12px; top: 10px; }
+.view .tools { position: absolute; left: 0; right: 0; bottom: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 0 12px; pointer-events: none; }
+.view .brush { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 12px; max-width: 100%; min-height: 36px; padding: 4px 6px 4px 14px; border-radius: 18px; background: var(--bg-surface); box-shadow: inset 0 0 0 1px var(--border); pointer-events: auto; }
+.knob { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+.knob input { flex: none; width: 64px; }
+.brush .pick { flex-shrink: 0; height: 28px; max-width: 170px; font-size: 13px; }
 .sl.one.head span:last-child { text-align: right; }
 @media (max-width: 900px) {
-  .main.studio { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(180px, 34%) auto minmax(0, 1fr); }
+  .main.studio { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(280px, 50%) auto minmax(0, 1fr); }
   .main.studio .view { order: -1; }
   .main.studio #side { max-height: 170px; }
 }
