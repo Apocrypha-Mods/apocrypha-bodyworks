@@ -2,12 +2,24 @@
 // sometimes a file's bytes, an answer as JSON and sometimes bytes after it.
 
 let wasm;
+/** The module as compiled, to start afresh from when a file stops it. */
+let compiled;
+let restarted = () => {};
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export async function start(url) {
   const bytes = await (await fetch(url)).arrayBuffer();
-  wasm = (await WebAssembly.instantiate(bytes, {})).instance.exports;
+  compiled = await WebAssembly.compile(bytes);
+  wasm = new WebAssembly.Instance(compiled, {}).exports;
+}
+
+/**
+ * What to do when the module had to be started afresh: it then holds
+ * nothing it was given, and whoever gave it files gives them again.
+ */
+export function onRestart(then) {
+  restarted = then;
 }
 
 function put(bytes) {
@@ -22,7 +34,16 @@ export function ask(request, data) {
   const reqAt = put(req);
   const bytes = data ? (data instanceof Uint8Array ? data : new Uint8Array(data)) : null;
   const dataAt = bytes && bytes.length ? put(bytes) : 0;
-  const packed = wasm.call(reqAt, req.length, dataAt, bytes ? bytes.length : 0);
+  let packed;
+  try {
+    packed = wasm.call(reqAt, req.length, dataAt, bytes ? bytes.length : 0);
+  } catch {
+    // A file it could not cope with stopped it where it stood. What it
+    // held is gone with it: begun again, empty, and said so.
+    wasm = new WebAssembly.Instance(compiled, {}).exports;
+    queueMicrotask(restarted);
+    throw new Error("That stopped the add-on's engine, which has been started again.");
+  }
   wasm.dealloc(reqAt, req.length);
   if (dataAt) wasm.dealloc(dataAt, bytes.length);
   const at = Number(packed >> 32n);

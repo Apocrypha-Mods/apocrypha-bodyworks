@@ -2542,6 +2542,9 @@ function render() {
   foot();
 }
 
+/** Sets that were on screen when the engine stopped. */
+const stopped = new Set();
+
 // ── Start ──────────────────────────────────────────────────────────────────
 
 async function start() {
@@ -2559,6 +2562,24 @@ async function start() {
       }
     }, () => {});
     await core.start("bodyslide.wasm");
+    // Started afresh, it is given the catalogue again, and the set on screen.
+    core.onRestart(async () => {
+      const said = "That stopped the add-on's engine, which has been started again.";
+      const name = state.set?.name;
+      try {
+        await readCatalog();
+        // Once: a set that stops it every time is not opened in a ring.
+        const again = !stopped.has(name) && state.catalog.sets.find((s) => s.name === name);
+        stopped.add(name);
+        state.work = null;
+        if (again) await choose(again, state.preset?.name);
+        else state.shapes = [];
+      } catch {
+        // Said below either way.
+      }
+      state.problem = said;
+      render();
+    });
     busy("Reading");
     await readCatalog();
   } catch (e) {
