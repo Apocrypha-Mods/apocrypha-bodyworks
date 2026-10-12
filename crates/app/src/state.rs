@@ -232,6 +232,7 @@ impl Work {
                 gloss,
                 shine,
                 shine_strength,
+                switches,
             } => p.set_look(
                 &shape,
                 &mesh::Look {
@@ -241,6 +242,7 @@ impl Work {
                     gloss,
                     shine,
                     shine_strength,
+                    switches,
                 },
             ),
             Change::Separate { shape, to } => {
@@ -543,6 +545,9 @@ enum Change {
         gloss: f32,
         shine: [f32; 3],
         shine_strength: f32,
+        /// Its lighting's two sets of switches; those that say what the
+        /// shape itself is are kept as they are.
+        switches: [u32; 2],
     },
     /// Part a shape from its bones.
     RemoveSkinning {
@@ -1154,7 +1159,7 @@ impl State {
                     .collect::<Vec<_>>(),
                 "look": mesh::look(&nif, m.block).map(|l| json!({
                     "glow": l.glow, "glowStrength": l.glow_strength, "alpha": l.alpha,
-                    "gloss": l.gloss, "shine": l.shine, "shineStrength": l.shine_strength,
+                    "gloss": l.gloss, "shine": l.shine, "shineStrength": l.shine_strength, "switches": l.switches,
                 })),
                 "sliders": sliders,
                 "zaps": zaps,

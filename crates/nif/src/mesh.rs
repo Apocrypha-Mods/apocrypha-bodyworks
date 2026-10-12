@@ -65,7 +65,14 @@ pub struct Look {
     pub gloss: f32,
     pub shine: [f32; 3],
     pub shine_strength: f32,
+    /// Its lighting's two sets of thirty-two switches.
+    pub switches: [u32; 2],
 }
+
+/// The switches that say what the shape itself is (that it follows bones,
+/// that its vertices carry colours): the shape's to keep in step, and not
+/// changed as a look is.
+pub const KEPT_SWITCHES: [u32; 2] = [1 << 1, 1 << 5];
 
 /// Where in a lighting shader's kept bytes each number of a [`Look`] is.
 const LOOK_BYTES: usize = 48;
@@ -114,6 +121,7 @@ pub fn look(nif: &Nif, block: usize) -> Option<Look> {
         gloss: f(7),
         shine: [f(8), f(9), f(10)],
         shine_strength: f(11),
+        switches: [s.flags1, s.flags2],
     })
 }
 
@@ -138,6 +146,8 @@ pub fn set_look(nif: &mut Nif, block: usize, look: &Look) -> Result<(), NifError
     put(5, look.alpha);
     put(7, look.gloss);
     put(11, look.shine_strength);
+    s.flags1 = (look.switches[0] & !KEPT_SWITCHES[0]) | (s.flags1 & KEPT_SWITCHES[0]);
+    s.flags2 = (look.switches[1] & !KEPT_SWITCHES[1]) | (s.flags2 & KEPT_SWITCHES[1]);
     nif.blocks[at].data = s.write();
     Ok(())
 }

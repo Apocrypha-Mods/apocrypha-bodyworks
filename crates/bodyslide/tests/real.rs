@@ -1653,9 +1653,29 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
     look.glow = [1.0, 0.5, 0.25];
     look.glow_strength = 2.0;
     look.gloss = 80.0;
+    // Switches are changed, but for the two that say what the shape is.
+    let kept = [look.switches[0] & (1 << 1), look.switches[1] & (1 << 5)];
+    look.switches = [
+        look.switches[0] ^ ((1 << 1) | (1 << 9)),
+        look.switches[1] ^ ((1 << 5) | (1 << 4)),
+    ];
     let mut glowing = project.clone();
     glowing.set_look("Bra", &look).unwrap();
-    assert_eq!(lit(&glowing), look);
+    let got = lit(&glowing);
+    assert_eq!(
+        [got.switches[0] & (1 << 1), got.switches[1] & (1 << 5)],
+        kept
+    );
+    look.switches = got.switches;
+    assert_eq!(got, look);
+    let untouched = lit(&project).switches;
+    assert_eq!(
+        (
+            got.switches[0] ^ untouched[0],
+            got.switches[1] ^ untouched[1]
+        ),
+        (1 << 9, 1 << 4)
+    );
     let changed = glowing
         .nif
         .blocks
