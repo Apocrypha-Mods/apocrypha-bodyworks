@@ -730,6 +730,89 @@ impl Project {
         Ok(skin.bones.len())
     }
 
+    /// How much each vertex of `shape` follows `bone`: nothing for a bone
+    /// the shape does not follow at all.
+    pub fn bone_weights(&self, shape: &str, bone: &str) -> Result<Vec<f32>, Error> {
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let skin = weights::read(&self.nif, block).map_err(|e| Error::Invalid(e.to_string()))?;
+        let at = skin.bones.iter().position(|b| b == bone);
+        Ok(skin
+            .vertices
+            .iter()
+            .map(|slots| {
+                slots
+                    .iter()
+                    .find(|(b, w)| Some(*b as usize) == at && *w > 0.0)
+                    .map_or(0.0, |x| x.1)
+            })
+            .collect())
+    }
+
+    /// Set how much some vertices of `shape` follow `bone` (nothing to all
+    /// of it). What each follows of its other bones is scaled to make room,
+    /// keeping their shares of each other; a vertex with no other bone
+    /// follows this one wholly. A bone the shape did not follow is placed
+    /// as another shape of the mesh that follows it has it.
+    pub fn paint_weights(
+        &mut self,
+        shape: &str,
+        bone: &str,
+        painted: &[(u16, f32)],
+    ) -> Result<(), Error> {
+        self.shape(shape)?;
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let mut skin = weights::read(&self.nif, block).map_err(fail)?;
+        let (at, like) = match skin.bones.iter().position(|b| b == bone) {
+            Some(at) => (at, None),
+            None => {
+                let like = mesh::shapes(&self.nif).into_iter().find(|other| {
+                    *other != block
+                        && mesh::bone_names(&self.nif, *other)
+                            .iter()
+                            .any(|b| b == bone)
+                });
+                if like.is_none() {
+                    return invalid(format!("No shape here follows a bone named {bone}."));
+                }
+                skin.bones.push(bone.to_string());
+                (skin.bones.len() - 1, like)
+            }
+        };
+        for (vertex, weight) in painted {
+            let Some(slots) = skin.vertices.get_mut(*vertex as usize) else {
+                return invalid(format!("{shape} has {} vertices.", skin.vertices.len()));
+            };
+            if !weight.is_finite() {
+                continue;
+            }
+            let weight = weight.clamp(0.0, 1.0);
+            let mut all: Vec<(u16, f32)> = slots
+                .iter()
+                .copied()
+                .filter(|(b, w)| *w > 0.0 && *b as usize != at)
+                .collect();
+            let rest: f32 = all.iter().map(|x| x.1).sum();
+            if rest > 0.0 {
+                for x in &mut all {
+                    x.1 *= (1.0 - weight) / rest;
+                }
+                all.push((at as u16, weight));
+            } else if weight > 0.0 {
+                all.push((at as u16, 1.0));
+            } else {
+                // Its only bone: it has to follow something.
+                continue;
+            }
+            *slots = weights::settled(&all);
+        }
+        weights::write(&mut self.nif, block, &skin, like).map_err(fail)
+    }
+
     /// Where a build of the project goes, and whether as two meshes.
     pub fn output(&mut self, folder: &str, file: &str, weights: bool) -> Result<(), Error> {
         let file = file_name(file.trim().trim_end_matches(".nif"));

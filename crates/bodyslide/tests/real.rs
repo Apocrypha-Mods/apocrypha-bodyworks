@@ -637,6 +637,35 @@ fn an_outfit_given_its_bodys_bones_bends_much_as_it_did() {
     assert!(project
         .copy_weights("Bra", "Bra", conform::Options::default())
         .is_err());
+    // Painted: vertex 3 follows a bone of the body's that the bra did not,
+    // by half, and what it followed before by the other half between them.
+    let fresh = body
+        .bones
+        .iter()
+        .find(|b| !skin_of(&project.nif, "Bra").bones.contains(b))
+        .unwrap()
+        .clone();
+    let was = skin_of(&project.nif, "Bra");
+    project.paint_weights("Bra", &fresh, &[(3, 0.5)]).unwrap();
+    let nif = Nif::read(&project.nif.write()).unwrap();
+    let now = skin_of(&nif, "Bra");
+    let painted = project.bone_weights("Bra", &fresh).unwrap();
+    assert!((painted[3] - 0.5).abs() < 0.002);
+    assert!(painted.iter().enumerate().all(|(v, w)| v == 3 || *w == 0.0));
+    assert!((now.vertices[3].iter().map(|x| x.1).sum::<f32>() - 1.0).abs() < 0.01);
+    for (bone, weight) in was.vertices[3].iter().filter(|x| x.1 > 0.0) {
+        let name = &was.bones[*bone as usize];
+        let after = project.bone_weights("Bra", name).unwrap()[3];
+        assert!(
+            (after - weight * 0.5).abs() < 0.01,
+            "{name}: {after} from {weight}"
+        );
+    }
+    assert_eq!(now.vertices[4], was.vertices[4]);
+    assert!(project
+        .paint_weights("Bra", "No such bone", &[(3, 0.5)])
+        .is_err());
+    assert_eq!(project.bone_weights("Bra", "No such bone").unwrap()[3], 0.0);
     // The body itself is as it was.
     assert_eq!(skin_of(&project.nif, "CBBE"), body);
 }

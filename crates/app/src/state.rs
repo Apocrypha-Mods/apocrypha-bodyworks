@@ -124,6 +124,20 @@ impl Work {
             Change::Weights { shape, body } => {
                 p.copy_weights(&shape, &body, Default::default()).map(drop)
             }
+            Change::Paint { shape, bone } => {
+                let painted: Vec<(u16, f32)> = data
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .filter_map(|c| {
+                        Some((
+                            u16::try_from(u32::from_le_bytes([c[0], c[1], c[2], c[3]])).ok()?,
+                            f32::from_le_bytes([c[4], c[5], c[6], c[7]]),
+                        ))
+                    })
+                    .collect();
+                p.paint_weights(&shape, &bone, &painted)
+            }
             Change::Stroke { shape, slider } => {
                 let moves: Vec<osd::Diff> = data
                     .as_chunks::<16>()
@@ -245,6 +259,12 @@ enum Change {
         shape: String,
         body: String,
     },
+    /// Set how much vertices of a shape follow a bone. The request's bytes
+    /// are, for each vertex, its number and the weight, four bytes each.
+    Paint {
+        shape: String,
+        bone: String,
+    },
     /// A brush stroke on a shape. The request's bytes say what moved: for
     /// each vertex its number and three offsets, as four-byte numbers (the
     /// first whole, the rest floating). With `slider`, it is what the slider
@@ -310,6 +330,9 @@ enum Request {
     /// have at `path` under the game's data folder. Any open project is
     /// let go.
     New { name: String, path: String },
+    /// How much each vertex of a shape of the open project follows a bone:
+    /// a number a vertex, after the answer.
+    BoneWeights { shape: String, bone: String },
     /// Change the open project.
     Change { change: Change },
     /// Take the last change back, or with `again` put it back.
@@ -799,6 +822,16 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 Err(e) => Answer::failed(e),
             }
         }
+        Request::BoneWeights { shape, bone } => match &state.work {
+            Some(work) => match work.project.bone_weights(&shape, &bone) {
+                Ok(weights) => Answer::with(
+                    json!({ "vertices": weights.len() }),
+                    weights.iter().flat_map(|w| w.to_le_bytes()).collect(),
+                ),
+                Err(e) => Answer::failed(e),
+            },
+            None => Answer::failed("No project is open."),
+        },
         Request::Change { change } => {
             let (held, sets) = (&state.files, &state.sets);
             let done = match &mut state.work {

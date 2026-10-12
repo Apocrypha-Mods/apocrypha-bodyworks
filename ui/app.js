@@ -80,6 +80,9 @@ const state = {
   mirror: remembered.get("brush.mirror") !== "0",
   /** The slider the brushes change (its place in the list), or -1 for the shape itself. */
   editing: -1,
+  /** The bone the weight brush paints, by name, and how much each vertex of the picked shape follows it. */
+  bone: null,
+  heat: null,
   /** Outfit Studio: the open project as it stands, changes and all. */
   work: null,
   /** Files saved here that the mods do not have yet, by lower-case path. */
@@ -275,6 +278,7 @@ function showShapes(frame) {
   if (!state.shapes.length) return;
   reshape();
   paint(state.set);
+  if (studio) heat();
   if (frame) view.frame(state.shapes.map((s) => s.base));
 }
 
@@ -723,7 +727,8 @@ function sliderRows() {
   const set = state.set;
   const two = set.weights;
   const words = state.search.toLowerCase().split(/\s+/).filter(Boolean);
-  const order = [...state.catalog.categories.map((c) => c.name), null];
+  // Two mods can name the same category: it is one category.
+  const order = [...new Set(state.catalog.categories.map((c) => c.name)), null];
   const by = new Map(order.map((c) => [c, []]));
   set.sliders.forEach((s, i) => {
     if (s.hidden) return;
@@ -884,7 +889,20 @@ function studioSide() {
   };
   const rows =
     state.side === "bones"
-      ? (picked?.bones || []).map((b) => h("div.shape", null, h("span.nm.cut", null, b || "Unnamed")))
+      ? [...(picked?.bones || []), ...[...new Set(state.shapes.flatMap((o) => o.bones))].filter((b) => !picked?.bones.includes(b)).sort()].map((b) =>
+          h(
+            "div.shape" + (state.tool === "weights" && b === state.bone ? ".on" : "") + (picked?.bones.includes(b) ? "" : ".off"),
+            {
+              onclick: () => {
+                if (state.tool !== "weights") return;
+                state.bone = b;
+                heat();
+                render();
+              },
+            },
+            h("span.nm.cut", null, b || "Unnamed"),
+          ),
+        )
       : state.shapes.map((sh, i) =>
           h(
             "div.shape" + (i === state.picked ? ".on" : "") + (sh.hidden ? ".off" : ""),
@@ -893,8 +911,10 @@ function studioSide() {
               "aria-selected": i === state.picked ? "true" : "false",
               tabIndex: 0,
               onclick: () => {
+                if (state.heat) view.mask(state.picked, state.shapes[state.picked].mask);
                 state.picked = i;
                 view.look({ picked: i });
+                heat();
                 studioSide();
               },
               oncontextmenu: (e) => {
@@ -951,6 +971,7 @@ function studioSide() {
             h("span.sub.quiet", null, (sh.base.length / 3).toLocaleString()),
           ),
         );
+  const scrolled = el.querySelector(".rows")?.scrollTop || 0;
   el.replaceChildren(
     h(
       "div.side-head",
@@ -967,6 +988,7 @@ function studioSide() {
         `${picked.name} · ${(picked.base.length / 3).toLocaleString()} points · ${(picked.shown.length / 3).toLocaleString()} triangles · ${picked.bones.length} bones`,
       ),
   );
+  el.querySelector(".rows").scrollTop = scrolled;
 }
 
 /** Outfit Studio's sliders: one value each, to see what a slider does to the outfit. */
@@ -1075,6 +1097,7 @@ const BRUSHES = [
   ["move", "Move"],
   ["smooth", "Smooth"],
   ["mask", "Mask"],
+  ["weights", "Weights"],
 ];
 
 /** How far the brush reaches, in the mesh's units. */
@@ -1112,6 +1135,20 @@ function brushing(what, ray) {
   }
   view.reach({ point: found.point, normal: found.normal, radius: r });
   if (what === "over") return false;
+  if (state.tool === "weights") {
+    if (!state.heat || !state.bone) return false;
+    if (what === "down") stroke = { tool: "weights", shape: s, before: new Float32Array(state.heat), amount: 1 };
+    const far = stroke.last ? Math.hypot(...found.point.map((c, k) => c - stroke.last[k])) : Infinity;
+    if (far < r * 0.25) return true;
+    stroke.last = found.point;
+    const reached = brush.spared(brush.reach(found.point, r, s.now), s.mask);
+    const by = (ray.alt ? -1 : 1) * (state.strength / 100) * 0.35;
+    reached.vertices.forEach((v, k) => {
+      state.heat[v] = Math.max(0, Math.min(1, state.heat[v] + by * reached.weights[k]));
+    });
+    view.mask(state.picked, state.heat);
+    return true;
+  }
   if (state.tool === "mask") {
     // Not a change to the outfit: what the other brushes are to leave alone.
     if (what === "down") stroke = { tool: "mask", shape: s, before: s.now, amount: 1 };
@@ -1173,6 +1210,30 @@ function endStroke() {
   stroke = null;
   if (!done) return false;
   if (done.tool === "mask") {
+    render();
+    return false;
+  }
+  if (done.tool === "weights") {
+    // What changed, as each vertex's new weight for the bone.
+    const changed = [];
+    state.heat.forEach((w, v) => w !== done.before[v] && changed.push(v));
+    if (changed.length) {
+      const bytes = new Uint8Array(changed.length * 8);
+      const data = new DataView(bytes.buffer);
+      changed.forEach((v, i) => {
+        data.setUint32(i * 8, v, true);
+        data.setFloat32(i * 8 + 4, state.heat[v], true);
+      });
+      try {
+        [state.work] = core.ask({ op: "change", change: { do: "paint", shape: done.shape.name, bone: state.bone } }, bytes);
+        state.problem = null;
+        state.saved = null;
+        state.exported = null;
+      } catch (e) {
+        state.problem = e.message;
+      }
+    }
+    heat();
     render();
     return false;
   }
@@ -1308,8 +1369,8 @@ function brushBar() {
         null,
         knob("Size", "size"),
         state.tool !== "mask" && state.tool !== "move" && knob("Strength", "strength"),
-        mirror,
-        state.tool === "mask" ? h("span.sub.quiet", null, "Alt uncovers") : target,
+        state.tool !== "weights" && mirror,
+        state.tool === "mask" ? h("span.sub.quiet", null, "Alt uncovers") : state.tool === "weights" ? h("span.sub.quiet.cut", null, `${state.bone || "No bone"} · Alt takes away`) : target,
         state.shapes[state.picked]?.mask.some((m) => m > 0) &&
           h(
             "button.btn.ghost.small",
@@ -1329,9 +1390,33 @@ function brushBar() {
   );
 }
 
+/**
+ * Show how much the picked shape follows the bone being painted, as the
+ * project has it; or, with another brush in hand, its mask again.
+ */
+function heat() {
+  const s = state.shapes[state.picked];
+  if (!s || !view) return;
+  state.heat = null;
+  if (state.tool === "weights" && state.work) {
+    if (!s.bones.includes(state.bone)) state.bone = s.bones[0] || state.bone;
+    try {
+      const [, numbers] = core.ask({ op: "boneWeights", shape: s.name, bone: state.bone || "" });
+      state.heat = new Float32Array(numbers.slice(0));
+    } catch (e) {
+      state.problem = e.message;
+    }
+  }
+  view.look({ heat: Boolean(state.heat) });
+  view.mask(state.picked, state.heat || s.mask);
+}
+
 /** Take a brush in hand, or with null put it down. */
 function hold(tool) {
   state.tool = tool;
+  // The weight brush paints one bone: the list shows which.
+  if (tool === "weights") state.side = "bones";
+  heat();
   view.brush = tool ? brushing : null;
   view.reach(null);
   canvas.style.cursor = tool ? "crosshair" : "";
@@ -1679,6 +1764,7 @@ function renderStudio() {
     oninput: () => ((state.search = search.value), studioSliders()),
   });
   view.look({ picked: state.picked });
+  const sideAt = document.querySelector("#side .rows")?.scrollTop || 0;
   root.replaceChildren(
     h(
       "div.bar",
@@ -1731,6 +1817,8 @@ function renderStudio() {
         : []),
   );
   studioSide();
+  const side = document.querySelector("#side .rows");
+  if (side) side.scrollTop = sideAt;
   studioSliders();
 }
 
@@ -1786,7 +1874,7 @@ function render() {
         ),
       h("button.btn.ghost", { type: "button", disabled: !set, onclick: savePreset }, "Save preset…"),
       h("span.grow"),
-      h("label.search", { style: "flex: 0 1 220px", html: GLASS }, search),
+      h("label.search", { style: "flex: 0 1 200px; min-width: 120px", html: GLASS }, search),
     ),
     h(
       "div.main",

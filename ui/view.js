@@ -10,7 +10,7 @@ void main() { vn = nm * n; vt = t; vm = m; gl_Position = mvp * vec4(p, 1.0); }`;
 const FS = `#version 300 es
 precision highp float;
 in vec3 vn; in vec2 vt; in float vm; out vec4 o;
-uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line;
+uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat;
 void main() {
   // The lines of a wireframe are one flat colour.
   if (line.a > 0.0) { o = line; return; }
@@ -24,7 +24,14 @@ void main() {
   float light = (0.22 + 0.72 * key + 0.2 * fill) * mix(1.0, 1.9, painted);
   vec3 c = base * light + vec3(0.12) * rim * mix(1.0, 0.35, painted);
   // What a mask covers is drawn dark: the brushes leave it alone.
-  c *= mix(1.0, 0.3, clamp(vm, 0.0, 1.0));
+  float m = clamp(vm, 0.0, 1.0);
+  if (heat > 0.5) {
+    // How much a vertex follows a bone: blue for a little, through green, to red for all of it.
+    vec3 ramp = m < 0.5 ? mix(vec3(0.1, 0.3, 1.0), vec3(0.1, 0.9, 0.2), m * 2.0) : mix(vec3(0.1, 0.9, 0.2), vec3(1.0, 0.15, 0.1), m * 2.0 - 2.0 + 1.0);
+    c = mix(c, ramp * (0.35 + 0.65 * light / mix(1.0, 1.9, painted)), m > 0.0 ? 0.85 : 0.0);
+  } else {
+    c *= mix(1.0, 0.3, m);
+  }
   o = vec4(pow(c, vec3(1.0 / 2.2)), 1.0);
 }`;
 
@@ -68,8 +75,9 @@ export class View {
     this.uTint = gl.getUniformLocation(prog, "tint");
     this.uPainted = gl.getUniformLocation(prog, "painted");
     this.uLine = gl.getUniformLocation(prog, "line");
+    this.uHeat = gl.getUniformLocation(prog, "heat");
     /** How shapes are drawn: with their textures, with their edges, and which one is picked out. */
-    this.looks = { painted: true, wire: false, picked: -1 };
+    this.looks = { painted: true, wire: false, picked: -1, heat: false };
     this.shapes = [];
     this.turn = FRONT;
     this.tilt = 0.08;
@@ -393,6 +401,8 @@ export class View {
       gl.bindVertexArray(s.vao);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.ib);
       const skinned = painted && s.skin;
+      // With `heat`, the picked shape's covering is read as weights.
+      gl.uniform1f(this.uHeat, this.looks.heat && picked === i ? 1 : 0);
       gl.uniform1f(this.uPainted, skinned ? 1 : 0);
       // The picked shape keeps the tint; the others step back from it.
       const dim = picked >= 0 && picked !== i ? 0.62 : 1;
