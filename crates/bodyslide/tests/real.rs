@@ -2010,3 +2010,79 @@ fn boned_name_refused(project: &apoc_bodyslide::project::Project) -> bool {
     let unturned = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
     p.new_bone("Review\0hidden", [0.0; 3], unturned).is_err()
 }
+
+#[test]
+fn a_fallout_4_shape_keeps_its_segments_and_skin_through_changes() {
+    use apoc_bodyslide::project::Project;
+    use apoc_nif::geometry::TriShape;
+    use apoc_nif::segments::Segments;
+    use apoc_nif::{mesh, weights, Nif};
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../scratch/samples/fo4/cbbe/18 Outfits BodySlide - Vanilla/Tools/BodySlide/ShapeData/CBBE Vanilla/Vault 111 Suit.nif",
+    );
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    let project = Project::from_mesh("Suit", "meshes/suit.nif", &bytes).unwrap();
+    let name = "FemaleVault111Suit:1";
+    // The shape as a file written and read again has it: its mesh, its
+    // skin, and its segments, which must hold every triangle.
+    let read = |p: &Project| {
+        let nif = Nif::read(&p.nif.write()).unwrap();
+        let at = mesh::shapes(&nif)
+            .into_iter()
+            .find(|at| mesh::name(&nif, *at).as_deref() == Some(name))
+            .unwrap();
+        let raw = TriShape::read(&nif.blocks[at].data, nif.header.stream.version).unwrap();
+        let segments = Segments::read(&raw.rest, raw.triangles.len()).unwrap();
+        (
+            mesh::read(&nif, at).unwrap(),
+            weights::read(&nif, at).unwrap(),
+            segments,
+        )
+    };
+    let (was, was_skin, was_segments) = read(&project);
+    assert!(was_skin.bones.len() > 4 && was_segments.segments.len() > 1);
+
+    let mut refined = project.clone();
+    let added = refined.refine(name, &[]).unwrap();
+    let (now, now_skin, now_segments) = read(&refined);
+    assert_eq!(now.positions.len(), was.positions.len() + added);
+    assert_eq!(now.triangles.len(), was.triangles.len() * 4);
+    assert_eq!(now_skin.bones, was_skin.bones);
+    assert_eq!(
+        &now_skin.vertices[..was_skin.vertices.len()],
+        &was_skin.vertices[..]
+    );
+    // Each segment has four times what it had.
+    for (a, b) in now_segments.segments.iter().zip(&was_segments.segments) {
+        assert_eq!(a.count, b.count * 4);
+    }
+
+    // Half its vertices gone: the segments hold what is left.
+    let half: Vec<u16> = (0..(was.positions.len() / 2) as u16).collect();
+    let mut cut = project.clone();
+    cut.delete_vertices(name, &half).unwrap();
+    let (left, left_skin, left_segments) = read(&cut);
+    assert_eq!(left.positions.len(), was.positions.len() - half.len());
+    assert_eq!(left_skin.vertices.len(), left.positions.len());
+    assert_eq!(
+        left_segments
+            .segments
+            .iter()
+            .map(|s| s.count)
+            .sum::<usize>(),
+        left.triangles.len()
+    );
+
+    // A weight painted, and every other vertex as the file had it.
+    let mut painted = project.clone();
+    painted
+        .paint_weights(name, &was_skin.bones[0], &[(0, 1.0)])
+        .unwrap();
+    let (_, painted_skin, _) = read(&painted);
+    assert_eq!(&painted_skin.vertices[1..], &was_skin.vertices[1..]);
+    assert!(painted_skin.vertices[0]
+        .iter()
+        .any(|x| x.0 == 0 && x.1 > 0.99));
+}

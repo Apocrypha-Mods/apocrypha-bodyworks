@@ -805,7 +805,9 @@ pub fn flip_facing(nif: &mut Nif, block: usize) -> Result<(), NifError> {
     for t in &mut shape.triangles {
         t.swap(1, 2);
     }
-    let skinned = shape.skin >= 0;
+    // A shape that follows no bones, or follows them as Fallout 4's do,
+    // keeps its triangles in itself alone.
+    let skinned = shape.skin >= 0 && fo4(nif, block)?.is_none();
     if skinned {
         owned(nif, block)?;
     }
@@ -844,6 +846,15 @@ pub fn across(bone: &str) -> String {
             } else {
                 found.replace("[R", "[L")
             };
+        }
+    }
+    // Fallout 4's bones say their side in their first letter, before a
+    // capital or a line (`LArm_ForeArm1_skin`, `R_RibHelper`).
+    let mut letters = bone.chars();
+    if let (Some(side @ ('L' | 'R')), Some(next)) = (letters.next(), letters.next()) {
+        if next.is_ascii_uppercase() || next == '_' {
+            let twin = if side == 'L' { 'R' } else { 'L' };
+            return format!("{twin}{}", &bone[1..]);
         }
     }
     bone.to_string()
@@ -1030,6 +1041,64 @@ pub fn rebuild(
     like: Option<usize>,
 ) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
+    if let Some(at) = fo4(nif, block)? {
+        // Fallout 4: vertices and triangles in the shape itself, the
+        // triangles laid down group after group for its segments, and
+        // then what each vertex follows.
+        let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+        let Some(layout) = Layout::of(shape.vertex_desc, stream) else {
+            return unsupported("the shape keeps no vertices this can read");
+        };
+        let stride = layout.stride.max(1);
+        let count = vertex_data.len() / stride;
+        if !vertex_data.len().is_multiple_of(stride) || count == 0 || count > u16::MAX as usize {
+            return unsupported("that is not a number of vertices one shape can hold");
+        }
+        if parts
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|v| *v as usize >= count)
+        {
+            return unsupported("a triangle names a vertex the shape would not have");
+        }
+        if skin.vertices.len() != count {
+            return unsupported("the skin is for another number of vertices");
+        }
+        let (triangles, rest) = if nif.kind_of(block) == "BSSubIndexTriShape" {
+            let was = crate::segments::Segments::read(&shape.rest, shape.triangles.len())?;
+            // One list for a shape of many groups (a mesh from outside,
+            // which knows nothing of them): all of it in the first
+            // segment, in none of its runs.
+            let parts = if parts.len() == 1 && was.groups() > 1 {
+                let first = was.segments.first().map_or(0, |s| s.runs.len());
+                let mut all = vec![Vec::new(); was.groups()];
+                all[first] = parts.into_iter().next().unwrap_or_default();
+                all
+            } else {
+                parts
+            };
+            let Some((triangles, now)) = was.gathered(parts) else {
+                return unsupported("the shape has not that many groups of triangles");
+            };
+            (triangles, Some(now.write()))
+        } else {
+            let [triangles] = <[Vec<[u16; 3]>; 1]>::try_from(parts)
+                .map_err(|_| NifError::Unsupported("the shape has not that many parts".into()))?;
+            (triangles, None)
+        };
+        // Worked out on a copy: a skin that cannot be written leaves the
+        // shape as it was.
+        let mut staged = nif.clone();
+        shape.hold(shape.vertex_desc, vertex_data, count as u16, triangles);
+        if let Some(rest) = rest {
+            shape.rest = rest;
+        }
+        staged.blocks[block].data = shape.write(stream);
+        fo4_write(&mut staged, block, &at, skin, like)?;
+        *nif = staged;
+        return Ok(());
+    }
     if let Some(mut shape) = bare(nif, block)? {
         // A shape that follows no bones keeps all of it in itself.
         let Some(layout) = Layout::of(shape.vertex_desc, stream) else {
@@ -1210,6 +1279,35 @@ pub type Packed = (Vec<u8>, Layout, Vec<Vec<[u16; 3]>>);
 /// by part: what [`rebuild`] takes back.
 pub fn packed(nif: &Nif, block: usize) -> Result<Packed, NifError> {
     let stream = nif.header.stream.version;
+    if fo4(nif, block)?.is_some() {
+        // Fallout 4: the vertices are the shape's own, and its triangles
+        // are dealt into the groups its segments make of them.
+        let shape = TriShape::read(&nif.blocks[block].data, stream)?;
+        let Some(layout) = Layout::of(shape.vertex_desc, stream) else {
+            return unsupported("the shape keeps no vertices this can read");
+        };
+        let stride = layout.stride.max(1);
+        let count = shape.vertex_data.len() / stride;
+        if !shape.vertex_data.len().is_multiple_of(stride)
+            || count > u16::MAX as usize
+            || shape
+                .triangles
+                .iter()
+                .flatten()
+                .any(|v| *v as usize >= count)
+        {
+            return Err(NifError::Corrupt(
+                "the shape's vertices and triangles are out of step".into(),
+            ));
+        }
+        let parts = if nif.kind_of(block) == "BSSubIndexTriShape" {
+            crate::segments::Segments::read(&shape.rest, shape.triangles.len())?
+                .dealt(&shape.triangles)
+        } else {
+            vec![shape.triangles.clone()]
+        };
+        return Ok((shape.vertex_data, layout, parts));
+    }
     if let Some(shape) = bare(nif, block)? {
         let Some(layout) = Layout::of(shape.vertex_desc, stream) else {
             return unsupported("the shape keeps no vertices this can read");
@@ -1443,7 +1541,9 @@ pub fn weld(nif: &mut Nif, block: usize) -> Result<Vec<u16>, NifError> {
                 .collect()
         })
         .collect();
-    if parts.iter().any(Vec::is_empty) {
+    // A part of a skin has to hold something; a group of Fallout 4's
+    // segments may hold nothing, and many do.
+    if fo4(nif, block)?.is_none() && parts.iter().any(Vec::is_empty) {
         return unsupported("welded, a part of the shape would have no triangle left");
     }
     let skin = Skin {
@@ -1478,6 +1578,8 @@ pub enum EdgeDone {
 
 /// Do `op` to the edge between vertices `a` and `b` of the shape at `block`.
 pub fn edge(nif: &mut Nif, block: usize, a: u16, b: u16, op: EdgeOp) -> Result<EdgeDone, NifError> {
+    // A group of Fallout 4's segments may be left holding nothing.
+    let loose = fo4(nif, block)?.is_some();
     let stream = nif.header.stream.version;
     let (bytes, layout, mut parts) = packed(nif, block)?;
     let stride = layout.stride.max(1);
@@ -1613,7 +1715,7 @@ pub fn edge(nif: &mut Nif, block: usize, a: u16, b: u16, op: EdgeOp) -> Result<E
                     .map(|t| t.map(|v| now[v as usize]))
                     .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
                     .collect();
-                if triangles.is_empty() {
+                if triangles.is_empty() && !loose {
                     return unsupported("that would leave a part of the shape with no triangle");
                 }
             }

@@ -77,6 +77,18 @@ fn restrung(
         "BSLightingShaderProperty" => {
             let mut s = LightingShader::read(data, stream)?;
             s.name = map(s.name);
+            // Fallout 4's names a second text, the material it is made
+            // from, in the fifth number after its textures (every one of
+            // 3,249 measured does, `--example fo4root`).
+            if (130..=139).contains(&stream) {
+                let Some(at) = s.rest.get_mut(16..20) else {
+                    return Err(NifError::Unsupported(
+                        "the shape's lighting is not laid out as others were found to be".into(),
+                    ));
+                };
+                let was = i32::from_le_bytes([at[0], at[1], at[2], at[3]]);
+                at.copy_from_slice(&map(was).to_le_bytes());
+            }
             Ok(s.write())
         }
         "NiStringExtraData" => first(data, 2, map),
@@ -85,6 +97,8 @@ fn restrung(
         | "NiSkinPartition"
         | "NiSkinInstance"
         | "BSDismemberSkinInstance"
+        | "BSSkin::Instance"
+        | "BSSkin::BoneData"
         | "BSShaderTextureSet" => Ok(data.to_vec()),
         _ => Err(NifError::Unsupported(format!(
             "the texts of a {kind} are not known"

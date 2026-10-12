@@ -60,11 +60,17 @@ option's files), with `TOOLS=data/tools/bodyslide/` for the same examples:
 the original's file byte for byte. The rest differ by a few bytes each: a
 handful of vertices with no direction to face, and where the reference to
 the morph file sits among a mesh's other extra data. Building, the preview
-and saving presets work. In the Studio, moving vertices, sliders,
-transforms, bones and their weights (painted, copied, sent to FBX) work:
-all 3,253 of its skins read and write back as they were
-(`--example skinsame`). What changes a shape's triangles does not yet: its
-segments are kept as bytes, not understood.
+and saving presets work. In the Studio its skins (bones, weights, where
+each bone stands; all 3,253 read and write back as they were,
+`--example skinsame`) and its segments (all 3,195 likewise,
+`--example segback`) are understood, so shapes are refined, welded, cut,
+separated, duplicated, mirrored, made from files, and have weights
+painted and copied, their segments holding every triangle afterwards
+(`--example statics` over 1,643 meshes). Not yet for Fallout 4: merging two
+shapes, giving a shape colours or parting it from its bones, changing its
+lighting (it is drawn from material files), editing which triangles are in
+which segment, and a bone no shape of the mesh follows yet (nothing in
+these files says where one stands).
 
 ## How fast it is
 

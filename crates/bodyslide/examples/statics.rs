@@ -84,6 +84,15 @@ fn main() {
                 .into_iter()
                 .find(|at| mesh::name(&nif, *at).as_deref() == Some(shape.as_str()))?;
             let m = mesh::read(&nif, at).ok()?;
+            // Fallout 4's segments still hold every triangle, in order.
+            if nif.kind_of(at) == "BSSubIndexTriShape" {
+                let raw = apoc_nif::geometry::TriShape::read(
+                    &nif.blocks[at].data,
+                    nif.header.stream.version,
+                )
+                .ok()?;
+                apoc_nif::segments::Segments::read(&raw.rest, raw.triangles.len()).ok()?;
+            }
             Some((m.positions.len(), m.triangles.len()))
         };
         let was = after(&project).unwrap_or_default();
@@ -165,10 +174,17 @@ fn main() {
         let mut p = project.clone();
         note("weld", p.weld(&shape).map(drop).map_err(said));
         let mut p = project.clone();
-        note(
-            "delete vertices",
-            p.delete_vertices(&shape, &half).map_err(said),
-        );
+        let deleted = p.delete_vertices(&shape, &half).map_err(said);
+        if deleted.is_ok() {
+            note(
+                "deleted: read back, segments and all",
+                after(&p)
+                    .filter(|n| n.0 == was.0 - half.len())
+                    .map(drop)
+                    .ok_or(path.clone()),
+            );
+        }
+        note("delete vertices", deleted);
         let mut p = project.clone();
         note(
             "separate",

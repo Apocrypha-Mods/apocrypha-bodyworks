@@ -526,7 +526,34 @@ pub fn remove_vertices(nif: &mut Nif, block: usize, gone: &[bool]) -> Result<usi
         (shape.skin, left)
     } else if is_tri_shape(&kind) {
         let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+        // Fallout 4's segments are dealt the triangles that are left.
+        let segments = if kind == "BSSubIndexTriShape" && shape.has_vertices() {
+            let was = crate::segments::Segments::read(&shape.rest, shape.triangles.len())?;
+            Some((was.group_of(), was))
+        } else {
+            None
+        };
+        let before = shape.triangles.clone();
         shape.retain(&now, kind == "BSDynamicTriShape");
+        if let Some((groups, was)) = segments {
+            let at = |v: u16| now.get(v as usize).copied().flatten();
+            let mut parts = vec![Vec::new(); was.groups()];
+            for (t, group) in before.iter().zip(groups) {
+                if let (Some(a), Some(b), Some(c)) = (at(t[0]), at(t[1]), at(t[2])) {
+                    parts[group].push([a, b, c]);
+                }
+            }
+            let (triangles, now) = was.gathered(parts).ok_or_else(|| {
+                NifError::Unsupported("the shape's segments could not be kept in step".into())
+            })?;
+            if triangles.len() != shape.triangles.len() {
+                return Err(NifError::Corrupt(
+                    "the shape's triangles and its segments are out of step".into(),
+                ));
+            }
+            shape.triangles = triangles;
+            shape.rest = now.write();
+        }
         let left = shape.triangles.len();
         nif.blocks[block].data = shape.write(stream);
         (shape.skin, left)

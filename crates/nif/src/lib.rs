@@ -17,6 +17,7 @@ pub mod geometry_le;
 pub mod io;
 pub mod mesh;
 pub mod node;
+pub mod segments;
 pub mod shader;
 pub mod shading;
 pub mod skin;
