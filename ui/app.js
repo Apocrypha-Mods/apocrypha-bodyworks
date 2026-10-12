@@ -2468,11 +2468,37 @@ function undo(again) {
   }
 }
 
+/** The sets the mods name as bodies to fit outfits to (`RefTemplates`), by set name, each with the name it is offered under. Read once a catalogue. */
+async function templates() {
+  if (state.templates && state.templates.of === state.catalog) return state.templates.named;
+  const named = new Map();
+  try {
+    const list = await host.request("files.list", { folder: `${TOOLS}/RefTemplates` }).catch(() => []);
+    for (const f of list.filter((x) => /\.xml$/i.test(x.path))) {
+      const text = new TextDecoder().decode(await host.request("files.read", { path: f.path }));
+      // Each: which set, and under what name. Read as text: a file of the mods' is not trusted to be more.
+      for (const m of text.matchAll(/<Template\b([^>]*)>([^<]*)<\/Template>/g)) {
+        const set = /\bset="([^"]*)"/.exec(m[1])?.[1];
+        const unescaped = (t) => t.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+        if (set && !named.has(unescaped(set))) named.set(unescaped(set), unescaped(m[2]).trim() || unescaped(set));
+      }
+    }
+  } catch {
+    // None to offer first, then.
+  }
+  state.templates = { of: state.catalog, named };
+  return named;
+}
+
 /** Outfit Studio: bring a body in from another project, as what the outfit is fitted to. */
-function reference(anchor) {
+async function reference(anchor) {
+  // The bodies the mods themselves name as ones to fit outfits to come first.
+  const named = await templates();
+  const first = state.catalog.sets.filter((s) => named.has(s.name));
+  const rest = state.catalog.sets.filter((s) => !named.has(s.name));
   menu(
     anchor,
-    state.catalog.sets.map((s) => ({ name: s.name, note: s.groups[0], value: s })),
+    [...first.map((s) => ({ name: named.get(s.name), note: "Template", value: s })), ...rest.map((s, i) => ({ name: s.name, note: s.groups[0], value: s, rule: i === 0 && first.length > 0 }))],
     async (set) => {
       busy("Reading");
       try {
