@@ -57,11 +57,12 @@ const answers = {
   "files.list": async (a) => (await fetch("/list?folder=" + encodeURIComponent(a.folder))).json(),
   "files.picture": async (a) => { const r = await fetch("/picture?longest=" + (a.longest || 2048) + "&path=" + encodeURIComponent(a.path)); if (!r.ok) throw new Error("No such texture."); return r.arrayBuffer(); },
   "files.read": async (a) => { const r = await fetch("/read?path=" + encodeURIComponent(a.path)); if (!r.ok) throw new Error("No such file."); return r.arrayBuffer(); },
-  "output.write": async (a) => { for (const f of a.files) await fetch("/write?path=" + encodeURIComponent(f.path), { method: "POST", body: f.bytes }); window.written = (window.written || []).concat(a.files.map((f) => f.path)); return { files: a.files.length }; },
+  "output.write": async (a) => { window.into = a.into || null; for (const f of a.files) await fetch("/write?path=" + encodeURIComponent(f.path), { method: "POST", body: f.bytes }); window.written = (window.written || []).concat(a.files.map((f) => f.path)); return { files: a.files.length }; },
   // No dialogs here: a save lands under the output folder, and an open hands back what a test put in window.toOpen.
   "disk.save": async (a) => { await fetch("/write?path=" + encodeURIComponent("disk/" + a.name), { method: "POST", body: a.bytes }); window.saved = a.name; return { saved: true }; },
   "disk.open": async () => window.toOpen || null,
   "disk.folder": async (a) => { for (const f of a.files) await fetch("/write?path=" + encodeURIComponent("folder/" + f.path), { method: "POST", body: f.bytes }); window.foldered = a.files.map((f) => f.path); return { saved: a.files.length }; },
+  "mods.list": async () => ["Bodyslide Presets", "CBBE 3BA", "SkyUI", "RaceMenu", "XP32 Skeleton", "CBPC", "Faster HDT-SMP", "UBE 2.0", "Engine Fixes", "PapyrusUtil"].map((name, i) => ({ id: "mod-" + i, name })),
   "output.open": async (a) => { window.opened = a.name; return null; },
   "output.remove": async (a) => { const had = window.written || []; const gone = a.paths.filter((p) => had.includes(p)); window.written = had.filter((p) => !gone.includes(p)); window.removed = (window.removed || []).concat(gone); return { removed: gone.length }; },
   "apply.review": async () => { window.reviewed = true; },

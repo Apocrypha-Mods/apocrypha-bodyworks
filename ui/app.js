@@ -74,6 +74,15 @@ const state = {
   built: null,
   /** The mod builds go into. */
   output: remembered.get("output") || OUTPUT,
+  /** The installed mod builds are made part of: `{ id, name }`, or null for a mod of their own. */
+  into: (() => {
+    try {
+      const kept = JSON.parse(remembered.get("into") || "null");
+      return kept && typeof kept.id === "string" && typeof kept.name === "string" ? kept : null;
+    } catch {
+      return null;
+    }
+  })(),
   /** BodySlide: the group whose outfits are listed, or null for all. */
   group: null,
   /** Brushes work only on what is joined to what is under them. */
@@ -475,10 +484,69 @@ function filesOf(built, bytes) {
   }));
 }
 
+/** Where builds go: the mod kept under the output's name, and the installed mod it is part of when one was picked. */
+function target() {
+  return state.into ? { name: state.output, into: state.into.id } : { name: state.output };
+}
+
+/** A mod's name as an output can be kept under it. */
+function outputName(name) {
+  const plain = name.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").replace(/^[. ]+|[. ]+$/g, "");
+  return `${plain.slice(0, 66) || "Mod"} (Bodyworks)`;
+}
+
+/** Choose the mod builds go into: Bodyworks' own, a new one, or one that is installed. */
+async function chooseTarget(anchor) {
+  let mods = [];
+  try {
+    mods = await host.request("mods.list");
+  } catch {
+    // A mod manager from before this could be asked: its own mod, or a new one.
+  }
+  const own = !state.into;
+  menu(
+    anchor,
+    [
+      { name: OUTPUT, value: "own", on: own && state.output === OUTPUT },
+      own && state.output !== OUTPUT && { name: state.output, value: "keep", on: true },
+      { name: "New mod…", value: "new" },
+      ...mods
+        // Its own outputs are picked by their names above.
+        .filter((m) => !/ \(Bodyworks\)$/.test(m.name) && m.name !== OUTPUT && m.name !== state.output)
+        .map((m, i) => ({ name: m.name, value: m, rule: i === 0, on: state.into?.id === m.id })),
+    ].filter(Boolean),
+    (picked) => {
+      const into = (name, mod) => {
+        state.output = name;
+        state.into = mod;
+        remembered.set("output", name);
+        remembered.set("into", mod ? JSON.stringify(mod) : "");
+        state.built = null;
+        foot();
+      };
+      if (picked === "keep") return;
+      if (picked === "own") return into(OUTPUT, null);
+      if (picked !== "new") return into(outputName(picked.name), { id: picked.id, name: picked.name });
+      rename(
+        "New mod",
+        "",
+        (to) => {
+          const name = to.trim();
+          if (!name || name.length > 80 || /^[.]|[\\/:*?"<>|]/.test(name)) throw new Error('A mod\'s name, without \\ / : * ? " < > |');
+          into(name, null);
+        },
+        "Done",
+      );
+    },
+    "Search mods",
+    true,
+  );
+}
+
 async function write(files) {
   await host.request(
     "output.write",
-    { name: state.output, files },
+    { ...target(), files },
     files.map((f) => f.bytes),
   );
 }
@@ -647,7 +715,7 @@ function savePreset() {
       const bytes = new TextEncoder().encode(text).buffer;
       const rel = `SliderPresets/${wanted}.xml`;
       core.ask({ op: "put", path: rel }, new Uint8Array(bytes));
-      await host.request("output.write", { name: state.output, files: [{ path: `${TOOLS}/${rel}`, bytes }] }, [bytes]);
+      await host.request("output.write", { ...target(), files: [{ path: `${TOOLS}/${rel}`, bytes }] }, [bytes]);
       const made = {
         name: wanted,
         set: preset.set,
@@ -700,7 +768,7 @@ async function addToGroup() {
       const bytes = new TextEncoder().encode(text).buffer;
       state.kept.set(rel.toLowerCase(), bytes);
       core.ask({ op: "put", path: rel }, new Uint8Array(bytes));
-      host.request("output.write", { name: state.output, files: [{ path: `${TOOLS}/${rel}`, bytes: bytes.slice(0) }] }).catch((e) => {
+      host.request("output.write", { ...target(), files: [{ path: `${TOOLS}/${rel}`, bytes: bytes.slice(0) }] }).catch((e) => {
         state.problem = e.message;
         render();
       });
@@ -752,7 +820,7 @@ async function outOfGroup() {
     const bytes = new TextEncoder().encode(text).buffer;
     state.kept.set(key, bytes);
     core.ask({ op: "put", path: rel }, new Uint8Array(bytes));
-    await host.request("output.write", { name: state.output, files: [{ path: `${TOOLS}/${rel}`, bytes: bytes.slice(0) }] });
+    await host.request("output.write", { ...target(), files: [{ path: `${TOOLS}/${rel}`, bytes: bytes.slice(0) }] });
     set.groups = set.groups.filter((g) => g !== group);
     if (!state.catalog.sets.some((s) => s.groups.includes(group))) {
       state.catalog.groups = state.catalog.groups.filter((g) => g !== group);
@@ -1083,22 +1151,9 @@ function foot() {
         id: "status",
         title: "The mod builds go into",
         disabled: Boolean(state.busy),
-        onclick: () =>
-          rename(
-            "Build into",
-            state.output,
-            (to) => {
-              const name = to.trim();
-              if (!name || name.length > 80 || /^[.]|[\\/:*?"<>|]/.test(name)) throw new Error('A mod\'s name, without \\ / : * ? " < > |');
-              state.output = name;
-              remembered.set("output", name);
-              state.built = null;
-              foot();
-            },
-            "Done",
-          ),
+        onclick: (e) => chooseTarget(e.currentTarget),
       },
-      `Into ${state.output}`,
+      `Into ${state.into ? state.into.name : state.output}`,
     ),
     state.problem
       ? h("span.sub.warn.cut", null, state.problem)
@@ -1138,7 +1193,7 @@ function foot() {
       "button.btn.ghost",
       {
         type: "button",
-        title: `What is built into ${state.output}`,
+        title: `What is built into ${state.into ? state.into.name : state.output}`,
         onclick: () =>
           host.request("output.open", { name: state.output }).catch((e) => {
             state.problem = e.message;
@@ -3534,7 +3589,7 @@ function renderStudio() {
             h(
               "div.bar",
               null,
-              h("span.sub.cut", null, `${state.saved} saved into ${state.output}`),
+              h("span.sub.cut", null, `${state.saved} saved into ${state.into ? state.into.name : state.output}`),
               h("span.grow"),
               h("button.btn.primary", { type: "button", onclick: () => host.request("apply.review").catch(() => {}) }, "Apply"),
             ),
@@ -3544,7 +3599,7 @@ function renderStudio() {
             h(
               "div.bar",
               null,
-              h("span.sub.cut", null, `${state.exported} exported into ${state.output}`),
+              h("span.sub.cut", null, `${state.exported} exported into ${state.into ? state.into.name : state.output}`),
               h("span.grow"),
               h("button.btn.primary", { type: "button", onclick: () => host.request("apply.review").catch(() => {}) }, "Apply"),
             ),
