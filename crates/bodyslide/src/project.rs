@@ -452,6 +452,56 @@ impl Project {
         Ok(())
     }
 
+    /// Say what a slider that moves the texture does to a shape of the
+    /// project's own: for each vertex given, how far its place in the
+    /// texture goes, across and down. What it did to that shape before is
+    /// put aside for this.
+    pub fn set_uv_moves(
+        &mut self,
+        shape: &str,
+        slider: &str,
+        moves: &[(u16, [f32; 2])],
+    ) -> Result<(), Error> {
+        let (at, index) = (self.shape(shape)?, self.slider(slider)?);
+        if !self.set.sliders[index].uv {
+            return invalid(format!("{slider} does not move the texture."));
+        }
+        let said = self.set.shapes[at].clone();
+        if said.data_folder.is_some() {
+            return invalid(format!(
+                "{shape} is another project's, and is not changed from here."
+            ));
+        }
+        let count = self
+            .block(shape)
+            .and_then(|b| mesh::read(&self.nif, b).ok())
+            .map_or(0, |m| m.uvs.len());
+        if count == 0 {
+            return invalid(format!("{shape} has no places in a texture to move."));
+        }
+        if moves
+            .iter()
+            .any(|(v, by)| *v as usize >= count || by.iter().any(|c| !c.is_finite()))
+        {
+            return invalid(format!("{shape} has {count} vertices."));
+        }
+        let diffs: Vec<Diff> = moves
+            .iter()
+            .filter(|(_, by)| *by != [0.0; 2])
+            .map(|(vertex, by)| Diff {
+                vertex: *vertex,
+                offset: [by[0], by[1], 0.0],
+            })
+            .collect();
+        let own = &mut self.own[index];
+        own.retain(|o| o.target != said.target);
+        own.push(Own {
+            target: said.target,
+            diffs: Arc::new(diffs),
+        });
+        Ok(())
+    }
+
     /// Move a slider to be the `to`th.
     pub fn move_slider(&mut self, name: &str, to: usize) -> Result<(), Error> {
         let at = self.slider(name)?;

@@ -317,6 +317,24 @@ impl Work {
                 p.move_to_part(&shape, &numbers(data), to, part).map(drop)
             }
             Change::Combine { name, values } => p.combine(&name, &values),
+            Change::UvMoves { shape, slider } => {
+                // A vertex's number, then how far across and how far down.
+                let moves: Vec<(u16, [f32; 2])> = data
+                    .as_chunks::<12>()
+                    .0
+                    .iter()
+                    .filter_map(|c| {
+                        Some((
+                            u16::try_from(u32::from_le_bytes([c[0], c[1], c[2], c[3]])).ok()?,
+                            [
+                                f32::from_le_bytes([c[4], c[5], c[6], c[7]]),
+                                f32::from_le_bytes([c[8], c[9], c[10], c[11]]),
+                            ],
+                        ))
+                    })
+                    .collect();
+                p.set_uv_moves(&shape, &slider, &moves)
+            }
             Change::Conversion { name, values } => p.conversion(&name, &values),
             Change::ImportMorphs => p.import_morphs(data).map(drop),
             Change::ImportSlider { slider } => p.import_slider(&slider, data).map(drop),
@@ -681,6 +699,13 @@ enum Change {
         to: Option<usize>,
         #[serde(default)]
         part: u16,
+    },
+    /// Say what a slider that moves the texture does to a shape. The
+    /// request's bytes are, for each vertex moved, its number in four bytes
+    /// and two floats: how far across, how far down.
+    UvMoves {
+        shape: String,
+        slider: String,
     },
     /// Make the outfit as it stands at `values` the base shape, with a new
     /// slider that takes it back to what it was.
@@ -1141,10 +1166,8 @@ impl State {
             let uvs = put_f32(&mut bytes, &mut m.uvs.iter().flatten().copied());
             let mut sliders = Vec::new();
             let mut zaps = Vec::new();
+            let mut textured = Vec::new();
             for (index, slider) in set.sliders.iter().enumerate() {
-                if slider.uv {
-                    continue;
-                }
                 for d in slider.data.iter().filter(|d| d.target == shape.target) {
                     let folder = if d.local {
                         set.data_folder.as_str()
@@ -1172,8 +1195,15 @@ impl State {
                     }
                     let vertices = put_u32(&mut bytes, &mut list.iter().map(|x| x.vertex as u32));
                     let offsets = put_f32(&mut bytes, &mut list.iter().flat_map(|x| x.offset));
-                    sliders
-                        .push(json!({ "slider": index, "vertices": vertices, "offsets": offsets }));
+                    // One that moves the texture moves places in it, not
+                    // vertices: kept apart, its numbers read the same way.
+                    let moved =
+                        json!({ "slider": index, "vertices": vertices, "offsets": offsets });
+                    if slider.uv {
+                        textured.push(moved);
+                    } else {
+                        sliders.push(moved);
+                    }
                 }
             }
             let parts: Vec<Value> = apoc_nif::weights::parts(&nif, m.block)
@@ -1220,6 +1250,7 @@ impl State {
                     "gloss": l.gloss, "shine": l.shine, "shineStrength": l.shine_strength, "switches": l.switches, "kind": l.kind, "smooth": l.smooth,
                 })),
                 "sliders": sliders,
+                "textured": textured,
                 "zaps": zaps,
                 "bones": mesh::bone_names(&nif, m.block),
                 "reference": shape.data_folder.is_some(),

@@ -244,6 +244,22 @@ function reshape() {
       s.shown = s.parts[state.part].triangles;
       view.cut(i, s.shown);
     }
+    // Its texture laid where the sliders that move it put it: only for a shape one of them is up for, or was.
+    if (s.textured.length) {
+      const up = s.textured.filter((d) => applied(cur().sliders[d.slider], values[d.slider]) !== 0);
+      if (up.length || s.laid) {
+        const laid = new Float32Array(s.uvs);
+        for (const d of up) {
+          const amount = applied(cur().sliders[d.slider], values[d.slider]);
+          for (let k = 0; k < d.vertices.length; k++) {
+            laid[d.vertices[k] * 2] += d.offsets[k * 3] * amount;
+            laid[d.vertices[k] * 2 + 1] += d.offsets[k * 3 + 1] * amount;
+          }
+        }
+        s.laid = up.length ? laid : null;
+        view.place(i, laid);
+      }
+    }
     // Shown bent, a shape is lit and drawn once, bent: not as it is and then again.
     if (bending) return;
     shade(s.now, s.shown, s.weld, s.normals, s.sum);
@@ -336,6 +352,13 @@ function showShapes(frame) {
         vertices: u32.subarray(d.vertices[0], d.vertices[0] + d.vertices[1]),
         offsets: f32.subarray(d.offsets[0], d.offsets[0] + d.offsets[1]),
       })),
+      // What sliders that move the texture do: three numbers a vertex, the first two across and down.
+      textured: (s.textured || []).map((d) => ({
+        slider: d.slider,
+        vertices: u32.subarray(d.vertices[0], d.vertices[0] + d.vertices[1]),
+        offsets: f32.subarray(d.offsets[0], d.offsets[0] + d.offsets[1]),
+      })),
+      laid: null,
     };
     made.shown = made.triangles;
     // A mask stays on the shape it was painted on, while it has the same vertices.
@@ -1533,6 +1556,7 @@ function studioSliders() {
             { name: "Flip up and down", value: ["flip", 2] },
             { name: "Export data…", value: "out", rule: true },
             { name: "Import data…", value: "in" },
+            sl.uv && state.shapes[state.picked] && { name: "Import texture places…", value: "uvIn" },
             { name: "Delete", value: "delete", danger: true, rule: true },
           ].filter(Boolean),
           (what) => {
@@ -1541,6 +1565,7 @@ function studioSliders() {
             if (what === "negate") return attempt({ do: "negateSlider", slider: sl.name });
             if (Array.isArray(what) && what[0] === "flip") return attempt({ do: "flipSlider", slider: sl.name, axis: what[1] });
             if (what === "out" || what === "in") return sliderFile(sl, what === "in");
+            if (what === "uvIn") return importUvs(sl, on);
             if (what === "mask") {
               // Covered: the vertices of the picked shape this slider moves.
               const at = cur().sliders.findIndex((x) => x.name === sl.name);
@@ -1556,7 +1581,7 @@ function studioSliders() {
       },
     };
   cur().sliders.forEach((sl, i) => {
-    if (sl.uv || !words.every((w) => sl.name.toLowerCase().includes(w))) return;
+    if (!words.every((w) => sl.name.toLowerCase().includes(w))) return;
     if (sl.zap) {
       const on = state.at[i] !== 0;
       rows.push(
@@ -3158,6 +3183,52 @@ async function sliderFile(sl, into) {
   }
 }
 
+/**
+ * Outfit Studio: what a slider that moves the texture does to a shape, from
+ * an OBJ or FBX file of the shape with its texture laid out anew: each
+ * vertex's place in the file's texture, less its place in the shape's.
+ */
+async function importUvs(sl, sh) {
+  try {
+    const picked = await host.request("disk.open", { extensions: ["obj", "fbx"] });
+    if (!picked) return;
+    const count = sh.now.length / 3;
+    let to;
+    if (/\.fbx$/i.test(picked.name)) {
+      const meshes = await fbx.read(new Uint8Array(picked.bytes));
+      const named = meshes.filter((m) => m.name === sh.name);
+      if (named.length !== 1 && meshes.length !== 1) throw new Error(`${picked.name} has ${meshes.length} meshes, and ${named.length ? "more than one" : "none"} named ${sh.name}.`);
+      const m = named.length === 1 ? named[0] : meshes[0];
+      // The place each of the file's own vertices has, by the first vertex made of it.
+      to = new Float32Array((m.points.length / 3) * 2).fill(NaN);
+      m.from.forEach((p, v) => {
+        if (Number.isNaN(to[p * 2])) to.set(m.uvs.subarray(v * 2, v * 2 + 2), p * 2);
+      });
+    } else to = obj.uvs(new TextDecoder().decode(picked.bytes));
+    if (to.length !== count * 2 || sh.uvs.length !== count * 2) {
+      const places = (n) => `${n.toLocaleString()} ${n === 1 ? "place" : "places"}`;
+      throw new Error(`${picked.name} has ${places(to.length / 2)} in the texture, and ${sh.name} ${places(sh.uvs.length / 2)}.`);
+    }
+    const moved = [];
+    for (let v = 0; v < count; v++) {
+      const [du, dv] = [to[v * 2] - sh.uvs[v * 2], to[v * 2 + 1] - sh.uvs[v * 2 + 1]];
+      if (Math.abs(du) > 1e-6 || Math.abs(dv) > 1e-6) moved.push([v, du, dv]);
+    }
+    const bytes = new Uint8Array(moved.length * 12);
+    const data = new DataView(bytes.buffer);
+    moved.forEach(([v, du, dv], i) => {
+      data.setUint32(i * 12, v, true);
+      data.setFloat32(i * 12 + 4, du, true);
+      data.setFloat32(i * 12 + 8, dv, true);
+    });
+    const [work] = core.ask({ op: "change", change: { do: "uvMoves", shape: sh.name, slider: sl.name } }, bytes);
+    taken(work);
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
+}
+
 /** Outfit Studio: what a slider starts at and how it behaves. */
 function sliderSettings(sl) {
   const number = (label, value) => {
@@ -3170,6 +3241,7 @@ function sliderSettings(sl) {
   const [hide, hidden] = option("Hidden when building", sl.hidden);
   const [clamp, clamped] = option("Kept between 0 and 100", sl.clamp);
   const [zap, zapped] = option("Removes what it marks", sl.zap);
+  const [uv, textured] = option("Moves the texture", sl.uv);
   const go = h("button.btn.primary", { type: "button" }, "Done");
   const said = h("span.sub.warn.grow.cut");
   go.addEventListener("click", () => {
@@ -3177,13 +3249,13 @@ function sliderSettings(sl) {
     const hi = Number(big.value);
     if (small.value === "" || big.value === "" || !Number.isFinite(lo) || !Number.isFinite(hi)) return;
     try {
-      change({ do: "settings", name: sl.name, small: lo, big: hi, invert: inverted(), hidden: hidden(), zap: zapped(), uv: sl.uv && !zapped(), clamp: clamped() });
+      change({ do: "settings", name: sl.name, small: lo, big: hi, invert: inverted(), hidden: hidden(), zap: zapped(), uv: textured(), clamp: clamped() });
       close(el);
     } catch (e) {
       said.textContent = e.message;
     }
   });
-  const el = sheet(sl.name, null, [h("div.pair", null, smallField, bigField), h("div.checks", null, invert, hide, clamp, zap)], [
+  const el = sheet(sl.name, null, [h("div.pair", null, smallField, bigField), h("div.checks", null, invert, hide, clamp, zap, uv)], [
     said,
     h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
     go,

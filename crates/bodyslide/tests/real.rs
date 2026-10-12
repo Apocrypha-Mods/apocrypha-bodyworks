@@ -1908,6 +1908,45 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
         .conversion("Way back", &vec![0.0; converted.set.sliders.len()])
         .is_err());
 
+    // A slider that moves the texture: made one, told what it does to a
+    // shape, and followed when the shape is built with it up.
+    let mut textured = project.clone();
+    textured.add_slider("Shifted").unwrap();
+    textured
+        .settings(
+            "Shifted",
+            apoc_bodyslide::project::Settings {
+                small: 100.0,
+                big: 100.0,
+                invert: false,
+                hidden: false,
+                zap: false,
+                uv: true,
+                clamp: false,
+            },
+        )
+        .unwrap();
+    assert!(textured
+        .set_uv_moves("Bra", "AnkleSize", &[(0, [0.1, 0.0])])
+        .is_err());
+    assert!(textured
+        .set_uv_moves("Bra", "Shifted", &[(60000, [0.1, 0.0])])
+        .is_err());
+    textured
+        .set_uv_moves("Bra", "Shifted", &[(5, [0.25, -0.125])])
+        .unwrap();
+    let plain = built(&project, "Bra");
+    let moved = built(&textured, "Bra");
+    assert!(
+        (moved.uvs[5][0] - plain.uvs[5][0] - 0.25).abs() < 0.002,
+        "{:?} {:?}",
+        moved.uvs[5],
+        plain.uvs[5]
+    );
+    assert!((moved.uvs[5][1] - plain.uvs[5][1] + 0.125).abs() < 0.002);
+    assert_eq!(moved.uvs[6], plain.uvs[6]);
+    assert_eq!(moved.positions, plain.positions);
+
     // A bone made up by hand: once, and where it was put.
     let mut boned = project.clone();
     boned

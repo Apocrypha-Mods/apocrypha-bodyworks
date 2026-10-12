@@ -327,6 +327,16 @@ export class View {
   }
 
   /** New positions and normals for shape `i`. */
+  /** Lay shape `i`'s texture by other places: two numbers a vertex. */
+  place(i, uvs) {
+    const gl = this.gl;
+    const s = this.shapes[i];
+    if (!s || !s.tb) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, s.tb);
+    gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.DYNAMIC_DRAW);
+    this.draw();
+  }
+
   move(i, positions, normals) {
     const gl = this.gl;
     const s = this.shapes[i];

@@ -27,6 +27,18 @@ export function write(shapes) {
   return out.join("\n") + "\n";
 }
 
+/** The places in the texture an OBJ file lists, in the file's order, as a flat array: a mesh's start at the top, a file's at the bottom. */
+export function uvs(text) {
+  const out = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith("vt") || (line[2] !== " " && line[2] !== "\t")) continue;
+    const [u, v] = line.slice(3).trim().split(/\s+/).map(Number);
+    if (![u, v].every((c) => Number.isFinite(Math.fround(c)))) throw new Error("The file has a place in the texture that is not two numbers.");
+    out.push(u, 1 - v);
+  }
+  return Float32Array.from(out);
+}
+
 /** The vertices of an OBJ file, in the file's order, as a flat array. */
 export function positions(text) {
   const out = [];
