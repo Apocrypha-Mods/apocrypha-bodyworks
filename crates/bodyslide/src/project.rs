@@ -4,9 +4,9 @@
 use crate::build::{Files, Output};
 use crate::conform;
 use crate::osd::{Diff, SliderData};
-use crate::set::{DataRef, Slider, SliderSet};
+use crate::set::{DataRef, Shape, Slider, SliderSet};
 use crate::Error;
-use apoc_nif::{edit, mesh, Nif};
+use apoc_nif::{copy, edit, mesh, Nif};
 use std::collections::HashMap;
 
 /// What one slider does to one of the project's own shapes.
@@ -125,6 +125,186 @@ impl Project {
             own,
             notes,
         })
+    }
+
+    /// A project begun from a mesh alone: its shapes, and no sliders yet.
+    /// `at` is where the mesh is under the game's data folder, which is
+    /// where a build of the project goes unless that is changed.
+    pub fn from_mesh(name: &str, at: &str, mesh_file: &[u8]) -> Result<Project, Error> {
+        let name = name.trim();
+        if file_name(name).is_empty() {
+            return invalid("Give the project a name.");
+        }
+        let nif = Nif::read(mesh_file).map_err(|e| Error::Invalid(e.to_string()))?;
+        let mut shapes: Vec<Shape> = Vec::new();
+        for block in mesh::shapes(&nif) {
+            let Some(shape) = mesh::name(&nif, block) else {
+                continue;
+            };
+            if !shape.is_empty() && shapes.iter().all(|s| s.name != shape) {
+                shapes.push(Shape {
+                    target: shape.clone(),
+                    name: shape,
+                    data_folder: None,
+                });
+            }
+        }
+        if shapes.is_empty() {
+            return invalid("The mesh has no shapes this can work on.");
+        }
+        let at = path(&[at]);
+        let (folder, file) = at.rsplit_once('/').unwrap_or(("meshes", &at));
+        let stem = file
+            .rsplit_once('.')
+            .map_or(file, |(stem, _)| stem)
+            .to_string();
+        // A mesh that is one of a pair by weight builds as a pair.
+        let single = stem.strip_suffix("_0").or_else(|| stem.strip_suffix("_1"));
+        Ok(Project {
+            set: SliderSet {
+                name: name.to_string(),
+                data_folder: file_name(name),
+                source_file: format!("{}.nif", file_name(name)),
+                output_path: folder.replace('/', "\\"),
+                output_file: single.unwrap_or(&stem).to_string(),
+                gen_weights: single.is_some(),
+                shapes,
+                sliders: Vec::new(),
+            },
+            nif,
+            own: Vec::new(),
+            notes: Vec::new(),
+        })
+    }
+
+    /// The same shape again under another name, doing what the first does.
+    pub fn duplicate_shape(&mut self, name: &str, to: &str) -> Result<(), Error> {
+        let to = to.trim();
+        let at = self.shape(name)?;
+        if to.is_empty() {
+            return invalid("Give the shape a name.");
+        }
+        if self
+            .set
+            .shapes
+            .iter()
+            .any(|s| s.name == to || s.target == to)
+            || self.block(to).is_some()
+        {
+            return invalid(format!("There is already a shape named {to}."));
+        }
+        let block = self
+            .block(name)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {name}.")))?;
+        let from = self.nif.clone();
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let copy = copy::copy_shape(&mut self.nif, &from, block).map_err(fail)?;
+        mesh::rename(&mut self.nif, copy, to).map_err(fail)?;
+        let first = self.set.shapes[at].clone();
+        self.set.shapes.push(Shape {
+            name: to.to_string(),
+            target: to.to_string(),
+            data_folder: first.data_folder,
+        });
+        for (slider, own) in self.set.sliders.iter_mut().zip(&mut self.own) {
+            let again: Vec<DataRef> = slider
+                .data
+                .iter()
+                .filter(|d| d.target == first.target)
+                .map(|d| DataRef {
+                    target: to.to_string(),
+                    ..d.clone()
+                })
+                .collect();
+            slider.data.extend(again);
+            let again: Vec<Own> = own
+                .iter()
+                .filter(|o| o.target == first.target)
+                .map(|o| Own {
+                    target: to.to_string(),
+                    diffs: o.diffs.clone(),
+                })
+                .collect();
+            own.extend(again);
+        }
+        Ok(())
+    }
+
+    /// Bring the first shape of another project in as this one's reference:
+    /// the body the outfit is fitted to. It keeps its sliders, which stay
+    /// that project's, and this project gains any slider of them it did not
+    /// have. A reference already here is taken out first.
+    pub fn add_reference(&mut self, other: &SliderSet, files: &dyn Files) -> Result<(), Error> {
+        let theirs = other
+            .shapes
+            .first()
+            .ok_or_else(|| Error::Invalid(format!("{} has no shapes.", other.name)))?;
+        let source = path(&["ShapeData", &other.data_folder, &other.source_file]);
+        let from = files
+            .read(&source)
+            .ok_or_else(|| Error::Invalid(format!("{source} is missing")))
+            .and_then(|b| Nif::read(&b).map_err(|e| Error::Invalid(format!("{source}: {e}"))))?;
+        let block = mesh::shapes(&from)
+            .into_iter()
+            .find(|at| mesh::name(&from, *at).as_deref() == Some(theirs.name.as_str()))
+            .ok_or_else(|| {
+                Error::Invalid(format!("{source} has no shape named {}.", theirs.name))
+            })?;
+        let before = self.clone();
+        let done = (|| {
+            while let Some(old) = self.set.shapes.iter().find(|s| s.data_folder.is_some()) {
+                let old = old.name.clone();
+                self.delete_shape(&old)?;
+            }
+            if self
+                .set
+                .shapes
+                .iter()
+                .any(|s| s.name == theirs.name || s.target == theirs.target)
+                || self.block(&theirs.name).is_some()
+            {
+                return invalid(format!(
+                    "There is already a shape named {}. Rename or delete it first.",
+                    theirs.name
+                ));
+            }
+            copy::copy_shape(&mut self.nif, &from, block)
+                .map_err(|e| Error::Invalid(e.to_string()))?;
+            let folder = theirs
+                .data_folder
+                .clone()
+                .unwrap_or_else(|| other.data_folder.clone());
+            self.set.shapes.push(Shape {
+                name: theirs.name.clone(),
+                target: theirs.target.clone(),
+                data_folder: Some(folder),
+            });
+            for slider in &other.sliders {
+                let Some(d) = slider.data.iter().find(|d| d.target == theirs.target) else {
+                    continue;
+                };
+                let at = match self.set.sliders.iter().position(|s| s.name == slider.name) {
+                    Some(at) => at,
+                    None => {
+                        self.set.sliders.push(Slider {
+                            data: Vec::new(),
+                            ..slider.clone()
+                        });
+                        self.own.push(Vec::new());
+                        self.set.sliders.len() - 1
+                    }
+                };
+                self.set.sliders[at].data.push(DataRef {
+                    local: false,
+                    ..d.clone()
+                });
+            }
+            Ok(())
+        })();
+        if done.is_err() {
+            *self = before;
+        }
+        done
     }
 
     fn slider(&self, name: &str) -> Result<usize, Error> {

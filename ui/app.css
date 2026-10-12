@@ -55,6 +55,7 @@ button { border: 0; cursor: pointer; }
 .btn.primary:hover, .btn.primary:active { background: var(--accent); filter: brightness(1.08); }
 .btn.ghost { background: none; color: var(--text-secondary); }
 .btn.ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn.small { height: 24px; padding: 0 8px; font-size: 13px; }
 .btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 
 .pick {

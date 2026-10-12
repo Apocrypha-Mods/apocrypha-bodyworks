@@ -68,6 +68,7 @@ impl Work {
         change: Change,
         data: &[u8],
         files: &dyn build::Files,
+        sets: &[set::SliderSet],
     ) -> Result<(), String> {
         let before = self.project.clone();
         let p = &mut self.project;
@@ -104,6 +105,13 @@ impl Work {
                 file,
                 weights,
             } => p.output(&folder, &file, weights),
+            Change::Duplicate { name, to } => p.duplicate_shape(&name, &to),
+            Change::Reference { set } => match sets.iter().find(|s| s.name == set) {
+                Some(other) => p.add_reference(other, files),
+                None => Err(apoc_bodyslide::Error::Invalid(format!(
+                    "There is no set named {set}."
+                ))),
+            },
             Change::Conform { shape, body } => p
                 .conform(&shape, &body, files, Default::default())
                 .map(drop),
@@ -198,6 +206,16 @@ enum Change {
         file: String,
         weights: bool,
     },
+    /// The same shape again under another name.
+    Duplicate {
+        name: String,
+        to: String,
+    },
+    /// Bring the first shape of a set in as the reference: the body the
+    /// outfit is fitted to.
+    Reference {
+        set: String,
+    },
     /// Give a shape what every slider does to another (a body), so that
     /// it follows it.
     Conform {
@@ -265,6 +283,10 @@ enum Request {
     },
     /// Open a set as a project to work on. Any open project is let go.
     Open { set: String },
+    /// Begin a project from a mesh: the request's bytes, which the mods
+    /// have at `path` under the game's data folder. Any open project is
+    /// let go.
+    New { name: String, path: String },
     /// Change the open project.
     Change { change: Change },
     /// Take the last change back, or with `again` put it back.
@@ -740,12 +762,29 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 Err(e) => Answer::failed(e),
             }
         }
-        Request::Change { change } => {
-            let held = &state.files;
-            let done = match &mut state.work {
-                Some(work) => {
-                    work.change(change, data, &|path: &str| held.get(&key(path)).cloned())
+        Request::New { name, path } => {
+            state.work = None;
+            match Project::from_mesh(&name, &path, data)
+                .map_err(|e| e.to_string())
+                .and_then(Work::of)
+            {
+                Ok(mut work) => {
+                    work.changed = true;
+                    state.work = Some(work);
+                    state.working().map_or_else(Answer::failed, Answer::ok)
                 }
+                Err(e) => Answer::failed(e),
+            }
+        }
+        Request::Change { change } => {
+            let (held, sets) = (&state.files, &state.sets);
+            let done = match &mut state.work {
+                Some(work) => work.change(
+                    change,
+                    data,
+                    &|path: &str| held.get(&key(path)).cloned(),
+                    sets,
+                ),
                 None => Err("No project is open.".to_string()),
             };
             match done {

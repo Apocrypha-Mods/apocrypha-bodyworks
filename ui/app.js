@@ -851,18 +851,11 @@ function modes() {
 }
 
 function outfitPick(label) {
-  return pickButton(label, state.set?.name || "", (b) =>
+  return pickButton(label, cur()?.name || "", (b) =>
     menu(
       b,
       state.catalog.sets.map((s) => ({ name: s.name, note: s.groups[0], value: s, on: s === state.set })),
-      (s) => {
-        if (!state.work?.changed) return choose(s);
-        const el = sheet("Unsaved changes", null, h("span.sub", null, `${state.work.name} has changes that are not saved.`), [
-          h("span.grow"),
-          h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
-          h("button.btn", { type: "button", onclick: () => (close(el), choose(s)) }, "Discard"),
-        ]);
-      },
+      (s) => leaving(() => choose(s)),
       label === "Project" ? "Search projects" : "Search outfits",
     ),
   );
@@ -909,6 +902,7 @@ function studioSide() {
                   e.currentTarget,
                   [
                     state.work && { name: "Rename…", value: "rename" },
+                    state.work && { name: "Duplicate…", value: "duplicate" },
                     ...(state.work ? bodies.map((o) => ({ name: `Conform to ${o.name}`, value: o })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
                     { name: sh.hidden ? "Show" : "Hide", value: "hide" },
@@ -917,6 +911,9 @@ function studioSide() {
                   (what) => {
                     if (what === "rename") {
                       return rename("Rename shape", sh.name, (to) => change({ do: "renameShape", from: sh.name, to }));
+                    }
+                    if (what === "duplicate") {
+                      return rename("Duplicate shape", `${sh.name} copy`, (to) => change({ do: "duplicate", name: sh.name, to }), "Duplicate");
                     }
                     if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
                     if (typeof what === "object") return attempt({ do: "conform", shape: sh.name, body: what.name });
@@ -943,7 +940,13 @@ function studioSide() {
           ),
         );
   el.replaceChildren(
-    h("div.side-head", null, h("div.seg.plain", { role: "group", "aria-label": "List" }, tab("shapes", "Shapes"), tab("bones", "Bones"))),
+    h(
+      "div.side-head",
+      null,
+      h("div.seg.plain", { role: "group", "aria-label": "List" }, tab("shapes", "Shapes"), tab("bones", "Bones")),
+      h("span.grow"),
+      state.work && h("button.btn.ghost.small", { type: "button", onclick: (e) => reference(e.currentTarget) }, "Reference…"),
+    ),
     h("div.rows", { role: state.side === "shapes" ? "listbox" : null }, rows.length ? rows : h("div.sub.quiet", { style: "padding: 8px 12px" }, "No bones")),
     picked &&
       h(
@@ -1255,10 +1258,91 @@ function undo(again) {
   }
 }
 
+/** Outfit Studio: bring a body in from another project, as what the outfit is fitted to. */
+function reference(anchor) {
+  menu(
+    anchor,
+    state.catalog.sets.map((s) => ({ name: s.name, note: s.groups[0], value: s })),
+    async (set) => {
+      busy("Reading");
+      try {
+        await prepare(set);
+        state.busy = null;
+        change({ do: "reference", set: set.name });
+      } catch (e) {
+        state.busy = null;
+        state.problem = e.message;
+        render();
+      }
+    },
+    "Search bodies",
+  );
+}
+
+/** Every mesh the mods have, listed once: `{ name, note, value }` for the menu. */
+let meshes = null;
+
+/** Outfit Studio: begin a project from a mesh of the mods'. */
+async function newProject(anchor) {
+  if (!meshes) {
+    busy("Reading");
+    const list = await host.request("files.list", { folder: "Data/meshes" }).catch(() => []);
+    meshes = list
+      .filter((f) => /\.nif$/i.test(f.path))
+      .map((f) => {
+        const rel = f.path.replace(/^Data\//i, "");
+        const cut = rel.lastIndexOf("/");
+        return { name: rel.slice(cut + 1), note: rel.slice(0, cut), value: f.path };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    state.busy = null;
+    render();
+    anchor = document.getElementById("new") || anchor;
+  }
+  menu(
+    anchor,
+    meshes,
+    async (path) => {
+      busy("Opening");
+      try {
+        const bytes = await host.request("files.read", { path });
+        const rel = path.replace(/^Data\//i, "");
+        const name = rel.split("/").pop().replace(/\.nif$/i, "").replace(/_[01]$/, "");
+        const [work] = core.ask({ op: "new", name, path: rel }, new Uint8Array(bytes));
+        state.work = work;
+        state.at = [];
+        state.editing = -1;
+        state.picked = 0;
+        state.shapes = [];
+        state.problem = null;
+        state.saved = null;
+        state.exported = null;
+        state.busy = null;
+        showShapes(true);
+      } catch (e) {
+        state.busy = null;
+        state.problem = e.message;
+      }
+      render();
+    },
+    "Search meshes",
+  );
+}
+
+/** Ask before letting go of changes that are not saved, then do `then`. */
+function leaving(then) {
+  if (!state.work?.changed) return then();
+  const el = sheet("Unsaved changes", null, h("span.sub", null, `${state.work.name} has changes that are not saved.`), [
+    h("span.grow"),
+    h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
+    h("button.btn", { type: "button", onclick: () => (close(el), then()) }, "Discard"),
+  ]);
+}
+
 /** A sheet asking for one name. `done` throws what is wrong with it. */
-function rename(title, from, done) {
+function rename(title, from, done, doing = "Rename") {
   const name = h("input.input", { type: "text", value: from, "aria-label": "Name", maxLength: 120, spellcheck: false });
-  const go = h("button.btn.primary", { type: "button" }, "Rename");
+  const go = h("button.btn.primary", { type: "button" }, doing);
   const said = h("span.sub.warn.grow.cut");
   const run = () => {
     try {
@@ -1339,7 +1423,7 @@ function saveProject() {
     return [h("label.field", null, h("span", null, label), input), input];
   };
   // A project of the mods' is left as it is: this one is saved beside it.
-  const own = state.kept.has(`slidersets/${work.name.toLowerCase()}.osp`);
+  const own = state.kept.has(`slidersets/${work.name.toLowerCase()}.osp`) || !state.catalog.sets.some((x) => x.name === work.name);
   const [nameField, name] = field("Name", own ? work.name : `${work.name} (mine)`);
   const [folderField, folder] = field("Builds into", work.outputFolder);
   const [fileField, file] = field("Mesh name", work.outputFile);
@@ -1452,12 +1536,13 @@ function renderStudio() {
       null,
       modes(),
       outfitPick("Project"),
+      h("button.btn.ghost", { type: "button", id: "new", onclick: (e) => leaving(() => newProject(e.currentTarget)) }, "New…"),
       h("span.grow"),
       state.work && h("button.btn.ghost", { type: "button", disabled: !state.work.undo, onclick: () => undo(false) }, "Undo"),
       state.work && h("button.btn.ghost", { type: "button", disabled: !state.work.redo, onclick: () => undo(true) }, "Redo"),
       h("button.btn.ghost", { type: "button", disabled: !state.shapes.length, onclick: exportMesh }, "Export mesh…"),
       state.work && h("button.btn", { type: "button", onclick: saveProject }, "Save project…"),
-      h("label.search", { style: "flex: 0 1 220px", html: GLASS }, search),
+      h("label.search", { style: "flex: 0 1 160px; min-width: 120px", html: GLASS }, search),
     ),
     h(
       "div.main.studio",

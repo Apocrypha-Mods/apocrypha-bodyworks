@@ -450,3 +450,97 @@ fn a_shape_copied_into_another_mesh_is_the_same_shape_there() {
         mesh::bone_names(&twice, first)
     );
 }
+
+#[test]
+fn a_mesh_becomes_a_project_fitted_to_a_body() {
+    use apoc_bodyslide::project::Project;
+    use apoc_bodyslide::{build, conform};
+    use std::collections::HashMap;
+
+    let tools = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/cbbe/@required/Data/CalienteTools/BodySlide");
+    let on_disk = |path: &str| std::fs::read(tools.join(path)).ok();
+    let Some(sets) = on_disk("SliderSets/CBBE.osp").and_then(|b| set::read(&b).ok()) else {
+        return;
+    };
+    let body = sets.iter().find(|s| s.name == "CBBE Body").unwrap();
+    // An outfit as a mod ships it: a mesh, with a body inside it.
+    let mesh = on_disk("ShapeData/CBBE/CBBE NeverNude.nif").unwrap();
+    let mut project =
+        Project::from_mesh("Mine", "meshes\\clothes/mine/underwear_1.nif", &mesh).unwrap();
+    assert_eq!(project.set.output_path, "meshes\\clothes\\mine");
+    assert_eq!(project.set.output_file, "underwear");
+    assert!(project.set.gen_weights);
+    assert_eq!(project.set.shapes.len(), 3);
+    assert!(project.set.sliders.is_empty());
+
+    // The body inside is in the way of the one brought in, until it goes.
+    assert!(project.add_reference(body, &on_disk).is_err());
+    assert_eq!(project.set.shapes.len(), 3);
+    project.delete_shape("CBBE").unwrap();
+    project.add_reference(body, &on_disk).unwrap();
+    assert_eq!(project.set.sliders.len(), body.sliders.len());
+    let reference = project.set.shapes.last().unwrap().clone();
+    assert_eq!(reference.data_folder.as_deref(), Some("CBBE"));
+    // Brought in again, it takes the place of the first.
+    project.add_reference(body, &on_disk).unwrap();
+    assert_eq!(project.set.shapes.len(), 3);
+
+    project.duplicate_shape("Bra", "Bra again").unwrap();
+    assert!(project.duplicate_shape("Bra", "Panty").is_err());
+    for shape in ["Bra", "Panty"] {
+        let moving = project
+            .conform(
+                shape,
+                &reference.name,
+                &on_disk,
+                conform::Options::default(),
+            )
+            .unwrap();
+        assert!(moving > 20, "{shape}: {moving}");
+    }
+
+    let (saved, files) = project.save("Mine").unwrap();
+    let held: HashMap<String, Vec<u8>> = files.into_iter().map(|o| (o.path, o.bytes)).collect();
+    let files = |path: &str| held.get(path).cloned().or_else(|| on_disk(path));
+    assert_eq!(
+        set::read(&held["SliderSets/Mine.osp"]).unwrap(),
+        vec![saved.clone()]
+    );
+    let shapes = |values: &[f32]| -> Vec<apoc_nif::mesh::Mesh> {
+        let out = build::build_at(&saved, values, values, &files).unwrap();
+        assert_eq!(out.notes, Vec::<String>::new());
+        assert_eq!(out.outputs.len(), 2);
+        let nif = apoc_nif::Nif::read(&out.outputs[1].bytes).unwrap();
+        apoc_nif::mesh::shapes(&nif)
+            .into_iter()
+            .map(|at| apoc_nif::mesh::read(&nif, at).unwrap())
+            .collect()
+    };
+    let none = vec![0.0; saved.sliders.len()];
+    let mut some = none.clone();
+    some[saved
+        .sliders
+        .iter()
+        .position(|s| s.name == "Breasts")
+        .unwrap()] = 100.0;
+    let (flat, full) = (shapes(&none), shapes(&some));
+    assert_eq!(flat.len(), 4);
+    let moved = |name: &str| {
+        let (a, b) = (
+            flat.iter().find(|m| m.name == name).unwrap(),
+            full.iter().find(|m| m.name == name).unwrap(),
+        );
+        a.positions
+            .iter()
+            .zip(&b.positions)
+            .filter(|(x, y)| x != y)
+            .count()
+    };
+    // The body moves, the bra on it follows, the copy made before the
+    // fitting does not, and neither does what is nowhere near.
+    assert!(moved(&reference.name) > 500);
+    assert!(moved("Bra") > 100);
+    assert_eq!(moved("Bra again"), 0);
+    assert_eq!(moved("Panty"), 0);
+}
