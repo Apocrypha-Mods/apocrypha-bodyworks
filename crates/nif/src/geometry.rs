@@ -169,6 +169,8 @@ impl Layout {
         let to = match desc {
             0x0005_b000_7065_040a => 0x0001_b000_0065_0407,
             0x0007_b000_8765_040b => 0x0003_b000_0765_0408,
+            // Fallout 4's, its numbers half the size.
+            0x0005_b000_5043_0208 => 0x0001_b000_0043_0205,
             _ => return None,
         };
         let at = Layout::of(desc, stream)?.skin?;

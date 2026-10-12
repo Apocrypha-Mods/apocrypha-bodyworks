@@ -1397,6 +1397,61 @@ pub fn unskin(nif: &mut Nif, block: usize) -> Result<(), NifError> {
 
 fn unskin_in(nif: &mut Nif, block: usize) -> Result<(), NifError> {
     let stream = nif.header.stream.version;
+    if let Some(at) = fo4(nif, block)? {
+        // Fallout 4: the vertices are the shape's own already, and lose
+        // what they followed. Only for a plain shape: one with segments
+        // was not found without bones.
+        if nif.kind_of(block) != "BSTriShape" {
+            return unsupported("a shape with segments is not parted from its bones");
+        }
+        for other in 0..nif.blocks.len() {
+            if other != block
+                && is_tri_shape(nif.kind_of(other))
+                && TriShape::skin_of(&nif.blocks[other].data, stream) == Some(at.instance as i32)
+            {
+                return unsupported("the shape shares its skin with another shape");
+            }
+        }
+        let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+        let Some((desc, skin_at)) = Layout::without_skin(shape.vertex_desc, stream) else {
+            return unsupported(
+                "the shape's vertices are laid out a way no shape without bones was found to be",
+            );
+        };
+        let stride = Layout::of(shape.vertex_desc, stream).map_or(1, |l| l.stride.max(1));
+        if skin_at + 12 > stride || !shape.vertex_data.len().is_multiple_of(stride) {
+            return unsupported("the shape's vertices are not a whole number");
+        }
+        let mut data = Vec::with_capacity(shape.vertex_data.len() / stride * (stride - 12));
+        for row in shape.vertex_data.chunks_exact(stride) {
+            data.extend_from_slice(&row[..skin_at]);
+            data.extend_from_slice(&row[skin_at + 12..]);
+        }
+        // The switch on its lighting that every shape following bones has
+        // on, in Fallout 4 as in Skyrim (`--example skinflag`).
+        if let Some(l) = usize::try_from(shape.shader)
+            .ok()
+            .filter(|l| *l < nif.blocks.len() && nif.kind_of(*l) == "BSLightingShaderProperty")
+        {
+            let shared = (0..nif.blocks.len()).any(|other| {
+                other != block
+                    && is_tri_shape(nif.kind_of(other))
+                    && TriShape::read(&nif.blocks[other].data, stream)
+                        .is_ok_and(|s| s.shader == l as i32)
+            });
+            if shared {
+                return unsupported("the shape shares its lighting with another");
+            }
+            let mut lit = crate::shader::LightingShader::read(&nif.blocks[l].data, stream)?;
+            lit.flags1 &= !(1 << 1);
+            nif.blocks[l].data = lit.write();
+        }
+        let (count, triangles) = (shape.vertex_count, std::mem::take(&mut shape.triangles));
+        shape.hold(desc, data, count, triangles);
+        shape.skin = -1;
+        nif.blocks[block].data = shape.write(stream);
+        return crate::edit::remove_unlinked(nif, &[at.instance, at.data]);
+    }
     if nif.kind_of(block) != "BSTriShape" {
         return unsupported("this kind of shape is not parted from its bones");
     }
