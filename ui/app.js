@@ -1257,7 +1257,9 @@ function studioSide() {
                     state.work && { name: "Duplicate…", value: "duplicate" },
                     state.work && { name: "Move, turn, scale…", value: "transform" },
                     state.work && !sh.reference && { name: "Mirror", value: "mirror" },
+                    state.work && !sh.reference && { name: "Refine", value: "refine" },
                     state.work && !sh.reference && state.shapes.some((o) => o !== sh && !o.reference) && { name: "Merge into…", value: "merge" },
+                    state.work && !sh.reference && { name: "New shape from OBJ…", value: "fromObj" },
                     ...(state.work ? bodies.map((o) => ({ name: `Conform to ${o.name}`, value: ["conform", o.name] })) : []),
                     ...(state.work ? bodies.map((o) => ({ name: `Copy weights from ${o.name}`, value: ["weights", o.name] })) : []),
                     { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
@@ -1282,6 +1284,8 @@ function studioSide() {
                     }
                     if (what === "transform") return transform(sh);
                     if (what === "mirror") return attempt({ do: "mirror", shape: sh.name });
+                    if (what === "refine") return attempt({ do: "refine", shape: sh.name });
+                    if (what === "fromObj") return shapeFromObj(sh);
                     if (what === "merge") {
                       // Into which: it is drawn as that one is, and goes by its name.
                       return menu(
@@ -1880,6 +1884,41 @@ function moved(s, before, amount) {
     s.now.set(before);
     shade(s.now, s.shown, s.weld, s.normals, s.sum);
     view.move(state.shapes.indexOf(s), s.now, s.normals);
+  }
+}
+
+/**
+ * Outfit Studio: a new shape made of an OBJ file's mesh, in the likeness of
+ * a shape of the project: drawn with what that is drawn with, and following
+ * the bones its nearest vertices follow.
+ */
+async function shapeFromObj(like) {
+  try {
+    const picked = await host.request("disk.open", { extensions: ["obj"] });
+    if (!picked) return;
+    const made = obj.mesh(new TextDecoder().decode(picked.bytes));
+    const nv = made.positions.length / 3;
+    const nt = made.triangles.length / 3;
+    // How many vertices and triangles, then the places, the texture places, the triangles.
+    const bytes = new Uint8Array(8 + nv * 20 + nt * 12);
+    const data = new DataView(bytes.buffer);
+    data.setUint32(0, nv, true);
+    data.setUint32(4, nt, true);
+    made.positions.forEach((c, i) => data.setFloat32(8 + i * 4, c, true));
+    made.uvs.forEach((c, i) => data.setFloat32(8 + nv * 12 + i * 4, c, true));
+    made.triangles.forEach((v, i) => data.setUint32(8 + nv * 20 + i * 4, v, true));
+    rename(
+      "New shape",
+      picked.name.replace(/\.obj$/i, ""),
+      (name) => {
+        const [work] = core.ask({ op: "change", change: { do: "shapeFrom", like: like.name, name } }, bytes);
+        taken(work);
+      },
+      "Add",
+    );
+  } catch (e) {
+    state.problem = e.message;
+    render();
   }
 }
 

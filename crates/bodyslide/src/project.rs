@@ -1329,6 +1329,142 @@ impl Project {
         done
     }
 
+    /// Refine a shape: every triangle made four, with a vertex in the
+    /// middle of each edge. What sliders do to a new vertex is halfway
+    /// between what they do to the two it lies between. Returns how many
+    /// vertices were added.
+    pub fn refine(&mut self, shape: &str) -> Result<usize, Error> {
+        let at = self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let target = self.set.shapes[at].target.clone();
+        if self
+            .set
+            .sliders
+            .iter()
+            .any(|s| s.data.iter().any(|d| d.target == target))
+        {
+            return invalid(format!(
+                "What sliders do to {shape} is another project's, which counts on its vertices as they are."
+            ));
+        }
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let had = mesh::read(&self.nif, block).map_err(fail)?.positions.len();
+        let before = self.nif.clone();
+        let between = match weights::refine(&mut self.nif, block) {
+            Ok(b) => b,
+            Err(e) => {
+                self.nif = before;
+                return Err(fail(e));
+            }
+        };
+        // The sphere round it stays right: nothing is further out than it was.
+        for own in &mut self.own {
+            for o in own.iter_mut().filter(|o| o.target == target) {
+                let mut dense: HashMap<u16, [f32; 3]> =
+                    o.diffs.iter().map(|d| (d.vertex, d.offset)).collect();
+                let diffs = Arc::make_mut(&mut o.diffs);
+                for (i, (a, b)) in between.iter().enumerate() {
+                    let (da, db) = (dense.get(a).copied(), dense.get(b).copied());
+                    if da.is_none() && db.is_none() {
+                        continue;
+                    }
+                    let (da, db) = (da.unwrap_or([0.0; 3]), db.unwrap_or([0.0; 3]));
+                    let offset = [0, 1, 2].map(|k| (da[k] + db[k]) / 2.0);
+                    let vertex = (had + i) as u16;
+                    dense.insert(vertex, offset);
+                    diffs.push(Diff { vertex, offset });
+                }
+            }
+        }
+        Ok(between.len())
+    }
+
+    /// A new shape made of an outside mesh (an OBJ file's): its vertices,
+    /// their places in the texture, and its triangles. It is made in the
+    /// likeness of `like`, a shape of the project: drawn with what that is
+    /// drawn with, and following the bones its nearest vertices follow.
+    pub fn shape_from(
+        &mut self,
+        like: &str,
+        name: &str,
+        positions: &[[f32; 3]],
+        uvs: &[[f32; 2]],
+        triangles: &[[u16; 3]],
+    ) -> Result<(), Error> {
+        let name = name.trim();
+        if positions.is_empty() || triangles.is_empty() {
+            return invalid("The file has no triangles to make a shape of.");
+        }
+        if positions.len() > u16::MAX as usize || triangles.len() > u16::MAX as usize {
+            return invalid("The file has more vertices or triangles than one shape can hold.");
+        }
+        if positions.iter().flatten().any(|c| !c.is_finite())
+            || triangles
+                .iter()
+                .flatten()
+                .any(|v| *v as usize >= positions.len())
+        {
+            return invalid("The file's mesh is not one a shape can be made of.");
+        }
+        let before = self.clone();
+        let done = (|| {
+            self.duplicate_shape(like, name)?;
+            let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+            let block = self
+                .block(name)
+                .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {name}.")))?;
+            let (bytes, layout, _) = weights::packed(&self.nif, block).map_err(fail)?;
+            let stride = layout.stride.max(1);
+            let template = mesh::read(&self.nif, block).map_err(fail)?.positions;
+            let skin = weights::read(&self.nif, block).map_err(fail)?;
+            // Each new vertex starts as the template's nearest, for what a
+            // vertex carries besides its place: colour, and its bones.
+            let ties = conform::tie(
+                &template,
+                positions,
+                conform::Options {
+                    nearest: 1,
+                    ..conform::Options::default()
+                },
+            );
+            let mut data = Vec::with_capacity(positions.len() * stride);
+            let mut vertices = Vec::with_capacity(positions.len());
+            for v in 0..positions.len() {
+                let near = ties.of(v).next().map_or(0, |x| x.0 as usize);
+                data.extend_from_slice(&bytes[near * stride..(near + 1) * stride]);
+                vertices.push(skin.vertices[near]);
+            }
+            let made = weights::Skin {
+                bones: skin.bones.clone(),
+                vertices,
+            };
+            weights::rebuild(
+                &mut self.nif,
+                block,
+                data,
+                vec![triangles.to_vec()],
+                &made,
+                None,
+            )
+            .map_err(fail)?;
+            mesh::set_positions(&mut self.nif, block, positions).map_err(fail)?;
+            if uvs.len() == positions.len() {
+                mesh::set_uvs(&mut self.nif, block, uvs).map_err(fail)?;
+            }
+            // What sliders did to the template is not what they do to this.
+            for own in &mut self.own {
+                own.retain(|o| o.target != name);
+            }
+            Ok(())
+        })();
+        if done.is_err() {
+            *self = before;
+        }
+        done
+    }
+
     /// Mirror a shape across the middle of the body: every vertex to the
     /// other side, its triangles turned to face out again, what sliders do
     /// to it mirrored too, and each bone it follows changed for its twin on

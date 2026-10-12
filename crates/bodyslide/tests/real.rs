@@ -1257,3 +1257,132 @@ fn two_shapes_merged_are_one_shape_that_builds_as_the_two_did() {
     }
     assert_eq!(weights::parts(&nif, at).unwrap().len(), 2);
 }
+
+#[test]
+fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
+    use apoc_bodyslide::project::Project;
+    use apoc_bodyslide::{build, morph};
+    use apoc_nif::{mesh, weights, Nif};
+    use std::collections::HashMap;
+
+    let tools = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/cbbe/@required/Data/CalienteTools/BodySlide");
+    let on_disk = |path: &str| std::fs::read(tools.join(path)).ok();
+    let Some(sets) = on_disk("SliderSets/CBBE.osp").and_then(|b| set::read(&b).ok()) else {
+        return;
+    };
+    let set = sets.iter().find(|s| s.name == "CBBE NeverNude").unwrap();
+    let project = Project::open(set, &on_disk).unwrap();
+    let shape = |p: &Project, name: &str| {
+        let nif = Nif::read(&p.nif.write()).unwrap();
+        let at = mesh::shapes(&nif)
+            .into_iter()
+            .find(|at| mesh::name(&nif, *at).as_deref() == Some(name))
+            .unwrap();
+        (
+            mesh::read(&nif, at).unwrap(),
+            weights::read(&nif, at).unwrap(),
+        )
+    };
+    let built = |p: &Project, name: &str| {
+        let (saved, files) = p.save("Refined").unwrap();
+        let held: HashMap<String, Vec<u8>> = files.into_iter().map(|o| (o.path, o.bytes)).collect();
+        let files = |path: &str| held.get(path).cloned().or_else(|| on_disk(path));
+        let values = morph::values(&saved, None, true);
+        let out = build::build_at(&saved, &values, &values, &files).unwrap();
+        assert_eq!(out.notes, Vec::<String>::new());
+        let nif = Nif::read(&out.outputs[0].bytes).unwrap();
+        mesh::shapes(&nif)
+            .into_iter()
+            .map(|at| mesh::read(&nif, at).unwrap())
+            .find(|m| m.name == name)
+            .unwrap()
+    };
+
+    // Refined: four triangles for each, the old vertices where they were,
+    // each new one halfway between two of them, in place and when built.
+    let (was, was_skin) = shape(&project, "Bra");
+    let was_built = built(&project, "Bra");
+    let mut refined = project.clone();
+    let added = refined.refine("Bra").unwrap();
+    assert!(refined.refine("CBBE").is_err());
+    let (now, now_skin) = shape(&refined, "Bra");
+    assert_eq!(now.triangles.len(), was.triangles.len() * 4);
+    assert_eq!(now.positions.len(), was.positions.len() + added);
+    assert_eq!(&now.positions[..was.positions.len()], &was.positions[..]);
+    assert_eq!(&now.uvs[..was.uvs.len()], &was.uvs[..]);
+    assert_eq!(now_skin.bones, was_skin.bones);
+    for v in &now_skin.vertices {
+        assert!((v.iter().map(|x| x.1).sum::<f32>() - 1.0).abs() < 0.01);
+    }
+    let now_built = built(&refined, "Bra");
+    // Every new vertex of the first new triangle's middle lies between two old ones.
+    let t = now.triangles[3];
+    for v in t {
+        assert!(v as usize >= was.positions.len());
+    }
+    let first = was.triangles[0];
+    let mid = |m: &mesh::Mesh, a: u16, b: u16| {
+        let (p, q) = (m.positions[a as usize], m.positions[b as usize]);
+        [
+            (p[0] + q[0]) / 2.0,
+            (p[1] + q[1]) / 2.0,
+            (p[2] + q[2]) / 2.0,
+        ]
+    };
+    for (corner, (a, b)) in [
+        (first[0], first[1]),
+        (first[1], first[2]),
+        (first[2], first[0]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for (flat, wanted) in [(&now, mid(&was, a, b)), (&now_built, mid(&was_built, a, b))] {
+            let got = flat.positions[t[corner] as usize];
+            assert!(
+                (0..3).all(|k| (got[k] - wanted[k]).abs() < 0.02),
+                "{got:?} {wanted:?}"
+            );
+        }
+    }
+
+    // A shape made of an outside mesh, here the panty turned into one:
+    // its vertices and triangles as given, drawn and boned as its likeness.
+    let (panty, panty_skin) = shape(&project, "Panty");
+    let mut made = project.clone();
+    made.shape_from(
+        "Bra",
+        "From outside",
+        &panty.positions,
+        &panty.uvs,
+        &panty.triangles,
+    )
+    .unwrap();
+    assert!(made
+        .shape_from(
+            "Bra",
+            "From outside",
+            &panty.positions,
+            &panty.uvs,
+            &panty.triangles
+        )
+        .is_err());
+    assert!(made.shape_from("Bra", "Empty", &[], &[], &[]).is_err());
+    let (got, got_skin) = shape(&made, "From outside");
+    assert_eq!(got.triangles, panty.triangles);
+    assert_eq!(got.positions.len(), panty.positions.len());
+    for (a, b) in got.positions.iter().zip(&panty.positions) {
+        assert!((0..3).all(|k| (a[k] - b[k]).abs() < 0.01));
+    }
+    for (a, b) in got.uvs.iter().zip(&panty.uvs) {
+        assert!((a[0] - b[0]).abs() < 0.002 && (a[1] - b[1]).abs() < 0.002);
+    }
+    assert_eq!(got.textures, shape(&project, "Bra").0.textures);
+    assert_eq!(got_skin.vertices.len(), panty_skin.vertices.len());
+    assert_eq!(
+        built(&made, "From outside").positions.len(),
+        panty.positions.len()
+    );
+    assert_eq!(shape(&made, "Bra").0.positions, was.positions);
+}

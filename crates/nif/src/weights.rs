@@ -725,3 +725,191 @@ pub fn merge(nif: &mut Nif, into: usize, from: usize) -> Result<usize, NifError>
     write(nif, into, &Skin { bones, vertices }, Some(from))?;
     Ok(na)
 }
+
+/// Give a skinned shape other vertices and triangles altogether: its
+/// vertices as packed bytes in the shape's own layout, its triangles part
+/// by part (as many parts as it had, or fewer, and at least one), and the
+/// skin its new vertices have. For a shape that keeps its vertices in its
+/// skin, as skinned shapes of Special Edition do.
+pub fn rebuild(
+    nif: &mut Nif,
+    block: usize,
+    vertex_data: Vec<u8>,
+    parts: Vec<Vec<[u16; 3]>>,
+    skin: &Skin,
+    like: Option<usize>,
+) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    owned(nif, block)?;
+    let at = blocks(nif, block)?;
+    if TriShape::read(&nif.blocks[block].data, stream)?.has_vertices() {
+        return unsupported("a shape that keeps its vertices outside its skin is not rebuilt");
+    }
+    let mut instance = SkinInstance::read(&nif.blocks[at.instance].data, at.dismember)?;
+    let mut partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
+    let Some(layout) = partition.vertex_desc.and_then(|d| Layout::of(d, stream)) else {
+        return unsupported("the skin keeps no vertices this can read");
+    };
+    let stride = layout.stride.max(1);
+    let count = vertex_data.len() / stride;
+    if !vertex_data.len().is_multiple_of(stride) || count == 0 || count > u16::MAX as usize {
+        return unsupported("that is not a number of vertices one shape can hold");
+    }
+    if parts.is_empty() || parts.len() > partition.partitions.len() {
+        return unsupported("the shape has not that many parts");
+    }
+    if parts
+        .iter()
+        .flatten()
+        .flatten()
+        .any(|v| *v as usize >= count)
+    {
+        return unsupported("a triangle names a vertex the shape would not have");
+    }
+    if skin.vertices.len() != count {
+        return unsupported("the skin is for another number of vertices");
+    }
+    partition.vertex_data = vertex_data;
+    partition.partitions.truncate(parts.len());
+    for (p, triangles) in partition.partitions.iter_mut().zip(parts) {
+        p.retriangle(triangles)?;
+    }
+    if let Some(named) = &mut instance.body_parts {
+        named.truncate(partition.partitions.len());
+    }
+    // All of it worked out before anything is put in the file: a skin that
+    // cannot be written leaves the shape as it was.
+    let (was_instance, was_partition) = (
+        nif.blocks[at.instance].data.clone(),
+        nif.blocks[at.partition].data.clone(),
+    );
+    nif.blocks[at.instance].data = instance.write();
+    nif.blocks[at.partition].data = partition.write(stream);
+    let done = write(nif, block, skin, like);
+    if done.is_err() {
+        nif.blocks[at.instance].data = was_instance;
+        nif.blocks[at.partition].data = was_partition;
+    }
+    done
+}
+
+/// A shape's vertices as packed bytes, their layout, and its triangles part
+/// by part.
+pub type Packed = (Vec<u8>, Layout, Vec<Vec<[u16; 3]>>);
+
+/// A shape's vertices as packed bytes, its layout, and its triangles part
+/// by part: what [`rebuild`] takes back.
+pub fn packed(nif: &Nif, block: usize) -> Result<Packed, NifError> {
+    let stream = nif.header.stream.version;
+    let at = blocks(nif, block)?;
+    let partition = SkinPartition::read(&nif.blocks[at.partition].data, stream)?;
+    let Some(layout) = partition.vertex_desc.and_then(|d| Layout::of(d, stream)) else {
+        return unsupported("the skin keeps no vertices this can read");
+    };
+    let mut parts = Vec::with_capacity(partition.partitions.len());
+    for p in &partition.partitions {
+        match &p.true_triangles {
+            Some(t) => parts.push(t.clone()),
+            None => return unsupported("a part keeps its triangles in a way this cannot change"),
+        }
+    }
+    Ok((partition.vertex_data, layout, parts))
+}
+
+/// Refine a shape: every triangle made four, a new vertex in the middle of
+/// each edge. The vertices it had keep their numbers; each new one is
+/// halfway between two of them in place, in texture and in the bones it
+/// follows, and is otherwise as the first of the two. Returns, for each new
+/// vertex in order, the two it lies between.
+pub fn refine(nif: &mut Nif, block: usize) -> Result<Vec<(u16, u16)>, NifError> {
+    let stream = nif.header.stream.version;
+    let (mut bytes, layout, parts) = packed(nif, block)?;
+    let stride = layout.stride.max(1);
+    let had = bytes.len() / stride;
+    let skin = read(nif, block)?;
+    let shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let mut between: Vec<(u16, u16)> = Vec::new();
+    let mut middle: std::collections::HashMap<(u16, u16), u16> = std::collections::HashMap::new();
+    let mut refined = Vec::with_capacity(parts.len());
+    for triangles in &parts {
+        let mut out = Vec::with_capacity(triangles.len() * 4);
+        for t in triangles {
+            let mut mid = [0u16; 3];
+            for (k, slot) in mid.iter_mut().enumerate() {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                let edge = (a.min(b), a.max(b));
+                *slot = match middle.get(&edge) {
+                    Some(m) => *m,
+                    None => {
+                        let at = had + between.len();
+                        if at > u16::MAX as usize {
+                            return unsupported(
+                                "refined, the shape would have more vertices than can be numbered",
+                            );
+                        }
+                        between.push(edge);
+                        middle.insert(edge, at as u16);
+                        at as u16
+                    }
+                };
+            }
+            out.extend([
+                [t[0], mid[0], mid[2]],
+                [mid[0], t[1], mid[1]],
+                [mid[2], mid[1], t[2]],
+                [mid[0], mid[1], mid[2]],
+            ]);
+        }
+        if out.len() > u16::MAX as usize {
+            return unsupported(
+                "refined, a part of the shape would have more triangles than it can count",
+            );
+        }
+        refined.push(out);
+    }
+    // Each new vertex: the first's bytes, then its own place and texture.
+    let mut view = shape.clone();
+    view.vertex_data = std::mem::take(&mut bytes);
+    view.vertex_data.reserve(between.len() * stride);
+    for (a, _) in &between {
+        let from = *a as usize * stride;
+        let row = view.vertex_data[from..from + stride].to_vec();
+        view.vertex_data.extend(row);
+    }
+    let halfway = |x: [f32; 3], y: [f32; 3]| {
+        [
+            (x[0] + y[0]) / 2.0,
+            (x[1] + y[1]) / 2.0,
+            (x[2] + y[2]) / 2.0,
+        ]
+    };
+    for (i, (a, b)) in between.iter().enumerate() {
+        let v = had + i;
+        if let (Some(pa), Some(pb)) = (
+            view.position(&layout, *a as usize),
+            view.position(&layout, *b as usize),
+        ) {
+            view.set_position(&layout, v, halfway(pa, pb));
+        }
+        if let (Some(ua), Some(ub)) = (view.uv(&layout, *a as usize), view.uv(&layout, *b as usize))
+        {
+            view.set_uv(&layout, v, [(ua[0] + ub[0]) / 2.0, (ua[1] + ub[1]) / 2.0]);
+        }
+    }
+    let mut vertices = skin.vertices.clone();
+    for (a, b) in &between {
+        let both: Vec<(u16, f32)> = skin.vertices[*a as usize]
+            .iter()
+            .chain(&skin.vertices[*b as usize])
+            .filter(|x| x.1 > 0.0)
+            .map(|x| (x.0, x.1 / 2.0))
+            .collect();
+        vertices.push(settled(&both));
+    }
+    let skin = Skin {
+        bones: skin.bones,
+        vertices,
+    };
+    rebuild(nif, block, view.vertex_data, refined, &skin, None)?;
+    Ok(between)
+}

@@ -161,3 +161,21 @@ test("vertices at one place are found as one, however many there are", async () 
   for (let i = 0; i < n; i += 97) assert.equal(w[n + i], w[i]);
   assert.ok(took < 200, `${took} ms for ${n * 2} vertices`);
 });
+
+test("an OBJ file becomes a mesh: seams split, faces fanned, textures the right way up", async () => {
+  const obj = await import("../ui/obj.js");
+  const text = ["v 0 0 0", "v 1 0 0", "v 1 1 0", "v 0 1 0", "vt 0 0", "vt 1 0", "vt 1 1", "vt 0 1", "vt 0.5 0.25", "f 1/1 2/2 3/3 4/4", "f 1/5 2/2 -2/3"].join("\n");
+  const got = obj.mesh(text);
+  // Vertex 1 is used with two places in the texture: two vertices.
+  assert.equal(got.positions.length / 3, 5);
+  assert.deepEqual([...got.triangles], [0, 1, 2, 0, 2, 3, 4, 1, 2]);
+  assert.deepEqual([...got.uvs.subarray(0, 2)], [0, 1]);
+  assert.deepEqual([...got.uvs.subarray(8, 10)], [0.5, 0.75]);
+  assert.throws(() => obj.mesh("v 0 0 0\nf 1 2 3"));
+  assert.throws(() => obj.mesh("v 0 0 0"));
+  // Out and back in: the same mesh.
+  const back = obj.mesh(obj.write([{ name: "s", positions: got.positions, uvs: got.uvs, triangles: got.triangles }]));
+  assert.deepEqual([...back.positions], [...got.positions]);
+  assert.deepEqual([...back.triangles], [...got.triangles]);
+  assert.deepEqual([...back.uvs].map((x) => Math.round(x * 1000)), [...got.uvs].map((x) => Math.round(x * 1000)));
+});

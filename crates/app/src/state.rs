@@ -36,6 +36,46 @@ struct Work {
     changed: bool,
 }
 
+/// A mesh from outside, as [`Change::ShapeFrom`] sends it.
+type Outside = (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<[u16; 3]>);
+
+fn outside_mesh(data: &[u8]) -> Option<Outside> {
+    let word = |at: usize| -> Option<[u8; 4]> { data.get(at..at + 4)?.try_into().ok() };
+    let (nv, nt) = (
+        u32::from_le_bytes(word(0)?) as usize,
+        u32::from_le_bytes(word(4)?) as usize,
+    );
+    // Sizes against the bytes there are, before room is made for them.
+    let need = 8usize
+        .checked_add(nv.checked_mul(20)?)?
+        .checked_add(nt.checked_mul(12)?)?;
+    if need != data.len() {
+        return None;
+    }
+    let float = |at: usize| word(at).map(f32::from_le_bytes);
+    let mut at = 8;
+    let mut positions = Vec::with_capacity(nv);
+    for _ in 0..nv {
+        positions.push([float(at)?, float(at + 4)?, float(at + 8)?]);
+        at += 12;
+    }
+    let mut uvs = Vec::with_capacity(nv);
+    for _ in 0..nv {
+        uvs.push([float(at)?, float(at + 4)?]);
+        at += 8;
+    }
+    let mut triangles = Vec::with_capacity(nt);
+    for _ in 0..nt {
+        let mut t = [0u16; 3];
+        for (k, slot) in t.iter_mut().enumerate() {
+            *slot = u16::try_from(u32::from_le_bytes(word(at + k * 4)?)).ok()?;
+        }
+        triangles.push(t);
+        at += 12;
+    }
+    Some((positions, uvs, triangles))
+}
+
 /// Vertex numbers sent as a request's bytes, four bytes each.
 fn numbers(data: &[u8]) -> Vec<u16> {
     data.as_chunks::<4>()
@@ -174,6 +214,15 @@ impl Work {
             }
             Change::DropBone { shape, bone } => p.drop_bone(&shape, &bone),
             Change::BodyPart { shape, index, part } => p.set_part(&shape, index, part),
+            Change::Refine { shape } => p.refine(&shape).map(drop),
+            Change::ShapeFrom { like, name } => match outside_mesh(data) {
+                Some((positions, uvs, triangles)) => {
+                    p.shape_from(&like, &name, &positions, &uvs, &triangles)
+                }
+                None => Err(apoc_bodyslide::Error::Invalid(
+                    "The file's mesh could not be read.".into(),
+                )),
+            },
             Change::Merge { into, from } => p.merge_shapes(&into, &from),
             Change::Mirror { shape } => p.mirror_shape(&shape),
             Change::ToPart { shape, to, part } => {
@@ -416,6 +465,19 @@ enum Change {
         shape: String,
         index: usize,
         part: u16,
+    },
+    /// Refine a shape: every triangle made four.
+    Refine {
+        shape: String,
+    },
+    /// A new shape of an outside mesh, in the likeness of `like`. The
+    /// request's bytes: how many vertices and how many triangles (four
+    /// bytes each), then each vertex's place (three floats), each vertex's
+    /// place in the texture (two floats), and each triangle's three vertices
+    /// (four bytes each).
+    ShapeFrom {
+        like: String,
+        name: String,
     },
     /// Make two shapes one: `from` goes into `into`.
     Merge {

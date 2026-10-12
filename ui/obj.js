@@ -39,3 +39,54 @@ export function positions(text) {
   }
   return Float32Array.from(out);
 }
+
+/**
+ * An OBJ file as a mesh a shape can be made of: `{ positions, uvs, triangles }`,
+ * flat arrays. A vertex used with two places in the texture becomes two
+ * vertices, and a face of more than three corners becomes a fan of
+ * triangles. Throws what is wrong with the file.
+ */
+export function mesh(text) {
+  const places = [];
+  const textures = [];
+  const positions = [];
+  const uvs = [];
+  const triangles = [];
+  const made = new Map();
+  const corner = (word) => {
+    const [v, vt] = word.split("/");
+    // Counted from one; a number below nothing counts back from the last.
+    const at = (n, count) => (n < 0 ? count + n : n - 1);
+    const p = at(Number(v), places.length / 3);
+    const t = vt ? at(Number(vt), textures.length / 2) : -1;
+    if (!Number.isInteger(p) || p < 0 || p >= places.length / 3) throw new Error("The file has a face with a vertex it does not have.");
+    const key = `${p}/${t}`;
+    let index = made.get(key);
+    if (index === undefined) {
+      index = positions.length / 3;
+      made.set(key, index);
+      positions.push(places[p * 3], places[p * 3 + 1], places[p * 3 + 2]);
+      // The games' textures start at the top; OBJ's at the bottom.
+      if (t >= 0 && t < textures.length / 2) uvs.push(textures[t * 2], 1 - textures[t * 2 + 1]);
+      else uvs.push(0, 0);
+    }
+    return index;
+  };
+  for (const line of text.split(/\r?\n/)) {
+    const words = line.trim().split(/\s+/);
+    if (words[0] === "v") {
+      const [x, y, z] = words.slice(1, 4).map(Number);
+      if (![x, y, z].every((c) => Number.isFinite(Math.fround(c)))) throw new Error("The file has a vertex that is not three numbers a mesh can hold.");
+      places.push(x, y, z);
+    } else if (words[0] === "vt") {
+      const [u, v] = words.slice(1, 3).map(Number);
+      textures.push(Number.isFinite(u) ? u : 0, Number.isFinite(v) ? v : 0);
+    } else if (words[0] === "f") {
+      const face = words.slice(1).map(corner);
+      for (let k = 1; k + 1 < face.length; k++) triangles.push(face[0], face[k], face[k + 1]);
+    }
+  }
+  if (!triangles.length) throw new Error("The file has no faces.");
+  if (positions.length / 3 > 65535 || triangles.length / 3 > 65535) throw new Error("The file has more vertices or triangles than one shape can hold.");
+  return { positions: Float32Array.from(positions), uvs: Float32Array.from(uvs), triangles: Uint32Array.from(triangles) };
+}
