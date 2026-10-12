@@ -1446,7 +1446,7 @@ function studioSide() {
     h(
       "div.side-head",
       null,
-      h("div.seg.plain", { role: "group", "aria-label": "List" }, tab("shapes", "Shapes"), tab("bones", "Bones"), picked?.parts.length > 0 && tab("parts", picked.parts[0].segment ? "Segments" : "Parts")),
+      h("div.seg.plain", { role: "group", "aria-label": "List" }, tab("shapes", "Shapes"), tab("bones", "Bones"), picked?.parts.length > 0 && tab("parts", "Parts")),
       h("span.grow"),
       state.work &&
         (state.side === "bones"
