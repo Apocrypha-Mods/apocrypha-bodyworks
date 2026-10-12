@@ -818,6 +818,9 @@ enum Request {
     HeadMorphs { shape: String },
     /// The cloth data the open project's mesh carries, after the answer.
     Cloth,
+    /// The bones of a skeleton (the request's bytes), each with the bone it
+    /// hangs from or nothing.
+    SkeletonTree,
     /// The names of the bones of a skeleton: the request's bytes.
     Skeleton,
     /// Change the open project.
@@ -1460,6 +1463,10 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
             ),
             Some((None, _)) => Answer::failed("The mesh carries no cloth data."),
             None => Answer::failed("No project is open."),
+        },
+        Request::SkeletonTree => match Nif::read(data) {
+            Ok(nif) => Answer::ok(json!(apoc_nif::copy::bone_tree(&nif))),
+            Err(e) => Answer::failed(e),
         },
         Request::Skeleton => match Nif::read(data) {
             Ok(nif) => Answer::ok(json!(apoc_nif::copy::bone_names(&nif))),

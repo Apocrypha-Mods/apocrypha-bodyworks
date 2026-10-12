@@ -312,6 +312,24 @@ pub fn bone_names(nif: &Nif) -> Vec<String> {
         .collect()
 }
 
+/// Every named node of a file with the name of the node it hangs from, if
+/// that has one: a skeleton as a tree.
+pub fn bone_tree(nif: &Nif) -> Vec<(String, Option<String>)> {
+    let stream = nif.header.stream.version;
+    let name = |at: usize| -> Option<String> {
+        if at >= nif.blocks.len() || !is_node(nif.kind_of(at)) {
+            return None;
+        }
+        let node = Node::read(&nif.blocks[at].data, stream).ok()?;
+        let text = String::from_utf8_lossy(nif.string(node.av.name)?).into_owned();
+        (!text.is_empty()).then_some(text)
+    };
+    let up = parents(nif);
+    (0..nif.blocks.len())
+        .filter_map(|at| Some((name(at)?, up.get(&at).and_then(|p| name(*p)))))
+        .collect()
+}
+
 /// Every node of a file by its name: the first, where two share one.
 pub(crate) fn node_names(nif: &Nif) -> HashMap<Vec<u8>, usize> {
     let stream = nif.header.stream.version;

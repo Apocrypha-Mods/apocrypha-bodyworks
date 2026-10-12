@@ -129,8 +129,8 @@ Outfit Studio:
   2,160 of the game's own (`--example statics`).
 - Segments (Fallout 4): adding or removing one (they are shown, and
   triangles moved between them).
-- Tools not here: posing a mesh by its bones to see how it bends, a handle
-  in the view to move, turn or scale by, a slider that moves the texture
+- Tools not here: a handle in the view to move, turn or scale by (a bone
+  is turned to see how the shapes bend with it, from knobs), a slider that moves the texture
   made here (one a set has is followed), and making a conversion reference
   from two bodies.
 - Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI

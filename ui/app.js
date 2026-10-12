@@ -109,6 +109,8 @@ const state = {
   alpha: Number(remembered.get("brush.alpha") ?? 100),
   /** Every bone the mesh on screen has, whether a shape follows it or not. */
   bones: [],
+  /** How far the picked bone is turned to look at a pose, in degrees about each axis. */
+  pose: [0, 0, 0],
   /** The bone the weight brush paints, by name, and how much each vertex of the picked shape follows it. */
   bone: null,
   heat: null,
@@ -244,6 +246,8 @@ function reshape() {
     shade(s.now, s.shown, s.weld, s.normals, s.sum);
     view.move(i, s.now, s.normals);
   });
+  // Bent by a bone, the shapes are shown bent: what they are is not changed.
+  if (state.tool === "pose") pose();
 }
 
 function presetValues(set, preset) {
@@ -1271,12 +1275,13 @@ function studioSide() {
       : state.side === "bones"
       ? [...(picked?.bones || []), ...[...new Set([...state.shapes.flatMap((o) => o.bones), ...(state.tool === "weights" ? state.bones : [])])].filter((b) => !picked?.bones.includes(b)).sort()].map((b) =>
           h(
-            "div.shape" + (state.tool === "weights" && b === state.bone ? ".on" : "") + (picked?.bones.includes(b) ? "" : ".off"),
+            "div.shape" + ((state.tool === "weights" || state.tool === "pose") && b === state.bone ? ".on" : "") + (picked?.bones.includes(b) ? "" : ".off"),
             {
               onclick: () => {
-                if (state.tool !== "weights") return;
+                if (state.tool !== "weights" && state.tool !== "pose") return;
                 state.bone = b;
                 heat();
+                if (state.tool === "pose") pose();
                 render();
               },
               oncontextmenu: (e) => {
@@ -1691,6 +1696,7 @@ const BRUSHES = [
   ["weights", "Weights"],
   ["colour", "Colour"],
   ["edge", "Edges"],
+  ["pose", "Pose"],
 ];
 
 /** How far the brush reaches, in the mesh's units. */
@@ -2249,8 +2255,38 @@ function brushBar() {
         ),
         h("span.sub.quiet", null, "Click an edge"),
       ),
+    state.tool === "pose" &&
+      h(
+        "div.brush",
+        null,
+        ...["Turn X", "Turn Y", "Turn Z"].map((label, axis) => {
+          const input = h("input", { type: "range", min: -90, max: 90, step: 1, value: state.pose[axis], "aria-label": label });
+          const fill = () => input.style.setProperty("--at", `${((Number(input.value) + 90) / 180) * 100}%`);
+          fill();
+          input.addEventListener("input", () => {
+            state.pose[axis] = Number(input.value);
+            fill();
+            pose();
+          });
+          return h("label.knob", null, h("span", null, label), input);
+        }),
+        h("span.sub.quiet.cut", null, state.bone || "No bone"),
+        h(
+          "button.btn.ghost.small",
+          {
+            type: "button",
+            onclick: () => {
+              state.pose = [0, 0, 0];
+              pose();
+              render();
+            },
+          },
+          "Reset",
+        ),
+      ),
     state.tool &&
       state.tool !== "edge" &&
+      state.tool !== "pose" &&
       h(
         "div.brush",
         null,
@@ -2420,18 +2456,142 @@ function lens(anchor) {
 
 /** Take a brush in hand, or with null put it down. */
 function hold(tool) {
+  const posed = state.tool === "pose";
   state.tool = tool;
-  // The weight brush paints one bone: the list shows which.
-  if (tool === "weights") state.side = "bones";
+  // The weight brush paints one bone, and a pose turns one: the list shows which.
+  if (tool === "weights" || tool === "pose") state.side = "bones";
   heat();
-  view.brush = tool ? brushing : null;
+  // A pose is looked at, not brushed.
+  const brushes = tool && tool !== "pose";
+  view.brush = brushes ? brushing : null;
   view.reach(null);
-  canvas.style.cursor = tool ? "crosshair" : "";
+  canvas.style.cursor = brushes ? "crosshair" : "";
+  if (tool === "pose") {
+    const s = state.shapes[state.picked];
+    if (s && (!state.bone || !state.shapes.some((o) => o.bones.includes(state.bone)))) state.bone = s.bones[0] || null;
+    bent.clear();
+    boneTree().then(() => state.tool === "pose" && pose());
+    pose();
+  } else if (posed) {
+    // Out of the pose: as they are.
+    reshape();
+  }
   render();
+}
+
+// ── Posing ─────────────────────────────────────────────────────────────────
+
+/** The game's skeletons: `{ path, bytes, names }` each, read once. */
+let skeletons = null;
+
+async function gameSkeletons() {
+  if (skeletons) return skeletons;
+  const list = await host.request("files.list", { folder: "Data/meshes/actors/character" }).catch(() => []);
+  // The woman's first: it has the bones a body's physics hangs on.
+  const found = list
+    .filter((f) => /(^|\/)skeleton[^/]*\.nif$/i.test(f.path))
+    .sort((a, b) => /female/i.test(b.path) - /female/i.test(a.path) || a.path.length - b.path.length)
+    .slice(0, 4);
+  const read = [];
+  for (const f of found) {
+    const bytes = await host.request("files.read", { path: f.path });
+    const [names] = core.ask({ op: "skeleton" }, new Uint8Array(bytes));
+    read.push({ path: f.path, bytes, names });
+  }
+  skeletons = read;
+  return skeletons;
+}
+
+/** Which bones hang from which, by the game's skeleton: each bone's name to those under it, however far. Empty with no skeleton to say. */
+let hangs = null;
+
+async function boneTree() {
+  if (hangs) return hangs;
+  const below = new Map();
+  try {
+    const [first] = await gameSkeletons();
+    if (first) {
+      const [pairs] = core.ask({ op: "skeletonTree" }, new Uint8Array(first.bytes));
+      const children = new Map();
+      for (const [name, parent] of pairs) if (parent) children.set(parent, [...(children.get(parent) || []), name]);
+      const all = (name, seen) => {
+        for (const c of children.get(name) || []) {
+          if (seen.has(c)) continue;
+          seen.add(c);
+          all(c, seen);
+        }
+        return seen;
+      };
+      for (const [name] of pairs) below.set(name, [...all(name, new Set())]);
+    }
+  } catch {
+    // Each bone turns what follows it alone, then.
+  }
+  hangs = below;
+  bent.clear();
+  return hangs;
+}
+
+/** For a shape and a bone: how much each vertex goes with the bone when it turns (what follows it, and what follows the bones under it). */
+const bent = new Map();
+
+function goesWith(s, bone) {
+  const key = `${s.name}\n${bone}`;
+  if (bent.has(key)) return bent.get(key);
+  const total = new Float32Array(s.now.length / 3);
+  for (const b of [bone, ...((hangs && hangs.get(bone)) || [])]) {
+    if (!s.bones.includes(b)) continue;
+    try {
+      const [, numbers] = core.ask({ op: "boneWeights", shape: s.name, bone: b });
+      const w = new Float32Array(numbers);
+      for (let v = 0; v < total.length && v < w.length; v++) total[v] += w[v];
+    } catch {
+      // A shape that cannot say is not bent.
+    }
+  }
+  bent.set(key, total);
+  return total;
+}
+
+/** Outfit Studio: show the shapes with the picked bone turned as the pose says, about where the bone stands. */
+function pose() {
+  if (!view || !state.work) return;
+  const bone = state.bone;
+  // Where the bone stands: as the first shape that follows it has it.
+  let pivot = null;
+  for (const s of state.shapes) {
+    const at = s.bones.indexOf(bone);
+    if (at >= 0 && s.places.length >= at * 3 + 3) {
+      pivot = [s.places[at * 3], s.places[at * 3 + 1], s.places[at * 3 + 2]];
+      break;
+    }
+  }
+  const [a, b, c] = state.pose.map((d) => (d * Math.PI) / 180);
+  const [ca, sa, cb, sb, cc, sc] = [Math.cos(a), Math.sin(a), Math.cos(b), Math.sin(b), Math.cos(c), Math.sin(c)];
+  // Turned about X, then Y, then Z.
+  const m = [cb * cc, sa * sb * cc - ca * sc, ca * sb * cc + sa * sc, cb * sc, sa * sb * sc + ca * cc, ca * sb * sc - sa * cc, -sb, sa * cb, ca * cb];
+  state.shapes.forEach((s, i) => {
+    if (!pivot || !bone || state.pose.every((d) => d === 0)) return view.move(i, s.now, s.normals);
+    const w = goesWith(s, bone);
+    const out = new Float32Array(s.now);
+    for (let v = 0; v < w.length; v++) {
+      const share = Math.min(1, w[v]);
+      if (share <= 0) continue;
+      const [x, y, z] = [s.now[v * 3] - pivot[0], s.now[v * 3 + 1] - pivot[1], s.now[v * 3 + 2] - pivot[2]];
+      out[v * 3] += (m[0] * x + m[1] * y + m[2] * z - x) * share;
+      out[v * 3 + 1] += (m[3] * x + m[4] * y + m[5] * z - y) * share;
+      out[v * 3 + 2] += (m[6] * x + m[7] * y + m[8] * z - z) * share;
+    }
+    const normals = new Float32Array(s.normals.length);
+    shade(out, s.shown, s.weld, normals, new Float32Array(s.sum.length));
+    view.move(i, out, normals);
+  });
 }
 
 /** Take a description of the project after a change, keeping each slider where it stood. */
 function taken(work, renamed, light) {
+  // What goes with each bone may have changed with the weights.
+  bent.clear();
   const stood = new Map(state.work.sliders.map((sl, i) => [sl.name, state.at[i]]));
   if (renamed) stood.set(renamed[1], stood.get(renamed[0]));
   const edited = state.work.sliders[state.editing]?.name;
@@ -2519,9 +2679,6 @@ async function reference(anchor) {
   );
 }
 
-/** The game's skeletons: `{ path, bytes, names }` each, read once. */
-let skeletons = null;
-
 /**
  * Outfit Studio: bring a bone into the mesh from the game's skeleton, to
  * paint a shape onto. It is then the bone the weight brush paints.
@@ -2530,18 +2687,7 @@ async function addBone(anchor) {
   try {
     if (!skeletons) {
       busy("Reading");
-      const list = await host.request("files.list", { folder: "Data/meshes/actors/character" }).catch(() => []);
-      // The woman's first: it has the bones a body's physics hangs on.
-      const found = list
-        .filter((f) => /(^|\/)skeleton[^/]*\.nif$/i.test(f.path))
-        .sort((a, b) => /female/i.test(b.path) - /female/i.test(a.path) || a.path.length - b.path.length)
-        .slice(0, 4);
-      skeletons = [];
-      for (const f of found) {
-        const bytes = await host.request("files.read", { path: f.path });
-        const [names] = core.ask({ op: "skeleton" }, new Uint8Array(bytes));
-        skeletons.push({ path: f.path, bytes, names });
-      }
+      await gameSkeletons();
       state.busy = null;
       render();
       anchor = document.querySelector("#side .side-head .btn") || anchor;
