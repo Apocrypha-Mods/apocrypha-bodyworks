@@ -11,7 +11,7 @@ use crate::edit::{is_plain_object, relinked};
 use crate::geometry::{is_tri_shape, TriShape};
 use crate::geometry_le::NiTriShape;
 use crate::io::{Reader, Writer};
-use crate::node::{is_node, Node};
+use crate::node::{is_node, Node, Transform};
 use crate::shader::LightingShader;
 use crate::{Block, Nif, NifError};
 use std::collections::{BTreeSet, HashMap};
@@ -64,6 +64,13 @@ fn restrung(
     match kind {
         "NiTriShape" => {
             let mut s = NiTriShape::read(data, stream)?;
+            // Material names are texts of the table too, and are not
+            // carried over here: a shape that names any is not copied.
+            if s.names_materials() {
+                return Err(NifError::Unsupported(
+                    "the shape names materials, which a copy would lose".into(),
+                ));
+            }
             s.av.name = map(s.av.name);
             Ok(s.write(stream))
         }
@@ -83,6 +90,44 @@ fn restrung(
             "the texts of a {kind} are not known"
         ))),
     }
+}
+
+/// One transform after another: `inner` in the space `outer` places.
+fn composed(outer: &Transform, inner: &Transform) -> Transform {
+    let (a, b) = (&outer.rotation, &inner.rotation);
+    let mut rotation = [0.0f32; 9];
+    for r in 0..3 {
+        for c in 0..3 {
+            rotation[r * 3 + c] = (0..3).map(|k| a[r * 3 + k] * b[k * 3 + c]).sum();
+        }
+    }
+    Transform {
+        translation: outer.apply(inner.translation),
+        rotation,
+        scale: outer.scale * inner.scale,
+    }
+}
+
+/// Where a node is in its file, through every node it hangs from, as one
+/// transform from the root's own space.
+fn placed(nif: &Nif, node: usize, parents: &HashMap<usize, usize>) -> Result<Transform, NifError> {
+    let stream = nif.header.stream.version;
+    let root = nif.roots.first().and_then(|r| usize::try_from(*r).ok());
+    let mut place = Node::read(&nif.blocks[node].data, stream)?.av.transform;
+    let mut at = node;
+    // No further up than there are blocks: a file whose nodes hang in a
+    // ring is not followed round it.
+    for _ in 0..nif.blocks.len() {
+        let Some(parent) = parents.get(&at).copied().filter(|p| Some(*p) != root) else {
+            break;
+        };
+        place = composed(
+            &Node::read(&nif.blocks[parent].data, stream)?.av.transform,
+            &place,
+        );
+        at = parent;
+    }
+    Ok(place)
 }
 
 /// Every node of a file by its name: the first, where two share one.
@@ -161,6 +206,19 @@ pub fn copy_shape(into: &mut Nif, from: &Nif, block: usize) -> Result<usize, Nif
         )?;
     }
 
+    // Each node's parent in the file the shape is from.
+    let mut parents: HashMap<usize, usize> = HashMap::new();
+    for at in 0..from.blocks.len() {
+        if is_node(from.kind_of(at)) {
+            if let Ok(n) = Node::read(&from.blocks[at].data, stream) {
+                for child in n.children {
+                    if let Ok(child) = usize::try_from(child) {
+                        parents.entry(child).or_insert(at);
+                    }
+                }
+            }
+        }
+    }
     // Each bone, by name, in the file the copy lands in.
     let mut have = node_names(into);
     let from_root = from.roots.first().and_then(|r| usize::try_from(*r).ok());
@@ -177,7 +235,9 @@ pub fn copy_shape(into: &mut Nif, from: &Nif, block: usize) -> Result<usize, Nif
             place.insert(*bone, *at as i32);
             continue;
         }
-        // Bare: where it is, and nothing hanging from it.
+        // Bare: nothing hanging from it, and since it hangs from the root
+        // here, placed where its own parents had it in the file it is from.
+        node.av.transform = placed(from, *bone, &parents)?;
         node.av.name = into.intern(&name);
         node.av.extra_data.clear();
         node.av.controller = -1;

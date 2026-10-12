@@ -661,6 +661,9 @@ impl Project {
             let t = turned(*p);
             *p = [t[0] + by[0], t[1] + by[1], t[2] + by[2]];
         }
+        if positions.iter().flatten().any(|c| !c.is_finite()) {
+            return invalid("That would put the shape further off than a mesh can say.");
+        }
         mesh::set_positions(&mut self.nif, block, &positions).map_err(fail)?;
         let target = &self.set.shapes[at].target;
         for own in &mut self.own {
@@ -719,13 +722,22 @@ impl Project {
             }
             Some(had)
         };
+        let mut is_spared = vec![false; ours.len()];
+        for v in spared {
+            if let Some(s) = is_spared.get_mut(*v as usize) {
+                *s = true;
+            }
+        }
         // Those the shape ends up following, in that order.
         let mut place: Vec<Option<u16>> = vec![None; names.len()];
         let mut mixed: Vec<[(u16, f32); weights::MOST]> = Vec::with_capacity(ours.len());
         let mut all: Vec<(u16, f32)> = Vec::new();
         for v in 0..ours.len() {
             all.clear();
-            match had.as_ref().filter(|_| spared.contains(&(v as u16))) {
+            match had
+                .as_ref()
+                .filter(|_| is_spared.get(v).copied().unwrap_or(false))
+            {
                 Some(had) => {
                     for (bone, weight) in had.vertices.get(v).copied().unwrap_or_default() {
                         if weight > 0.0 {
@@ -956,6 +968,9 @@ impl Project {
             .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
         let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
         let count = mesh::read(&self.nif, block).map_err(fail)?.positions.len();
+        if count > u16::MAX as usize + 1 {
+            return invalid(format!("{shape} has more vertices than can be numbered."));
+        }
         let mut gone = vec![false; count];
         for v in vertices {
             match gone.get_mut(*v as usize) {
@@ -1218,6 +1233,23 @@ impl Project {
         done.map_err(|e| Error::Invalid(e.to_string()))
     }
 
+    /// Give vertices of a shape colours: each `(vertex, colour)`.
+    pub fn paint_colors(&mut self, shape: &str, colors: &[(u16, [u8; 4])]) -> Result<(), Error> {
+        self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let count = mesh::colors(&self.nif, block).map_err(fail)?.len();
+        if count == 0 {
+            return invalid(format!("{shape} carries no colours to paint."));
+        }
+        if colors.iter().any(|(v, _)| *v as usize >= count) {
+            return invalid(format!("{shape} has {count} vertices."));
+        }
+        mesh::set_colors(&mut self.nif, block, colors).map_err(fail)
+    }
+
     /// Mirror a shape across the middle of the body: every vertex to the
     /// other side, its triangles turned to face out again, what sliders do
     /// to it mirrored too, and each bone it follows changed for its twin on
@@ -1260,10 +1292,10 @@ impl Project {
                                 .all(|t| theirs.contains(t) || skin.bones.contains(t))
                     });
                     skin.bones = twins;
-                    let mut swapped = self.nif.clone();
-                    if weights::write(&mut swapped, block, &skin, like).is_ok() {
-                        self.nif = swapped;
-                    }
+                    // A twin that cannot be placed stops the mirror: a shape
+                    // across the body still following this side's bones
+                    // would bend with the wrong arm.
+                    weights::write(&mut self.nif, block, &skin, like)?;
                 }
             }
             Ok(())
@@ -1386,9 +1418,31 @@ impl Project {
             version: 1,
             lists: Vec::new(),
         };
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (slider, own) in set.sliders.iter_mut().zip(&self.own) {
             for o in own {
-                let list = format!("{}{}", o.target, slider.name);
+                // Named as the original names them, shape then slider; two
+                // pairs that spell the same are told apart by a number, and
+                // a name or a list the file cannot hold stops the save
+                // before it is cut short.
+                let mut list = format!("{}{}", o.target, slider.name);
+                let mut again = 1;
+                while !used.insert(list.clone()) {
+                    again += 1;
+                    list = format!("{}{} {again}", o.target, slider.name);
+                }
+                if list.len() > 255 {
+                    return invalid(format!(
+                        "{} for {} makes a name too long to save. Shorten one of them.",
+                        slider.name, o.target
+                    ));
+                }
+                if o.diffs.len() > u16::MAX as usize {
+                    return invalid(format!(
+                        "{} moves more of {} than a slider's data can hold.",
+                        slider.name, o.target
+                    ));
+                }
                 slider.data.push(DataRef {
                     name: list.clone(),
                     target: o.target.clone(),

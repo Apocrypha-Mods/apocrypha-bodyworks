@@ -69,7 +69,11 @@ pub(crate) fn is_plain_object(kind: &str) -> bool {
 pub fn links_known(kind: &str) -> bool {
     has_no_links(kind)
         || is_plain_object(kind)
-        || is_node(kind)
+        || (is_node(kind)
+            && !matches!(
+                kind,
+                "BSTreeNode" | "BSMultiBoundNode" | "BSMasterParticleSystem" | "NiLODNode"
+            ))
         || is_tri_shape(kind)
         || matches!(
             kind,
@@ -141,6 +145,16 @@ pub(crate) fn relinked(
         return Ok(w.out);
     }
     if is_node(kind) {
+        // A node of a kind that links to more than a node does, after what
+        // is read of it here, is not one whose links are all known.
+        if matches!(
+            kind,
+            "BSTreeNode" | "BSMultiBoundNode" | "BSMasterParticleSystem" | "NiLODNode"
+        ) {
+            return Err(NifError::Unsupported(format!(
+                "the links of a {kind} are not known"
+            )));
+        }
         let mut n = Node::read(data, stream)?;
         av(&mut n.av, map);
         many(&mut n.children, map);
@@ -347,6 +361,13 @@ pub fn remove_shapes(nif: &mut Nif, shapes: &[usize]) -> Result<(), NifError> {
 pub fn remove_vertices(nif: &mut Nif, block: usize, gone: &[bool]) -> Result<usize, NifError> {
     let stream = nif.header.stream.version;
     let kind = nif.kind_of(block).to_string();
+    // A vertex is numbered in sixteen bits: more than that many is not a
+    // shape these files can hold, and would be counted wrongly here.
+    if gone.len() > u16::MAX as usize + 1 {
+        return Err(NifError::Unsupported(
+            "a shape of more vertices than can be numbered".into(),
+        ));
+    }
     let mut next = 0u16;
     let now: Vec<Option<u16>> = gone
         .iter()

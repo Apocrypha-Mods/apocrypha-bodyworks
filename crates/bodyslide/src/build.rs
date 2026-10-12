@@ -107,9 +107,11 @@ pub fn build_with(
     let mut shapes = Vec::new();
     let mut built = Built::default();
     for shape in &set.shapes {
+        // Found by its name, and only then read: reading is the cost.
         let found = blocks
             .iter()
-            .find_map(|at| mesh::read(&base, *at).ok().filter(|m| m.name == shape.name));
+            .find(|at| mesh::name(&base, **at).as_deref() == Some(shape.name.as_str()))
+            .and_then(|at| mesh::read(&base, *at).ok());
         match found {
             Some(m) => shapes.push((shape, m)),
             None => built

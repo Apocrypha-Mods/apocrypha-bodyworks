@@ -479,6 +479,62 @@ pub fn set_uvs(nif: &mut Nif, block: usize, uvs: &[[f32; 2]]) -> Result<(), NifE
     Ok(())
 }
 
+/// The colour each vertex of the shape at `block` carries (red, green,
+/// blue, and how solid), or nothing for a shape whose vertices carry none.
+pub fn colors(nif: &Nif, block: usize) -> Result<Vec<[u8; 4]>, NifError> {
+    let stream = nif.header.stream.version;
+    if !geometry::is_tri_shape(nif.kind_of(block)) {
+        return Ok(Vec::new());
+    }
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let Some(layout) = Layout::of(shape.vertex_desc, stream).filter(|l| l.has(attr::COLOR)) else {
+        return Ok(Vec::new());
+    };
+    if !shape.has_vertices() {
+        match partition_of(nif, &shape) {
+            Some((_, p)) => shape.vertex_data = p.vertex_data,
+            None => return Ok(Vec::new()),
+        }
+    }
+    let count = shape.vertex_data.len() / layout.stride.max(1);
+    Ok((0..count).filter_map(|v| shape.color(&layout, v)).collect())
+}
+
+/// Give vertices of a shape colours, in every place the file keeps them:
+/// each `(vertex, colour)`. A shape whose vertices carry no colour is
+/// refused: giving it room for one would change every vertex of it.
+pub fn set_colors(nif: &mut Nif, block: usize, colors: &[(u16, [u8; 4])]) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    if !geometry::is_tri_shape(nif.kind_of(block)) {
+        return Err(NifError::Unsupported(
+            "the shape's vertices carry no colour".into(),
+        ));
+    }
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    let layout = Layout::of(shape.vertex_desc, stream)
+        .filter(|l| l.has(attr::COLOR))
+        .ok_or_else(|| NifError::Unsupported("the shape's vertices carry no colour".into()))?;
+    let apply = |target: &mut TriShape| {
+        for (v, c) in colors {
+            target.set_color(&layout, *v as usize, *c);
+        }
+    };
+    if let Some((at, mut p)) = partition_of(nif, &shape) {
+        if !p.vertex_data.is_empty() {
+            let mut view = shape.clone();
+            view.vertex_data = std::mem::take(&mut p.vertex_data);
+            apply(&mut view);
+            p.vertex_data = view.vertex_data;
+            nif.blocks[at].data = p.write(stream);
+        }
+    }
+    if shape.has_vertices() {
+        apply(&mut shape);
+        nif.blocks[block].data = shape.write(stream);
+    }
+    Ok(())
+}
+
 /// Give a shape new normals, and with them new tangents and bitangents
 /// where it stores those, in every place the file keeps them. A shape that
 /// stores no normals (a body lit from a normal map) is left as it is.

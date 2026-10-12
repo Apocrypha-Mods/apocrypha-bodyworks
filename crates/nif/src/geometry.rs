@@ -203,13 +203,15 @@ impl TriShape {
         let stride = (vertex_desc & 0xf) as usize * 4;
         let (vertex_data, triangles) = if data_size > 0 {
             let vertex_data = r.take(vertex_count as usize * stride)?.to_vec();
-            let mut triangles = Vec::with_capacity(stated_triangles as usize);
+            // Room is made only once the bytes are known to be there: a
+            // few bytes can state a count of billions.
             if (stated_triangles as usize)
                 .checked_mul(6)
                 .is_none_or(|n| n > r.left())
             {
                 return Err(NifError::Truncated);
             }
+            let mut triangles = Vec::with_capacity(stated_triangles as usize);
             for _ in 0..stated_triangles {
                 triangles.push([r.u16()?, r.u16()?, r.u16()?]);
             }
@@ -465,6 +467,12 @@ impl TriShape {
         let at = self.at(layout, vertex, layout.color, 4)?;
         let d = &self.vertex_data;
         Some([d[at], d[at + 1], d[at + 2], d[at + 3]])
+    }
+
+    pub fn set_color(&mut self, layout: &Layout, vertex: usize, color: [u8; 4]) {
+        if let Some(at) = self.at(layout, vertex, layout.color, 4) {
+            self.vertex_data[at..at + 4].copy_from_slice(&color);
+        }
     }
 
     /// The four bones a vertex follows and how much it follows each.

@@ -236,10 +236,24 @@ impl Partition {
     /// own list of vertices, its triangles over those, and room for its
     /// copy of their weights (left at nothing, for the caller to fill) all
     /// follow.
-    pub fn retriangle(&mut self, triangles: Vec<[u16; 3]>) {
+    ///
+    /// Refused, with nothing changed, for more triangles or vertices than a
+    /// partition can count, and for one that keeps its faces as strips,
+    /// which would be left saying something else.
+    pub fn retriangle(&mut self, triangles: Vec<[u16; 3]>) -> Result<(), NifError> {
+        if self.strips.iter().any(|s| !s.is_empty()) {
+            return Err(NifError::Unsupported(
+                "a part keeps its faces as strips, which this cannot change".into(),
+            ));
+        }
         let mut map: Vec<u16> = triangles.iter().flatten().copied().collect();
         map.sort_unstable();
         map.dedup();
+        if triangles.len() > u16::MAX as usize || map.len() > u16::MAX as usize {
+            return Err(NifError::Unsupported(
+                "that is more than one part of a shape can hold".into(),
+            ));
+        }
         let own = |v: u16| map.binary_search(&v).unwrap_or(0) as u16;
         if self.triangles.is_some() {
             self.triangles = Some(triangles.iter().map(|t| t.map(own)).collect());
@@ -255,6 +269,7 @@ impl Partition {
         self.vertex_map = Some(map);
         self.triangle_count = triangles.len() as u16;
         self.true_triangles = Some(triangles);
+        Ok(())
     }
 }
 
@@ -427,7 +442,7 @@ impl SkinPartition {
         } else {
             (None, None, None, Vec::new())
         };
-        let mut partitions = Vec::with_capacity(count);
+        let mut partitions = Vec::with_capacity(count.min(4096));
         for _ in 0..count {
             let vertex_count = r.u16()?;
             let triangle_count = r.u16()?;
@@ -449,6 +464,9 @@ impl SkinPartition {
                 None
             };
             let vertex_weights = if r.u8()? != 0 {
+                if (nv * wpv).checked_mul(4).is_none_or(|n| n > r.left()) {
+                    return Err(NifError::Truncated);
+                }
                 let mut weights = Vec::with_capacity(nv * wpv);
                 for _ in 0..nv * wpv {
                     weights.push(r.f32()?);

@@ -33,7 +33,8 @@ export function positions(text) {
   for (const line of text.split(/\r?\n/)) {
     if (line[0] !== "v" || (line[1] !== " " && line[1] !== "\t")) continue;
     const [x, y, z] = line.slice(2).trim().split(/\s+/).map(Number);
-    if (![x, y, z].every(Number.isFinite)) throw new Error("The file has a vertex that is not three numbers.");
+    // As a mesh will hold them: a number too large for it is not a number there.
+    if (![x, y, z].every((c) => Number.isFinite(Math.fround(c)))) throw new Error("The file has a vertex that is not three numbers a mesh can hold.");
     out.push(x, y, z);
   }
   return Float32Array.from(out);

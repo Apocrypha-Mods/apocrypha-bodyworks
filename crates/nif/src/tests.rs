@@ -281,3 +281,57 @@ fn a_real_skin_written_back_reads_as_it_was() {
     }
     eprintln!("{skins} skins written back, {same_bytes} to the same bytes");
 }
+
+/// Real shapes that carry colours, when there are any: colours read, one
+/// changed, and only that one changed.
+#[test]
+fn a_real_shapes_colours_are_read_and_one_is_changed() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("nif"))
+            {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scratch/samples/cbbe");
+    let mut files = Vec::new();
+    walk(&root.join("@conditional-3"), &mut files);
+    files.sort();
+    let mut seen = 0;
+    for path in files.iter().step_by(7) {
+        let bytes = std::fs::read(path).unwrap();
+        let Ok(nif) = Nif::read(&bytes) else { continue };
+        for at in mesh::shapes(&nif) {
+            let colors = mesh::colors(&nif, at).unwrap();
+            if colors.is_empty() {
+                assert!(mesh::set_colors(&mut nif.clone(), at, &[(0, [1, 2, 3, 4])]).is_err());
+                continue;
+            }
+            assert_eq!(colors.len(), mesh::read(&nif, at).unwrap().positions.len());
+            let mut painted = nif.clone();
+            mesh::set_colors(&mut painted, at, &[(1, [9, 8, 7, 6])]).unwrap();
+            let written = painted.write();
+            assert_eq!(written.len(), bytes.len(), "{}", path.display());
+            let again = Nif::read(&written).unwrap();
+            let now = mesh::colors(&again, at).unwrap();
+            assert_eq!(now[1], [9, 8, 7, 6]);
+            assert!(colors
+                .iter()
+                .zip(&now)
+                .enumerate()
+                .all(|(v, (a, b))| v == 1 || a == b));
+            assert_eq!(
+                mesh::read(&again, at).unwrap().positions,
+                mesh::read(&nif, at).unwrap().positions
+            );
+            seen += 1;
+        }
+    }
+    eprintln!("{seen} shapes with colours");
+}

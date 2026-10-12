@@ -21,6 +21,14 @@ pub struct NiTriShape {
 }
 
 impl NiTriShape {
+    /// Whether the shape names materials: texts of the file's table that a
+    /// copy into another file would have to carry over.
+    pub fn names_materials(&self) -> bool {
+        self.materials
+            .get(..4)
+            .is_some_and(|c| c.iter().any(|b| *b != 0))
+    }
+
     pub fn read(data: &[u8], stream: u32) -> Result<Self, NifError> {
         let mut r = Reader::new(data);
         let av = AvObject::read(&mut r, stream)?;

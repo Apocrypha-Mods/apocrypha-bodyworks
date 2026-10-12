@@ -62,12 +62,40 @@ fn blocks(nif: &Nif, block: usize) -> Result<Blocks, NifError> {
         of(read.data, &["NiSkinData"]),
         of(read.partition, &["NiSkinPartition"]),
     ) {
-        (Some(data), Some(partition)) => Ok(Blocks {
-            instance,
-            dismember,
-            data,
-            partition,
-        }),
+        (Some(data), Some(partition)) => {
+            // A skin two shapes share is not one shape's to change, and what
+            // is read of it for one would be wrong for the other.
+            let mut users = 0;
+            for other in 0..nif.blocks.len() {
+                let kind = nif.kind_of(other);
+                if kind != "NiSkinInstance" && kind != "BSDismemberSkinInstance" {
+                    continue;
+                }
+                if other != instance {
+                    if let Ok(theirs) =
+                        SkinInstance::read(&nif.blocks[other].data, kind != "NiSkinInstance")
+                    {
+                        if theirs.data == read.data || theirs.partition == read.partition {
+                            users += 1;
+                        }
+                    }
+                }
+            }
+            let shapes = (0..nif.blocks.len())
+                .filter(|b| is_tri_shape(nif.kind_of(*b)))
+                .filter_map(|b| TriShape::read(&nif.blocks[b].data, stream).ok())
+                .filter(|s| s.skin == shape.skin)
+                .count();
+            if users > 0 || shapes > 1 {
+                return unsupported("the shape shares its skin with another shape");
+            }
+            Ok(Blocks {
+                instance,
+                dismember,
+                data,
+                partition,
+            })
+        }
         _ => unsupported("the shape's skin has no data or no partitions"),
     }
 }
@@ -88,16 +116,25 @@ pub fn read(nif: &Nif, block: usize) -> Result<Skin, NifError> {
         };
         let mut slots = [(0u16, 0.0f32); MOST];
         for k in 0..MOST {
-            if weights[k] > 0.0 {
+            if weights[k] > 0.0 && weights[k].is_finite() {
                 slots[k] = (bones[k] as u16, weights[k]);
             }
         }
         vertices.push(slots);
     }
-    Ok(Skin {
-        bones: mesh::bone_names(nif, block),
-        vertices,
-    })
+    let bones = mesh::bone_names(nif, block);
+    // A vertex following a bone the skin does not list is a broken file,
+    // said here once and not found out by whatever reads the skin next.
+    if vertices
+        .iter()
+        .flatten()
+        .any(|(b, w)| *w > 0.0 && *b as usize >= bones.len())
+    {
+        return Err(NifError::Corrupt(
+            "a vertex follows a bone the skin does not list".into(),
+        ));
+    }
+    Ok(Skin { bones, vertices })
 }
 
 /// A vertex's weights as a file keeps them: the heaviest four, heaviest
@@ -183,6 +220,17 @@ pub fn write(
         None => None,
     };
     let positions = mesh::read(nif, block)?.positions;
+    // Each bone's vertices, gathered in one pass over the vertices.
+    let mut by_bone: Vec<Vec<(u16, f32)>> = vec![Vec::new(); skin.bones.len()];
+    if data.has_weights != 0 {
+        for (v, slots) in vertices.iter().enumerate() {
+            for (bone, w) in slots {
+                if *w > 0.0 {
+                    by_bone[*bone as usize].push((v as u16, *w));
+                }
+            }
+        }
+    }
     let mut nodes = Vec::with_capacity(skin.bones.len());
     let mut bones = Vec::with_capacity(skin.bones.len());
     for (i, name) in skin.bones.iter().enumerate() {
@@ -192,20 +240,7 @@ pub fn write(
             .filter(|n| is_node(nif.kind_of(*n)))
             .ok_or_else(|| NifError::Unsupported(format!("the mesh has no bone named {name}")))?;
         nodes.push(node as i32);
-        let weights: Vec<(u16, f32)> = if data.has_weights != 0 {
-            vertices
-                .iter()
-                .enumerate()
-                .filter_map(|(v, slots)| {
-                    slots
-                        .iter()
-                        .find(|(b, w)| *b as usize == i && *w > 0.0)
-                        .map(|(_, w)| (v as u16, *w))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let weights = std::mem::take(&mut by_bone[i]);
         let old = had
             .iter()
             .position(|n| n == name)
@@ -292,6 +327,27 @@ pub fn write(
         if p.bone_indices.is_some() {
             p.bone_indices = Some(numbers);
         }
+    }
+    // The shape's own copy of its vertices, where it keeps one as well.
+    let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+    if shape.has_vertices() {
+        let own = Layout::of(shape.vertex_desc, stream)
+            .filter(|l| shape.vertex_data.len() / l.stride.max(1) == vertices.len());
+        let Some(own) = own else {
+            return unsupported("the shape and its skin disagree about its vertices");
+        };
+        for (v, slots) in vertices.iter().enumerate() {
+            let weights = [slots[0].1, slots[1].1, slots[2].1, slots[3].1];
+            let numbers = [0, 1, 2, 3].map(|k| {
+                if slots[k].1 > 0.0 {
+                    slots[k].0 as u8
+                } else {
+                    0
+                }
+            });
+            set_skin_weights_in(&mut shape.vertex_data, &own, v, weights, numbers);
+        }
+        nif.blocks[block].data = shape.write(stream);
     }
     data.bones = bones;
     instance.bones = nodes;
@@ -402,8 +458,8 @@ pub fn bone_places(nif: &Nif, block: usize) -> Result<Vec<[f32; 3]>, NifError> {
 
 /// Give a partition new triangles; [`settle`] then fills its copy of the
 /// weights.
-fn retriangled(p: &mut crate::skin::Partition, triangles: Vec<[u16; 3]>) {
-    p.retriangle(triangles);
+fn retriangled(p: &mut crate::skin::Partition, triangles: Vec<[u16; 3]>) -> Result<(), NifError> {
+    p.retriangle(triangles)
 }
 
 /// Write a shape's skin back as it reads: after its partitions' vertices
@@ -454,7 +510,7 @@ pub fn move_to_part(
             return unsupported("that would leave a part with nothing in it");
         }
         moved.extend(going);
-        retriangled(p, staying);
+        retriangled(p, staying)?;
     }
     if moved.is_empty() {
         return unsupported("no whole triangle is marked that is not in that part already");
@@ -465,11 +521,11 @@ pub fn move_to_part(
             let p = &mut partition.partitions[t];
             let mut all = p.true_triangles.clone().unwrap_or_default();
             all.extend(moved);
-            retriangled(p, all);
+            retriangled(p, all)?;
         }
         None => {
             let mut p = partition.partitions[0].clone();
-            retriangled(&mut p, moved);
+            retriangled(&mut p, moved)?;
             partition.partitions.push(p);
             let flags = named[0].0;
             named.push((flags, new_part));
@@ -506,7 +562,7 @@ pub fn flip_facing(nif: &mut Nif, block: usize) -> Result<(), NifError> {
         for t in &mut all {
             t.swap(1, 2);
         }
-        retriangled(p, all);
+        retriangled(p, all)?;
     }
     nif.blocks[at.partition].data = partition.write(stream);
     settle(nif, block)
@@ -554,7 +610,7 @@ pub fn remove_part(nif: &mut Nif, block: usize, index: usize, into: usize) -> Re
         return unsupported("a part keeps its triangles in a way this cannot change");
     };
     all.extend(going);
-    retriangled(&mut partition.partitions[into], all);
+    retriangled(&mut partition.partitions[into], all)?;
     partition.partitions.remove(index);
     named.remove(index);
     nif.blocks[at.instance].data = instance.write();

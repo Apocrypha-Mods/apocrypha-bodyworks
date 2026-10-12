@@ -180,6 +180,20 @@ impl Work {
             }
             Change::ImportSlider { slider } => p.import_slider(&slider, data).map(drop),
             Change::RemovePart { shape, index, into } => p.remove_part(&shape, index, into),
+            Change::Colour { shape } => {
+                let colors: Vec<(u16, [u8; 4])> = data
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .filter_map(|c| {
+                        Some((
+                            u16::try_from(u32::from_le_bytes([c[0], c[1], c[2], c[3]])).ok()?,
+                            [c[4], c[5], c[6], c[7]],
+                        ))
+                    })
+                    .collect();
+                p.paint_colors(&shape, &colors)
+            }
             Change::Paint { shape, bone } => {
                 let painted: Vec<(u16, f32)> = data
                     .as_chunks::<8>()
@@ -228,13 +242,22 @@ impl Work {
         Ok(())
     }
 
-    /// Let the oldest steps go while there are too many, or too much.
+    /// Let the oldest steps go while there are too many, or while what is
+    /// kept, each at its own size and both ways counted together, is too
+    /// much. One step back is always kept.
     fn trim(&mut self) {
-        let each = self.project.mesh_bytes().max(1);
-        let most = (UNDO_BYTES / each).clamp(1, UNDO);
-        for list in [&mut self.undo, &mut self.redo] {
-            while list.len() > most {
-                list.remove(0);
+        let weight = |list: &[Project]| list.iter().map(Project::mesh_bytes).sum::<usize>();
+        while self.undo.len() > UNDO {
+            self.undo.remove(0);
+        }
+        while self.undo.len() + self.redo.len() > 1
+            && weight(&self.undo) + weight(&self.redo) > UNDO_BYTES
+        {
+            // What can be put back goes before what can be taken back.
+            if self.redo.is_empty() {
+                self.undo.remove(0);
+            } else {
+                self.redo.remove(0);
             }
         }
     }
@@ -402,6 +425,12 @@ enum Change {
         shape: String,
         index: usize,
         into: usize,
+    },
+    /// Give vertices of a shape colours. The request's bytes are, for each
+    /// vertex, its number in four bytes and then red, green, blue and how
+    /// solid, a byte each.
+    Colour {
+        shape: String,
     },
     /// Set how much vertices of a shape follow a bone. The request's bytes
     /// are, for each vertex, its number and the weight, four bytes each.
@@ -775,9 +804,11 @@ impl State {
         let mut shapes = Vec::new();
         let mut cache: HashMap<String, Option<osd::SliderData>> = HashMap::new();
         for shape in &set.shapes {
+            // Found by its name, and only then read: reading is the cost.
             let Some(m) = blocks
                 .iter()
-                .find_map(|at| mesh::read(&nif, *at).ok().filter(|m| m.name == shape.name))
+                .find(|at| mesh::name(&nif, **at).as_deref() == Some(shape.name.as_str()))
+                .and_then(|at| mesh::read(&nif, *at).ok())
             else {
                 continue;
             };
@@ -842,7 +873,16 @@ impl State {
                     .into_iter()
                     .flatten(),
             );
+            // Colours as they are in the file: four bytes a vertex.
+            let colors = put_u32(
+                &mut bytes,
+                &mut mesh::colors(&nif, m.block)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(u32::from_le_bytes),
+            );
             shapes.push(json!({
+                "colors": colors,
                 "parts": parts,
                 "bonePlaces": places,
                 "name": m.name,
