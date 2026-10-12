@@ -139,6 +139,16 @@ impl Work {
                     .collect();
                 p.delete_vertices(&shape, &vertices)
             }
+            Change::FlipUv { shape, across } => p.flip_uv(&shape, across),
+            Change::AddZap { name, shape } => {
+                let vertices: Vec<u16> = data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter_map(|c| u16::try_from(u32::from_le_bytes(*c)).ok())
+                    .collect();
+                p.add_zap(&name, &shape, &vertices)
+            }
             Change::Paint { shape, bone } => {
                 let painted: Vec<(u16, f32)> = data
                     .as_chunks::<8>()
@@ -295,6 +305,17 @@ enum Change {
     /// Take vertices out of a shape: the request's bytes are their numbers,
     /// four bytes each.
     DeleteVertices {
+        shape: String,
+    },
+    /// Turn a shape's texture over, left to right or top to bottom.
+    FlipUv {
+        shape: String,
+        across: bool,
+    },
+    /// A new slider that takes vertices of a shape out: the request's bytes
+    /// are their numbers, four bytes each.
+    AddZap {
+        name: String,
         shape: String,
     },
     /// Set how much vertices of a shape follow a bone. The request's bytes

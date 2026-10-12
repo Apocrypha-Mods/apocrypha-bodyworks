@@ -32,8 +32,11 @@ function h(spec, props, ...children) {
   return el;
 }
 
+/** What is kept between visits; and where the frame has no storage of its own, for this visit at least. */
+const kept = new Map();
 const remembered = {
   get(key) {
+    if (kept.has(key)) return kept.get(key);
     try {
       return localStorage.getItem(`bodyslide.${key}`);
     } catch {
@@ -41,10 +44,11 @@ const remembered = {
     }
   },
   set(key, value) {
+    kept.set(key, value);
     try {
       localStorage.setItem(`bodyslide.${key}`, value);
     } catch {
-      // A frame with no storage of its own remembers nothing; that is fine.
+      // A frame with no storage of its own remembers for this visit only.
     }
   },
 };
@@ -653,6 +657,59 @@ function busy(text) {
   const el = document.getElementById("status");
   if (el) el.textContent = text;
   else render();
+}
+
+/**
+ * Handles between the panels of `main`, to drag one wider or narrower. Each
+ * of `panels` is `{ el, edge, key, least }`: the handle sits on that edge
+ * ("left" or "right") of the panel, whose width is kept under `key`.
+ * A double click gives a panel back the width it starts with.
+ */
+function splits(main, panels) {
+  const made = panels.map((p) => {
+    const kept = Number(remembered.get(`wide.${p.key}`));
+    if (kept > 0) main.style.setProperty(`--${p.key}`, `${kept}px`);
+    const handle = h("div.split", { role: "separator", "aria-orientation": "vertical", "aria-label": "Resize" });
+    let from = null;
+    handle.addEventListener("pointerdown", (e) => {
+      from = { x: e.clientX, wide: p.el.getBoundingClientRect().width };
+      handle.setPointerCapture(e.pointerId);
+      handle.classList.add("held");
+    });
+    handle.addEventListener("pointermove", (e) => {
+      if (!from) return;
+      const by = (e.clientX - from.x) * (p.edge === "left" ? -1 : 1);
+      // Never so wide that the others have no room left.
+      const others = panels.filter((o) => o !== p).reduce((sum, o) => sum + o.el.getBoundingClientRect().width, 0);
+      const most = main.clientWidth - others - 220 - 12 * panels.length;
+      const wide = Math.round(Math.max(p.least, Math.min(most, from.wide + by)));
+      main.style.setProperty(`--${p.key}`, `${wide}px`);
+      remembered.set(`wide.${p.key}`, String(wide));
+      place();
+    });
+    const up = () => {
+      from = null;
+      handle.classList.remove("held");
+    };
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+    handle.addEventListener("dblclick", () => {
+      main.style.removeProperty(`--${p.key}`);
+      remembered.set(`wide.${p.key}`, "");
+      place();
+    });
+    main.append(handle);
+    return [p, handle];
+  });
+  const place = () => {
+    const box = main.getBoundingClientRect();
+    for (const [p, handle] of made) {
+      const r = p.el.getBoundingClientRect();
+      handle.style.left = `${(p.edge === "left" ? r.left - 12 : r.right) - box.left}px`;
+    }
+  };
+  new ResizeObserver(place).observe(main);
+  place();
 }
 
 function pickButton(label, value, onclick) {
@@ -1882,6 +1939,11 @@ function renderStudio() {
           ]
         : []),
   );
+  const studio = root.querySelector(".main.studio");
+  splits(studio, [
+    { el: studio.querySelector("#side"), edge: "right", key: "side", least: 160 },
+    { el: studio.querySelector("#list"), edge: "left", key: "sliders", least: 200 },
+  ]);
   studioSide();
   const side = document.querySelector("#side .rows");
   if (side) side.scrollTop = sideAt;
@@ -1966,6 +2028,8 @@ function render() {
     ),
     h("div.bar", { id: "foot" }),
   );
+  const main = root.querySelector(".main");
+  splits(main, [{ el: main.querySelector(".view"), edge: "left", key: "view", least: 240 }]);
   list();
   foot();
 }

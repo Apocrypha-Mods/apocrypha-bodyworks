@@ -964,6 +964,56 @@ impl Project {
         Ok(())
     }
 
+    /// Turn a shape's texture over: left to right (`across`) or top to
+    /// bottom.
+    pub fn flip_uv(&mut self, shape: &str, across: bool) -> Result<(), Error> {
+        self.shape(shape)?;
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let mut uvs = mesh::read(&self.nif, block).map_err(fail)?.uvs;
+        if uvs.is_empty() {
+            return invalid(format!("{shape} has no texture coordinates."));
+        }
+        for uv in &mut uvs {
+            let k = if across { 0 } else { 1 };
+            uv[k] = 1.0 - uv[k];
+        }
+        mesh::set_uvs(&mut self.nif, block, &uvs).map_err(fail)
+    }
+
+    /// A new slider that takes these vertices of a shape out when it is on.
+    pub fn add_zap(&mut self, name: &str, shape: &str, vertices: &[u16]) -> Result<(), Error> {
+        let at = self.shape(shape)?;
+        if vertices.is_empty() {
+            return invalid("Mask what the slider is to take out first.");
+        }
+        let before = self.clone();
+        let done = (|| {
+            self.add_slider(name)?;
+            let slider = self.set.sliders.last_mut().expect("just added");
+            slider.zap = true;
+            slider.small = 100.0;
+            slider.big = 100.0;
+            let name = slider.name.clone();
+            // A vertex is marked by a move of any size: one unit up.
+            let marks: Vec<Diff> = vertices
+                .iter()
+                .map(|v| Diff {
+                    vertex: *v,
+                    offset: [0.0, 0.0, 1.0],
+                })
+                .collect();
+            let shape = self.set.shapes[at].name.clone();
+            self.move_vertices(&shape, Some(&name), &marks)
+        })();
+        if done.is_err() {
+            *self = before;
+        }
+        done
+    }
+
     /// Where a build of the project goes, and whether as two meshes.
     pub fn output(&mut self, folder: &str, file: &str, weights: bool) -> Result<(), Error> {
         let file = file_name(file.trim().trim_end_matches(".nif"));

@@ -568,6 +568,49 @@ fn a_mesh_becomes_a_project_fitted_to_a_body() {
     assert_eq!(place(&based, &reference.name), body_was);
     assert!(based.set_base(&[0.0]).is_err());
 
+    // A slider that takes part of a shape out, and a texture turned over.
+    let mut zapped = project.clone();
+    zapped
+        .add_zap("No straps", "Bra", &[0, 1, 2, 3, 4, 5])
+        .unwrap();
+    assert!(zapped.add_zap("No straps", "Bra", &[0]).is_err());
+    assert!(zapped.add_zap("Nothing", "Bra", &[]).is_err());
+    let (zap_set, zap_files) = zapped.save("Zap").unwrap();
+    assert!(zap_set.sliders.last().unwrap().zap);
+    let zap_held: HashMap<String, Vec<u8>> =
+        zap_files.into_iter().map(|o| (o.path, o.bytes)).collect();
+    let built_at = |on: f32| {
+        let mut values = vec![0.0; zap_set.sliders.len()];
+        *values.last_mut().unwrap() = on;
+        let out = build::build_at(&zap_set, &values, &values, &|path: &str| {
+            zap_held.get(path).cloned().or_else(|| on_disk(path))
+        })
+        .unwrap();
+        let nif = apoc_nif::Nif::read(&out.outputs[0].bytes).unwrap();
+        apoc_nif::mesh::shapes(&nif)
+            .into_iter()
+            .map(|at| apoc_nif::mesh::read(&nif, at).unwrap())
+            .find(|m| m.name == "Bra")
+            .unwrap()
+            .positions
+            .len()
+    };
+    assert_eq!(built_at(0.0), built_at(100.0) + 6);
+    let uv = |p: &Project| {
+        let at = apoc_nif::mesh::shapes(&p.nif)
+            .into_iter()
+            .find(|at| apoc_nif::mesh::name(&p.nif, *at).as_deref() == Some("Bra"))
+            .unwrap();
+        apoc_nif::mesh::read(&p.nif, at).unwrap().uvs
+    };
+    let was_uv = uv(&zapped);
+    zapped.flip_uv("Bra", true).unwrap();
+    let now_uv = uv(&zapped);
+    assert!(was_uv
+        .iter()
+        .zip(&now_uv)
+        .all(|(a, b)| (a[0] + b[0] - 1.0).abs() < 0.002 && (a[1] - b[1]).abs() < 0.002));
+
     // Vertices taken out of a shape, and out of what sliders do to it.
     let mut cut = project.clone();
     let had = place(&cut, "Bra").len();
