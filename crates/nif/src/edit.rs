@@ -49,7 +49,7 @@ fn has_no_links(kind: &str) -> bool {
 
 /// Kinds that start as every named object does (name, extra data,
 /// controller) and link to nothing after that.
-fn is_plain_object(kind: &str) -> bool {
+pub(crate) fn is_plain_object(kind: &str) -> bool {
     matches!(
         kind,
         "NiAlphaProperty"
@@ -116,7 +116,12 @@ fn av(av: &mut crate::node::AvObject, map: Remap) {
 }
 
 /// A block's bytes with every link passed through `map`.
-fn relinked(kind: &str, data: &[u8], stream: u32, map: Remap) -> Result<Vec<u8>, NifError> {
+pub(crate) fn relinked(
+    kind: &str,
+    data: &[u8],
+    stream: u32,
+    map: Remap,
+) -> Result<Vec<u8>, NifError> {
     if has_no_links(kind) {
         return Ok(data.to_vec());
     }

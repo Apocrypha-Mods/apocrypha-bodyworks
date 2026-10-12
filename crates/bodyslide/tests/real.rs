@@ -371,3 +371,82 @@ fn an_outfit_conformed_to_its_body_follows_it_much_as_it_did() {
         .fold(0.0f32, f32::max);
     assert!(worst < 1.5, "a vertex {worst} from where it was");
 }
+
+#[test]
+fn a_shape_copied_into_another_mesh_is_the_same_shape_there() {
+    use apoc_nif::{copy, mesh, Nif};
+
+    let shapes = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/cbbe/@required/Data/CalienteTools/BodySlide/ShapeData");
+    let read = |rel: &str| {
+        std::fs::read(shapes.join(rel))
+            .ok()
+            .map(|b| Nif::read(&b).unwrap())
+    };
+    let (Some(body), Some(mut outfit)) =
+        (read("CBBE/CBBE Body.nif"), read("CBBE/CBBE NeverNude.nif"))
+    else {
+        return;
+    };
+    let all = |nif: &Nif| -> Vec<mesh::Mesh> {
+        mesh::shapes(nif)
+            .into_iter()
+            .map(|at| mesh::read(nif, at).unwrap())
+            .collect()
+    };
+    let before = all(&outfit);
+    let source = mesh::shapes(&body)[0];
+    let was = mesh::read(&body, source).unwrap();
+    let at = copy::copy_shape(&mut outfit, &body, source).unwrap();
+    // The file is still a file, and what was in it is as it was.
+    let outfit = Nif::read(&outfit.write()).unwrap();
+    let after = all(&outfit);
+    assert_eq!(after.len(), before.len() + 1);
+    for (a, b) in before.iter().zip(&after) {
+        assert_eq!(
+            (&a.name, &a.positions, &a.triangles),
+            (&b.name, &b.positions, &b.triangles)
+        );
+        assert_eq!(
+            mesh::bone_names(&outfit, b.block).len(),
+            mesh::bone_names(&outfit, a.block).len()
+        );
+    }
+    let now = mesh::read(&outfit, at).unwrap();
+    assert_eq!(
+        (
+            &now.name,
+            &now.positions,
+            &now.uvs,
+            &now.triangles,
+            &now.textures,
+            now.skinned
+        ),
+        (
+            &was.name,
+            &was.positions,
+            &was.uvs,
+            &was.triangles,
+            &was.textures,
+            was.skinned
+        )
+    );
+    // Its bones are the bones of the same names, none of them lost.
+    let bones = mesh::bone_names(&outfit, at);
+    assert_eq!(bones, mesh::bone_names(&body, source));
+    assert!(bones.iter().all(|b| !b.is_empty()));
+
+    // And a shape copied into its own file.
+    let mut twice = outfit.clone();
+    let first = mesh::shapes(&twice)[0];
+    let copy = copy::copy_shape(&mut twice, &outfit, first).unwrap();
+    let twice = Nif::read(&twice.write()).unwrap();
+    assert_eq!(
+        mesh::read(&twice, copy).unwrap().positions,
+        mesh::read(&twice, first).unwrap().positions
+    );
+    assert_eq!(
+        mesh::bone_names(&twice, copy),
+        mesh::bone_names(&twice, first)
+    );
+}
