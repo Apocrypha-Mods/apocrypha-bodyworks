@@ -1809,6 +1809,37 @@ fn a_shape_is_refined_and_a_shape_is_made_of_an_outside_mesh() {
     assert!(loose.remove_skinning("Bra").is_err());
     assert_eq!(built(&loose, "Bra").positions, was_built.positions);
 
+    // A bone's weights mirrored to its twin: each vertex follows the twin
+    // as the vertex opposite follows the bone. The bra is the same both
+    // sides, so its twin's weights come out as they were, near enough.
+    let (left, right) = ("NPC L Clavicle [LClv]", "NPC R Clavicle [RClv]");
+    let had = project.bone_weights("Bra", right).unwrap();
+    let mut mirrored = project.clone();
+    assert_eq!(mirrored.mirror_bone("Bra", left).unwrap(), right);
+    let now = mirrored.bone_weights("Bra", right).unwrap();
+    let close = now
+        .iter()
+        .zip(&had)
+        .filter(|(a, b)| (**a - **b).abs() < 0.05)
+        .count();
+    assert!(close * 10 >= had.len() * 9, "{close} of {}", had.len());
+    assert!(mirrored.mirror_bone("Bra", "NPC Spine [Spn0]").is_err());
+    built(&mirrored, "Bra");
+    // A bone taken from every shape that follows it.
+    let mut without = project.clone();
+    let followed = without.drop_bone_everywhere(left).unwrap();
+    assert!(followed >= 1);
+    for at in mesh::shapes(&without.nif) {
+        let own = without.set.shapes.iter().any(|s| {
+            s.data_folder.is_none()
+                && mesh::name(&without.nif, at).as_deref() == Some(s.name.as_str())
+        });
+        if own {
+            assert!(!mesh::bone_names(&without.nif, at).iter().any(|b| b == left));
+        }
+    }
+    assert!(without.drop_bone_everywhere(left).is_err());
+
     // A bone made up by hand: once, and where it was put.
     let mut boned = project.clone();
     boned

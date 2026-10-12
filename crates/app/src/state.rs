@@ -261,6 +261,8 @@ impl Work {
                 p.separate(&shape, &to, &vertices)
             }
             Change::DropBone { shape, bone } => p.drop_bone(&shape, &bone),
+            Change::MirrorBone { shape, bone } => p.mirror_bone(&shape, &bone).map(drop),
+            Change::DropBoneEverywhere { bone } => p.drop_bone_everywhere(&bone).map(drop),
             Change::BodyPart { shape, index, part } => p.set_part(&shape, index, part),
             Change::Edge { shape, a, b, op } => {
                 let op = match op.as_str() {
@@ -591,6 +593,15 @@ enum Change {
         to: String,
     },
     /// Stop a shape following a bone.
+    /// Give a bone's twin across the body what the bone has, mirrored.
+    MirrorBone {
+        shape: String,
+        bone: String,
+    },
+    /// Stop every shape of the project's own following a bone.
+    DropBoneEverywhere {
+        bone: String,
+    },
     DropBone {
         shape: String,
         bone: String,

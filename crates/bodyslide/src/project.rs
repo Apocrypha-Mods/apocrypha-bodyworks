@@ -1241,6 +1241,85 @@ impl Project {
         done
     }
 
+    /// Give a bone's twin across the body what the bone has, mirrored:
+    /// each vertex follows the twin as much as the vertex opposite it
+    /// follows the bone. Returns the twin's name.
+    pub fn mirror_bone(&mut self, shape: &str, bone: &str) -> Result<String, Error> {
+        self.shape(shape)?;
+        let fail = |e: apoc_nif::NifError| Error::Invalid(e.to_string());
+        let block = self
+            .block(shape)
+            .ok_or_else(|| Error::Invalid(format!("The mesh has no shape named {shape}.")))?;
+        let twin = weights::across(bone);
+        if twin == bone {
+            return invalid(format!(
+                "{bone} is not a bone of one side with a twin on the other."
+            ));
+        }
+        if !copy::bone_names(&self.nif).contains(&twin) {
+            return invalid(format!("The mesh has no bone named {twin}."));
+        }
+        let has = self.bone_weights(shape, bone)?;
+        if has.iter().all(|w| *w <= 0.0) {
+            return invalid(format!("{shape} does not follow {bone}."));
+        }
+        let positions = mesh::read(&self.nif, block).map_err(fail)?.positions;
+        // The vertex opposite each: the nearest to where it would be were
+        // the shape turned over, left for right.
+        let across: Vec<[f32; 3]> = positions.iter().map(|p| [-p[0], p[1], p[2]]).collect();
+        let ties = conform::tie(
+            &positions,
+            &across,
+            conform::Options {
+                nearest: 1,
+                ..conform::Options::default()
+            },
+        );
+        let was = self.bone_weights(shape, &twin)?;
+        let painted: Vec<(u16, f32)> = (0..positions.len())
+            .filter_map(|v| {
+                let opposite = ties.of(v).next()?.0 as usize;
+                let w = has.get(opposite).copied().unwrap_or(0.0);
+                // Only where it changes anything: a vertex neither follows
+                // is not made to follow its other bones any differently.
+                (w > 0.0 || was.get(v).is_some_and(|x| *x > 0.0)).then_some((v as u16, w))
+            })
+            .collect();
+        self.paint_weights(shape, &twin, &painted)?;
+        Ok(twin)
+    }
+
+    /// Stop every shape of the project's own following a bone, as
+    /// [`Project::drop_bone`] stops one. Returns how many followed it.
+    pub fn drop_bone_everywhere(&mut self, bone: &str) -> Result<usize, Error> {
+        let before = self.clone();
+        let mut dropped = 0;
+        let names: Vec<String> = self
+            .set
+            .shapes
+            .iter()
+            .filter(|s| s.data_folder.is_none())
+            .map(|s| s.name.clone())
+            .collect();
+        for name in names {
+            let follows = self
+                .block(&name)
+                .is_some_and(|b| mesh::bone_names(&self.nif, b).iter().any(|n| n == bone));
+            if !follows {
+                continue;
+            }
+            if let Err(e) = self.drop_bone(&name, bone) {
+                *self = before;
+                return Err(e);
+            }
+            dropped += 1;
+        }
+        if dropped == 0 {
+            return invalid(format!("No shape of the project's own follows {bone}."));
+        }
+        Ok(dropped)
+    }
+
     /// Stop a shape following a bone: what each vertex followed of it goes
     /// to its other bones, in their shares. A vertex that followed nothing
     /// else keeps the bone, and then so does the shape.

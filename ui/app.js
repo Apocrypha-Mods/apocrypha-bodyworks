@@ -1282,7 +1282,31 @@ function studioSide() {
               oncontextmenu: (e) => {
                 e.preventDefault();
                 if (!state.work || !picked?.bones.includes(b)) return;
-                menu(e.currentTarget, [{ name: `Remove from ${picked.name}`, value: 1, danger: true }], () => attempt({ do: "dropBone", shape: picked.name, bone: b }));
+                menu(
+                  e.currentTarget,
+                  [
+                    { name: "Mask what follows it", value: "mask" },
+                    { name: "Mirror to its twin", value: "mirror" },
+                    { name: `Remove from ${picked.name}`, value: "drop", danger: true, rule: true },
+                    { name: "Remove from every shape", value: "dropAll", danger: true },
+                  ],
+                  (what) => {
+                    if (what === "mask") {
+                      // What follows it at all is masked, in place of what was.
+                      try {
+                        const [, numbers] = core.ask({ op: "boneWeights", shape: picked.name, bone: b });
+                        picked.mask.set(Array.from(new Float32Array(numbers), (w) => (w > 0 ? 1 : 0)));
+                        if (!state.heat) view.mask(state.picked, picked.mask);
+                      } catch (err) {
+                        state.problem = err.message;
+                      }
+                      return render();
+                    }
+                    if (what === "mirror") return attempt({ do: "mirrorBone", shape: picked.name, bone: b });
+                    if (what === "dropAll") return attempt({ do: "dropBoneEverywhere", bone: b });
+                    attempt({ do: "dropBone", shape: picked.name, bone: b });
+                  },
+                );
               },
             },
             h("span.nm.cut", null, b || "Unnamed"),
