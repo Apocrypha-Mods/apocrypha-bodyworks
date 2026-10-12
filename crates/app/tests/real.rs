@@ -135,6 +135,87 @@ fn a_body_is_listed_previewed_and_built() {
     );
     let at = outputs[2]["at"].as_u64().unwrap() as usize;
     assert_eq!(&bytes[at..at + 4], b"PIRT");
+    let whole = &bytes[..outputs[0]["length"].as_u64().unwrap() as usize];
+
+    // The same set as a project: changed, the changes taken back, saved.
+    let (work, _) = ask(json!({ "op": "open", "set": "CBBE Body" }), &[]);
+    assert_eq!(work["changed"], false);
+    assert_eq!(work["sliders"].as_array().unwrap().len(), n);
+    let first = work["shapes"][0].as_str().unwrap().to_string();
+    let (work, _) = ask(
+        json!({ "op": "change", "change": { "do": "renameShape", "from": first, "to": "Skin" } }),
+        &[],
+    );
+    assert_eq!(work["shapes"][0], "Skin");
+    assert_eq!(work["changed"], true);
+    let (shown, _) = ask(json!({ "op": "preview", "set": "", "work": true }), &[]);
+    assert_eq!(shown["shapes"][0]["name"], "Skin");
+    assert!(shown["shapes"][0]["sliders"].as_array().unwrap().len() > 100);
+    let gone = sliders[0]["name"].as_str().unwrap();
+    let (work, _) = ask(
+        json!({ "op": "change", "change": { "do": "deleteSlider", "name": gone } }),
+        &[],
+    );
+    assert_eq!(work["sliders"].as_array().unwrap().len(), n - 1);
+    // A change that cannot be made says why and changes nothing.
+    let a = answer(
+        json!({ "op": "change", "change": { "do": "addSlider", "name": sliders[1]["name"] } })
+            .to_string()
+            .as_bytes(),
+        &[],
+    );
+    assert!(a.json.contains("already a slider"), "{}", a.json);
+    let (work, _) = ask(json!({ "op": "undo" }), &[]);
+    assert_eq!(work["sliders"].as_array().unwrap().len(), n);
+    assert_eq!(work["redo"], true);
+    let (work, _) = ask(json!({ "op": "undo" }), &[]);
+    assert_eq!(work["shapes"][0], first.as_str());
+    assert_eq!(work["undo"], false);
+
+    // Under its own name it would be taken for the set it came from.
+    let a = answer(
+        json!({ "op": "save", "name": "CBBE Body" })
+            .to_string()
+            .as_bytes(),
+        &[],
+    );
+    assert!(a.json.contains("already a project"), "{}", a.json);
+    let (saved, files) = ask(json!({ "op": "save", "name": "Mine: a body" }), &[]);
+    let paths: Vec<&str> = saved["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "SliderSets/Mine_ a body.osp",
+            "ShapeData/Mine_ a body/Mine_ a body.nif",
+            "ShapeData/Mine_ a body/Mine_ a body.osd"
+        ]
+    );
+    assert!(files.starts_with(b"<?xml"));
+    // It is a set like any other from then on, and builds what the set it
+    // was opened from builds, somewhere else.
+    let (catalog, _) = ask(json!({ "op": "load" }), &[]);
+    assert!(catalog["sets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["name"] == "Mine: a body"));
+    assert_eq!(
+        ask(json!({ "op": "needs", "set": "Mine: a body" }), &[]).0,
+        json!([])
+    );
+    let (built, bytes) = ask(
+        json!({ "op": "build", "set": "Mine: a body", "small": small, "big": big, "morphs": true }),
+        &[],
+    );
+    let length = built["outputs"][0]["length"].as_u64().unwrap() as usize;
+    assert_eq!(&bytes[..length], whole);
+    // Saving again under the name it now has is not refused.
+    ask(json!({ "op": "save", "name": "Mine: a body" }), &[]);
 }
 
 #[test]

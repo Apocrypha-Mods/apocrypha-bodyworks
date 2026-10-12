@@ -239,6 +239,39 @@ pub fn read(nif: &Nif, block: usize) -> Result<Mesh, NifError> {
     })
 }
 
+/// The name of the shape at `block`.
+pub fn name(nif: &Nif, block: usize) -> Option<String> {
+    let stream = nif.header.stream.version;
+    let name = if nif.kind_of(block) == "NiTriShape" {
+        NiTriShape::read(&nif.blocks[block].data, stream)
+            .ok()?
+            .av
+            .name
+    } else {
+        TriShape::read(&nif.blocks[block].data, stream)
+            .ok()?
+            .av
+            .name
+    };
+    Some(name_of(nif, name))
+}
+
+/// Give the shape at `block` another name.
+pub fn rename(nif: &mut Nif, block: usize, to: &str) -> Result<(), NifError> {
+    let stream = nif.header.stream.version;
+    let name = nif.intern(to.as_bytes());
+    if nif.kind_of(block) == "NiTriShape" {
+        let mut shape = NiTriShape::read(&nif.blocks[block].data, stream)?;
+        shape.av.name = name;
+        nif.blocks[block].data = shape.write(stream);
+    } else {
+        let mut shape = TriShape::read(&nif.blocks[block].data, stream)?;
+        shape.av.name = name;
+        nif.blocks[block].data = shape.write(stream);
+    }
+    Ok(())
+}
+
 /// Move a shape's vertices: `positions` in every place the file keeps them,
 /// and the shape's bounding sphere around where they now are. Nothing else
 /// in the file changes.

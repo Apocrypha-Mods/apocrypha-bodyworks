@@ -19,7 +19,7 @@ pub struct DataRef {
     pub list: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Slider {
     pub name: String,
     /// The name to show, when the set gives one of its own.

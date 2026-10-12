@@ -1,5 +1,6 @@
 //! What the module holds, and each request it answers.
 
+use apoc_bodyslide::project::{Project, Settings};
 use apoc_bodyslide::{build, category, group, osd, preset, set};
 use apoc_nif::{mesh, Nif};
 use serde::{Deserialize, Serialize};
@@ -12,11 +13,167 @@ pub struct State {
     /// forward slashes.
     files: HashMap<String, Vec<u8>>,
     sets: Vec<set::SliderSet>,
+    /// The project file each set was read from, in step with `sets`.
+    origins: Vec<String>,
+    /// The project open in Outfit Studio.
+    work: Option<Work>,
     presets: Vec<preset::Preset>,
     groups: Vec<group::Group>,
     categories: Vec<category::Category>,
     /// Files that could not be read, each with why.
     problems: Vec<String>,
+}
+
+/// A project being worked on, with the way back from each change.
+struct Work {
+    project: Project,
+    /// The project as it would be saved now: its set, and its files by
+    /// lower-case path.
+    set: set::SliderSet,
+    files: HashMap<String, Vec<u8>>,
+    undo: Vec<Project>,
+    redo: Vec<Project>,
+    changed: bool,
+}
+
+/// How many changes can be taken back.
+const UNDO: usize = 24;
+
+impl Work {
+    fn of(project: Project) -> Result<Work, String> {
+        let mut work = Work {
+            set: project.set.clone(),
+            project,
+            files: HashMap::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            changed: false,
+        };
+        work.refresh()?;
+        Ok(work)
+    }
+
+    fn refresh(&mut self) -> Result<(), String> {
+        let (set, files) = self
+            .project
+            .save(&self.project.set.name)
+            .map_err(|e| e.to_string())?;
+        self.set = set;
+        self.files = files.into_iter().map(|o| (key(&o.path), o.bytes)).collect();
+        Ok(())
+    }
+
+    fn change(&mut self, change: Change) -> Result<(), String> {
+        let before = self.project.clone();
+        let p = &mut self.project;
+        let done = match change {
+            Change::RenameShape { from, to } => p.rename_shape(&from, &to),
+            Change::DeleteShape { name } => p.delete_shape(&name),
+            Change::RenameSlider { from, to } => p.rename_slider(&from, &to),
+            Change::DeleteSlider { name } => p.delete_slider(&name),
+            Change::AddSlider { name } => p.add_slider(&name),
+            Change::MoveSlider { name, to } => p.move_slider(&name, to),
+            Change::Settings {
+                name,
+                small,
+                big,
+                invert,
+                hidden,
+                zap,
+                uv,
+                clamp,
+            } => p.settings(
+                &name,
+                Settings {
+                    small,
+                    big,
+                    invert,
+                    hidden,
+                    zap,
+                    uv,
+                    clamp,
+                },
+            ),
+            Change::Output {
+                folder,
+                file,
+                weights,
+            } => p.output(&folder, &file, weights),
+        };
+        if let Err(e) = done
+            .map_err(|e| e.to_string())
+            .and_then(|()| self.refresh())
+        {
+            self.project = before;
+            self.refresh()?;
+            return Err(e);
+        }
+        if self.project != before {
+            self.undo.push(before);
+            if self.undo.len() > UNDO {
+                self.undo.remove(0);
+            }
+            self.redo.clear();
+            self.changed = true;
+        }
+        Ok(())
+    }
+
+    /// Step back (`back`) or forward again through the changes.
+    fn step(&mut self, back: bool) -> Result<(), String> {
+        let (from, to) = if back {
+            (&mut self.undo, &mut self.redo)
+        } else {
+            (&mut self.redo, &mut self.undo)
+        };
+        if let Some(then) = from.pop() {
+            to.push(std::mem::replace(&mut self.project, then));
+            self.changed = true;
+            self.refresh()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "do", rename_all = "camelCase")]
+enum Change {
+    RenameShape {
+        from: String,
+        to: String,
+    },
+    DeleteShape {
+        name: String,
+    },
+    RenameSlider {
+        from: String,
+        to: String,
+    },
+    DeleteSlider {
+        name: String,
+    },
+    AddSlider {
+        name: String,
+    },
+    MoveSlider {
+        name: String,
+        to: usize,
+    },
+    Settings {
+        name: String,
+        small: f32,
+        big: f32,
+        invert: bool,
+        hidden: bool,
+        zap: bool,
+        uv: bool,
+        clamp: bool,
+    },
+    Output {
+        folder: String,
+        file: String,
+        weights: bool,
+    },
 }
 
 pub struct Answer {
@@ -60,8 +217,24 @@ enum Request {
     Load,
     /// The files a set needs that are not held yet.
     Needs { set: String },
-    /// A set's shapes and sliders, as numbers for the 3D view.
-    Preview { set: String },
+    /// A set's shapes and sliders, as numbers for the 3D view. With `work`,
+    /// the open project's instead.
+    Preview {
+        set: String,
+        #[serde(default)]
+        work: bool,
+    },
+    /// Open a set as a project to work on. Any open project is let go.
+    Open { set: String },
+    /// Change the open project.
+    Change { change: Change },
+    /// Take the last change back, or with `again` put it back.
+    Undo {
+        #[serde(default)]
+        again: bool,
+    },
+    /// The open project as files to save, under `name`.
+    Save { name: String },
     /// Build a set with each slider at these values.
     Build {
         set: String,
@@ -77,6 +250,9 @@ enum Request {
         set: String,
         values: Vec<f32>,
         path: String,
+        /// The open project, as it stands, and not the set it was opened from.
+        #[serde(default)]
+        work: bool,
     },
     /// A presets file holding one preset, as text to save.
     PresetFile { preset: PresetIn },
@@ -160,6 +336,8 @@ impl State {
 
     fn load(&mut self) -> Value {
         self.sets.clear();
+        self.origins.clear();
+        let mut found: Vec<(set::SliderSet, String)> = Vec::new();
         self.presets.clear();
         self.groups.clear();
         self.categories.clear();
@@ -169,7 +347,7 @@ impl State {
         for path in paths {
             let bytes = &self.files[path];
             let read = if path.starts_with("slidersets/") && path.ends_with(".osp") {
-                set::read(bytes).map(|v| self.sets.extend(v))
+                set::read(bytes).map(|v| found.extend(v.into_iter().map(|s| (s, path.clone()))))
             } else if path.starts_with("sliderpresets/") && path.ends_with(".xml") {
                 preset::read(bytes).map(|v| self.presets.extend(v))
             } else if path.starts_with("slidergroups/") && path.ends_with(".xml") {
@@ -183,12 +361,35 @@ impl State {
                 self.problems.push(format!("{path}: {e}"));
             }
         }
-        self.sets.sort_by_key(|s| s.name.to_lowercase());
-        self.sets.dedup_by(|a, b| a.name == b.name);
-        let sets: Vec<Value> = self
-            .sets
+        found.sort_by_key(|(s, _)| s.name.to_lowercase());
+        found.dedup_by(|a, b| a.0.name == b.0.name);
+        (self.sets, self.origins) = found.into_iter().unzip();
+        let sets: Vec<Value> = self.sets.iter().map(|s| self.described(s)).collect();
+        let presets: Vec<Value> = self
+            .presets
             .iter()
-            .map(|s| {
+            .map(|p| {
+                json!({
+                    "name": p.name,
+                    "set": p.set,
+                    "groups": p.groups,
+                    "values": p.values.iter().map(|v| json!([v.name, v.big, v.value])).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        json!({
+            "sets": sets,
+            "presets": presets,
+            "groups": self.groups.iter().map(|g| &g.name).collect::<Vec<_>>(),
+            "categories": self.categories.iter().map(|c| json!({ "name": c.name, "hidden": c.default_hidden })).collect::<Vec<_>>(),
+            "problems": self.problems,
+        })
+    }
+
+    /// A set as the interface lists it.
+    fn described(&self, s: &set::SliderSet) -> Value {
+        {
+            {
                 let sliders: Vec<SliderOut> = s
                     .sliders
                     .iter()
@@ -218,32 +419,34 @@ impl State {
                 json!({
                     "name": s.name,
                     "output": format!("{}/{}", s.output_path.replace('\\', "/"), s.output_file),
+                    "outputFolder": s.output_path.replace('\\', "/"),
+                    "outputFile": s.output_file,
                     "weights": s.gen_weights,
                     "shapes": s.shapes.iter().map(|sh| &sh.name).collect::<Vec<_>>(),
                     "groups": groups,
                     "sliders": sliders,
                 })
-            })
-            .collect();
-        let presets: Vec<Value> = self
-            .presets
-            .iter()
-            .map(|p| {
-                json!({
-                    "name": p.name,
-                    "set": p.set,
-                    "groups": p.groups,
-                    "values": p.values.iter().map(|v| json!([v.name, v.big, v.value])).collect::<Vec<_>>(),
-                })
-            })
-            .collect();
-        json!({
-            "sets": sets,
-            "presets": presets,
-            "groups": self.groups.iter().map(|g| &g.name).collect::<Vec<_>>(),
-            "categories": self.categories.iter().map(|c| json!({ "name": c.name, "hidden": c.default_hidden })).collect::<Vec<_>>(),
-            "problems": self.problems,
-        })
+            }
+        }
+    }
+
+    /// The open project as the interface shows it.
+    fn working(&self) -> Result<Value, String> {
+        let work = self.work.as_ref().ok_or("No project is open.")?;
+        let mut out = self.described(&work.set);
+        out["changed"] = json!(work.changed);
+        out["undo"] = json!(!work.undo.is_empty());
+        out["redo"] = json!(!work.redo.is_empty());
+        out["notes"] = json!(work.project.notes);
+        Ok(out)
+    }
+
+    /// The open project's files first, then the held ones.
+    fn file_at_work(&self, path: &str) -> Option<Vec<u8>> {
+        self.work
+            .as_ref()
+            .and_then(|w| w.files.get(&key(path)).cloned())
+            .or_else(|| self.file(path))
     }
 
     /// Every file a set reads: its mesh, and each slider data file.
@@ -272,11 +475,21 @@ impl State {
         out
     }
 
-    fn preview(&self, name: &str) -> Result<Answer, String> {
-        let set = self.set(name)?;
+    fn preview(&self, name: &str, work: bool) -> Result<Answer, String> {
+        let set = match &self.work {
+            Some(w) if work => &w.set,
+            _ if work => return Err("No project is open.".into()),
+            _ => self.set(name)?,
+        };
+        let file = |path: &str| {
+            if work {
+                self.file_at_work(path)
+            } else {
+                self.file(path)
+            }
+        };
         let source = format!("ShapeData/{}/{}", set.data_folder, set.source_file);
-        let nif = self
-            .file(&source)
+        let nif = file(&source)
             .ok_or_else(|| format!("{source} is missing."))
             .and_then(|b| Nif::read(&b).map_err(|e| format!("{source}: {e}")))?;
         let blocks = mesh::shapes(&nif);
@@ -328,8 +541,7 @@ impl State {
                     };
                     let path = format!("ShapeData/{folder}/{}", d.file);
                     let data = cache.entry(key(&path)).or_insert_with(|| {
-                        self.file(&path)
-                            .and_then(|b| osd::SliderData::read(&b).ok())
+                        file(&path).and_then(|b| osd::SliderData::read(&b).ok())
                     });
                     let Some(list) = data.as_ref().and_then(|x| x.list(&d.list)) else {
                         continue;
@@ -365,6 +577,52 @@ impl State {
             }));
         }
         Ok(Answer::with(json!({ "shapes": shapes }), bytes))
+    }
+
+    /// The open project as files under the BodySlide folder, named `name`.
+    /// They are held from then on as if the mods had them, and the project
+    /// goes on under that name.
+    fn save(&mut self, name: &str) -> Result<Answer, String> {
+        let work = self.work.as_ref().ok_or("No project is open.")?;
+        let (saved, files) = work.project.save(name).map_err(|e| e.to_string())?;
+        // Another file's set of that name would be told apart from this one
+        // by nothing, and a file of that name holding other sets would lose
+        // them.
+        let at = key(&files[0].path);
+        for (other, origin) in self.sets.iter().zip(&self.origins) {
+            if other.name == saved.name && *origin != at {
+                return Err(format!(
+                    "There is already a project named {}. Save under another name.",
+                    saved.name
+                ));
+            }
+            if other.name != saved.name && *origin == at {
+                return Err(format!(
+                    "{} holds other projects. Save under another name.",
+                    files[0].path
+                ));
+            }
+        }
+        let mut bytes = Vec::new();
+        let outputs: Vec<Value> = files
+            .iter()
+            .map(|o| {
+                let start = bytes.len();
+                bytes.extend(&o.bytes);
+                json!({ "path": o.path, "at": start, "length": o.bytes.len() })
+            })
+            .collect();
+        for o in files {
+            self.files.insert(key(&o.path), o.bytes);
+        }
+        let work = self.work.as_mut().ok_or("No project is open.")?;
+        work.project.set.name = saved.name.clone();
+        work.changed = false;
+        work.refresh()?;
+        Ok(Answer::with(
+            json!({ "outputs": outputs, "name": saved.name }),
+            bytes,
+        ))
     }
 
     fn build(
@@ -426,7 +684,38 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
             }
             Err(e) => Answer::failed(e),
         },
-        Request::Preview { set } => state.preview(&set).unwrap_or_else(Answer::failed),
+        Request::Preview { set, work } => state.preview(&set, work).unwrap_or_else(Answer::failed),
+        Request::Open { set } => {
+            state.work = None;
+            let opened = state.set(&set).and_then(|found| {
+                let files = |path: &str| state.file(path);
+                Project::open(found, &files)
+                    .map_err(|e| e.to_string())
+                    .and_then(Work::of)
+            });
+            match opened {
+                Ok(work) => {
+                    state.work = Some(work);
+                    state.working().map_or_else(Answer::failed, Answer::ok)
+                }
+                Err(e) => Answer::failed(e),
+            }
+        }
+        Request::Change { change } => match &mut state.work {
+            Some(work) => match work.change(change) {
+                Ok(()) => state.working().map_or_else(Answer::failed, Answer::ok),
+                Err(e) => Answer::failed(e),
+            },
+            None => Answer::failed("No project is open."),
+        },
+        Request::Undo { again } => match &mut state.work {
+            Some(work) => match work.step(!again) {
+                Ok(()) => state.working().map_or_else(Answer::failed, Answer::ok),
+                Err(e) => Answer::failed(e),
+            },
+            None => Answer::failed("No project is open."),
+        },
+        Request::Save { name } => state.save(&name).unwrap_or_else(Answer::failed),
         Request::Build {
             set,
             small,
@@ -435,8 +724,18 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
         } => state
             .build(&set, &small, &big, morphs)
             .unwrap_or_else(Answer::failed),
-        Request::Export { set, values, path } => {
-            let made = state.set(&set).and_then(|found| {
+        Request::Export {
+            set,
+            values,
+            path,
+            work,
+        } => {
+            let source = match &state.work {
+                Some(w) if work => Ok(&w.set),
+                _ if work => Err("No project is open.".to_string()),
+                _ => state.set(&set),
+            };
+            let made = source.and_then(|found| {
                 let path = key_keeping_case(&path);
                 let path = path.strip_suffix(".nif").unwrap_or(&path);
                 let (folder, file) = path.rsplit_once('/').unwrap_or(("meshes", path));
@@ -448,7 +747,13 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 one.gen_weights = false;
                 one.output_path = folder.to_string();
                 one.output_file = file.to_string();
-                let files = |path: &str| state.file(path);
+                let files = |path: &str| {
+                    if work {
+                        state.file_at_work(path)
+                    } else {
+                        state.file(path)
+                    }
+                };
                 build::build_at(&one, &values, &values, &files).map_err(|e| e.to_string())
             });
             match made {

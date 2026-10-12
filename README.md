@@ -36,6 +36,9 @@ Edition:
   file. What is left differs in the normals of a few vertices on seams.
 - 458 of 478 morph files (`.tri`) are the original's byte for byte; all 429
   of the original's read and write back unchanged.
+- All 479, opened as a project in Outfit Studio and saved, build to the same
+  bytes from the saved project as from the original (`resave.rs`). Whether
+  the original program opens a project saved here has not been checked.
 
 Rules found this way are written where they are used, each with what it was
 found from.

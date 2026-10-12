@@ -268,3 +268,44 @@ fn vertices_a_set_takes_out_are_the_ones_the_original_took_out() {
     assert_eq!(partition.partitions[0].vertex_count(), 321);
     assert_eq!(partition.vertex_data.len(), 321 * 32);
 }
+
+#[test]
+fn a_shape_taken_out_of_a_project_is_out_of_what_it_builds() {
+    use apoc_bodyslide::project::Project;
+    use apoc_bodyslide::{build, morph};
+    use std::collections::HashMap;
+
+    let tools = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scratch/samples/cbbe/@required/Data/CalienteTools/BodySlide");
+    let on_disk = |path: &str| std::fs::read(tools.join(path)).ok();
+    let Some(sets) = on_disk("SliderSets/CBBE.osp").and_then(|b| set::read(&b).ok()) else {
+        return;
+    };
+    let Some(set) = sets.iter().find(|s| s.shapes.len() > 1) else {
+        return;
+    };
+    let mut project = Project::open(set, &on_disk).unwrap();
+    assert_eq!(project.notes, Vec::<String>::new());
+    let gone = set.shapes[0].name.clone();
+    project.delete_shape(&gone).unwrap();
+    project
+        .rename_shape(&set.shapes[1].name, "Renamed")
+        .unwrap();
+    assert!(project.rename_shape("Renamed", "Renamed").is_ok());
+    assert!(project.delete_shape(&gone).is_err());
+
+    let (saved, files) = project.save("Without one").unwrap();
+    let held: HashMap<String, Vec<u8>> = files.into_iter().map(|o| (o.path, o.bytes)).collect();
+    let files = |path: &str| held.get(path).cloned();
+    let values = morph::values(&saved, None, true);
+    let built = build::build_at(&saved, &values, &values, &files).unwrap();
+    assert_eq!(built.notes, Vec::<String>::new());
+    let nif = apoc_nif::Nif::read(&built.outputs[0].bytes).unwrap();
+    let names: Vec<String> = apoc_nif::mesh::shapes(&nif)
+        .into_iter()
+        .filter_map(|at| apoc_nif::mesh::name(&nif, at))
+        .collect();
+    assert!(!names.contains(&gone));
+    assert!(names.contains(&"Renamed".to_string()));
+    assert_eq!(names.len(), set.shapes.len() - 1);
+}

@@ -70,6 +70,10 @@ const state = {
   /** Outfit Studio: the shape picked in the list, and which list is showing. */
   picked: 0,
   side: "shapes",
+  /** Outfit Studio: the open project as it stands, changes and all. */
+  work: null,
+  /** Files saved here that the mods do not have yet, by lower-case path. */
+  kept: new Map(),
   busy: null,
   problem: null,
 };
@@ -83,7 +87,12 @@ const under = (path) => path.slice(TOOLS.length + 1);
 
 /** Hand the module the file the mods have at `rel` (under the BodySlide folder). */
 async function give(rel) {
-  const real = state.paths.get(rel.replace(/\\/g, "/").toLowerCase());
+  const at = rel.replace(/\\/g, "/").toLowerCase();
+  if (state.kept.has(at)) {
+    core.ask({ op: "put", path: rel }, new Uint8Array(state.kept.get(at)));
+    return true;
+  }
+  const real = state.paths.get(at);
   if (!real) return false;
   const bytes = await host.request("files.read", { path: real });
   core.ask({ op: "put", path: rel }, new Uint8Array(bytes));
@@ -125,9 +134,14 @@ function applied(slider, percent) {
   return slider.invert ? 1 - f : f;
 }
 
+/** The set on screen: in Outfit Studio the open project, changes and all. */
+function cur() {
+  return (state.mode === "studio" && state.work) || state.set;
+}
+
 /** The triangles of a shape that the sliders taking vertices out leave. */
 function remaining(s, values) {
-  const on = s.zaps.filter((z) => applied(state.set.sliders[z.slider], values[z.slider]) !== 0);
+  const on = s.zaps.filter((z) => applied(cur().sliders[z.slider], values[z.slider]) !== 0);
   const key = on.map((z) => z.slider).join(",");
   if (key === s.zapped) return null;
   s.zapped = key;
@@ -157,7 +171,7 @@ function reshape() {
     }
     s.now.set(s.base);
     for (const d of s.sliders) {
-      const amount = applied(state.set.sliders[d.slider], values[d.slider]);
+      const amount = applied(cur().sliders[d.slider], values[d.slider]);
       if (amount === 0) continue;
       const { vertices, offsets } = d;
       for (let k = 0; k < vertices.length; k++) {
@@ -202,51 +216,71 @@ async function prepare(set) {
   return missing;
 }
 
+/** Read the shapes of what is on screen, and put them in the view. */
+function showShapes(frame) {
+  const studio = state.mode === "studio" && Boolean(state.work);
+  const hidden = new Set(studio ? state.shapes.filter((sh) => sh.hidden).map((sh) => sh.name) : []);
+  const [preview, numbers] = core.ask({ op: "preview", set: state.set.name, work: studio });
+  const f32 = new Float32Array(numbers);
+  const u32 = new Uint32Array(numbers);
+  state.shapes = preview.shapes.map((s) => {
+    const base = f32.slice(s.positions[0], s.positions[0] + s.positions[1]);
+    const made = {
+      name: s.name,
+      base,
+      now: new Float32Array(base),
+      normals: new Float32Array(base.length),
+      sum: new Float32Array(base.length),
+      weld: welded(base),
+      triangles: u32.slice(s.triangles[0], s.triangles[0] + s.triangles[1]),
+      bones: s.bones || [],
+      reference: Boolean(s.reference),
+      hidden: hidden.has(s.name),
+      uvs: f32.slice(s.uvs[0], s.uvs[0] + s.uvs[1]),
+      texture: (s.textures || [])[0] || null,
+      shown: null,
+      zapped: "",
+      zaps: (s.zaps || []).map((z) => ({
+        slider: z.slider,
+        vertices: u32.subarray(z.vertices[0], z.vertices[0] + z.vertices[1]),
+      })),
+      sliders: s.sliders.map((d) => ({
+        slider: d.slider,
+        vertices: u32.subarray(d.vertices[0], d.vertices[0] + d.vertices[1]),
+        offsets: f32.subarray(d.offsets[0], d.offsets[0] + d.offsets[1]),
+      })),
+    };
+    made.shown = made.triangles;
+    return made;
+  });
+  if (!view) return;
+  view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs })));
+  state.shapes.forEach((sh, i) => sh.hidden && view.hide(i, true));
+  state.picked = Math.min(state.picked, Math.max(0, state.shapes.length - 1));
+  view.look({ picked: state.mode === "studio" ? state.picked : -1 });
+  if (!state.shapes.length) return;
+  reshape();
+  paint(state.set);
+  if (frame) view.frame(state.shapes.map((s) => s.base));
+}
+
 async function choose(set, presetName) {
   state.set = set;
+  state.work = null;
   state.exported = null;
+  state.saved = null;
   state.built = null;
   state.problem = null;
   state.shapes = [];
   remembered.set(`set.${state.game?.id}`, set.name);
   busy("Opening");
+  let missing = [];
   try {
-    const missing = await prepare(set);
-    const [preview, numbers] = core.ask({ op: "preview", set: set.name });
-    const f32 = new Float32Array(numbers);
-    const u32 = new Uint32Array(numbers);
-    state.shapes = preview.shapes.map((s) => {
-      const base = f32.slice(s.positions[0], s.positions[0] + s.positions[1]);
-      const made = {
-        name: s.name,
-        base,
-        now: new Float32Array(base),
-        normals: new Float32Array(base.length),
-        sum: new Float32Array(base.length),
-        weld: welded(base),
-        triangles: u32.slice(s.triangles[0], s.triangles[0] + s.triangles[1]),
-        bones: s.bones || [],
-        reference: Boolean(s.reference),
-        hidden: false,
-        uvs: f32.slice(s.uvs[0], s.uvs[0] + s.uvs[1]),
-        texture: (s.textures || [])[0] || null,
-        shown: null,
-        zapped: "",
-        zaps: (s.zaps || []).map((z) => ({
-          slider: z.slider,
-          vertices: u32.subarray(z.vertices[0], z.vertices[0] + z.vertices[1]),
-        })),
-        sliders: s.sliders.map((d) => ({
-          slider: d.slider,
-          vertices: u32.subarray(d.vertices[0], d.vertices[0] + d.vertices[1]),
-          offsets: f32.subarray(d.offsets[0], d.offsets[0] + d.offsets[1]),
-        })),
-      };
-      made.shown = made.triangles;
-      return made;
-    });
-    if (!state.shapes.length) {
-      state.problem = missing.length ? `${missing[0].split("/").pop()} is missing.` : "This set has no shapes to show.";
+    missing = await prepare(set);
+    try {
+      [state.work] = core.ask({ op: "open", set: set.name });
+    } catch {
+      // What cannot be opened to work on can still be looked at and built.
     }
     const fits = presetsFor(set);
     state.preset = fits.find((p) => p.name === presetName) || fits.find((p) => p.name === state.preset?.name) || fits[0] || null;
@@ -254,19 +288,23 @@ async function choose(set, presetName) {
     // In Outfit Studio the outfit starts as it was made: nothing moved, and
     // only what a set takes out by default taken out.
     state.at = set.sliders.map((sl) => (sl.zap ? sl.big : 0));
-    state.picked = Math.max(0, state.shapes.findIndex((sh) => !sh.reference));
   } catch (e) {
     state.problem = e.message;
   }
   state.busy = null;
   render();
-  if (state.shapes.length) {
-    view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs })));
+  try {
+    showShapes(true);
+    state.picked = Math.max(0, state.shapes.findIndex((sh) => !sh.reference));
     view.look({ picked: state.mode === "studio" ? state.picked : -1 });
-    reshape();
-    paint(set);
-    view.frame(state.shapes.map((s) => s.base));
-  } else view.show([]);
+  } catch (e) {
+    state.problem = state.problem || e.message;
+    view.show([]);
+  }
+  if (!state.shapes.length && !state.problem) {
+    state.problem = missing.length ? `${missing[0].split("/").pop()} is missing.` : "This set has no shapes to show.";
+  }
+  render();
 }
 
 /** Pictures already fetched, by the path a shape names. */
@@ -373,19 +411,22 @@ function menu(anchor, items, onPick, placeholder) {
     const shown = items.filter((it) => words.every((w) => `${it.name} ${it.note || ""}`.toLowerCase().includes(w)));
     rows.replaceChildren(
       ...shown.slice(0, 400).map((it) =>
-        h(
-          "button" + (it.on ? ".on" : ""),
-          {
-            type: "button",
-            onclick: () => {
-              close(scrim);
-              onPick(it.value);
+        [
+          it.rule && h("hr"),
+          h(
+            "button" + (it.on ? ".on" : "") + (it.danger ? ".danger" : ""),
+            {
+              type: "button",
+              onclick: () => {
+                close(scrim);
+                onPick(it.value);
+              },
             },
-          },
-          h("span.nm.cut", null, it.name),
-          it.note && h("span.sub.quiet.cut", null, it.note),
-        ),
-      ),
+            h("span.nm.cut", null, it.name),
+            it.note && h("span.sub.quiet.cut", null, it.note),
+          ),
+        ],
+      ).flat().filter(Boolean),
     );
     if (!shown.length) rows.append(h("div.sub.quiet", { style: "padding: 8px 10px" }, "Nothing found"));
   };
@@ -771,15 +812,15 @@ function modes() {
     if (state.mode === mode) return;
     state.mode = mode;
     remembered.set("mode", mode);
-    // Each tool draws every shape in its own way to begin with.
-    state.shapes.forEach((sh, i) => {
-      sh.hidden = false;
-      sh.zapped = null;
-      view?.hide(i, false);
-    });
-    view?.look({ wire: false, painted: true, picked: mode === "studio" ? state.picked : -1 });
+    // Each tool draws every shape in its own way to begin with, and the
+    // project may no longer be the set it was opened from.
+    view?.look({ wire: false, painted: true });
+    try {
+      showShapes(false);
+    } catch (e) {
+      state.problem = e.message;
+    }
     render();
-    reshape();
   };
   return h(
     "div.seg",
@@ -794,7 +835,14 @@ function outfitPick(label) {
     menu(
       b,
       state.catalog.sets.map((s) => ({ name: s.name, note: s.groups[0], value: s, on: s === state.set })),
-      (s) => choose(s),
+      (s) => {
+        if (!state.work?.changed) return choose(s);
+        const el = sheet("Unsaved changes", null, h("span.sub", null, `${state.work.name} has changes that are not saved.`), [
+          h("span.grow"),
+          h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
+          h("button.btn", { type: "button", onclick: () => (close(el), choose(s)) }, "Discard"),
+        ]);
+      },
       label === "Project" ? "Search projects" : "Search outfits",
     ),
   );
@@ -837,10 +885,16 @@ function studioSide() {
                 menu(
                   e.currentTarget,
                   [
-                    { name: others ? "Show only this" : "Show all", value: "only" },
+                    state.work && { name: "Rename…", value: "rename" },
+                    { name: others ? "Show only this" : "Show all", value: "only", rule: Boolean(state.work) },
                     { name: sh.hidden ? "Show" : "Hide", value: "hide" },
-                  ],
+                    state.work && state.shapes.length > 1 && { name: "Delete", value: "delete", danger: true, rule: true },
+                  ].filter(Boolean),
                   (what) => {
+                    if (what === "rename") {
+                      return rename("Rename shape", sh.name, (to) => change({ do: "renameShape", from: sh.name, to }));
+                    }
+                    if (what === "delete") return attempt({ do: "deleteShape", name: sh.name });
                     if (what === "hide") hide(i, !sh.hidden);
                     else state.shapes.forEach((_, j) => hide(j, others ? j !== i : false));
                     studioSide();
@@ -881,7 +935,27 @@ function studioSliders() {
   if (!el || !state.set) return;
   const words = state.search.toLowerCase().split(/\s+/).filter(Boolean);
   const rows = [];
-  state.set.sliders.forEach((sl, i) => {
+  // What can be done to a slider, from its row.
+  const more = (sl) =>
+    state.work && {
+      oncontextmenu: (e) => {
+        e.preventDefault();
+        menu(
+          e.currentTarget,
+          [
+            { name: "Rename…", value: "rename" },
+            { name: "Settings…", value: "settings" },
+            { name: "Delete", value: "delete", danger: true, rule: true },
+          ],
+          (what) => {
+            if (what === "rename") rename("Rename slider", sl.name, (to) => change({ do: "renameSlider", from: sl.name, to }, [sl.name, to.trim()]));
+            else if (what === "settings") sliderSettings(sl);
+            else attempt({ do: "deleteSlider", name: sl.name });
+          },
+        );
+      },
+    };
+  cur().sliders.forEach((sl, i) => {
     if (sl.uv || !words.every((w) => sl.name.toLowerCase().includes(w))) return;
     if (sl.zap) {
       const on = state.at[i] !== 0;
@@ -892,6 +966,7 @@ function studioSliders() {
             type: "button",
             role: "checkbox",
             "aria-checked": on ? "true" : "false",
+            ...more(sl),
             onclick: () => {
               state.at[i] = on ? 0 : 100;
               studioSliders();
@@ -919,7 +994,7 @@ function studioSliders() {
       input.value = 0;
       input.dispatchEvent(new Event("input"));
     });
-    rows.push(h("div.sl.one", null, h("span.cut", null, sl.name), h("span.tr", null, input, out)));
+    rows.push(h("div.sl.one", more(sl) || null, h("span.cut", null, sl.name), h("span.tr", null, input, out)));
   });
   const top = el.querySelector(".rows")?.scrollTop || 0;
   el.replaceChildren(
@@ -929,9 +1004,179 @@ function studioSliders() {
   el.querySelector(".rows").scrollTop = top;
 }
 
+/** Take a description of the project after a change, keeping each slider where it stood. */
+function taken(work, renamed) {
+  const stood = new Map(state.work.sliders.map((sl, i) => [sl.name, state.at[i]]));
+  if (renamed) stood.set(renamed[1], stood.get(renamed[0]));
+  state.work = work;
+  state.at = work.sliders.map((sl) => stood.get(sl.name) ?? (sl.zap ? sl.big : 0));
+  state.problem = null;
+  showShapes(false);
+  render();
+}
+
+/** Change the project. Throws what the change could not do. */
+function change(what, renamed) {
+  const [work] = core.ask({ op: "change", change: what });
+  taken(work, renamed);
+}
+
+/** A change with nothing to ask first: what goes wrong is said under the view. */
+function attempt(what) {
+  try {
+    change(what);
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
+}
+
+function undo(again) {
+  if (!state.work || !(again ? state.work.redo : state.work.undo)) return;
+  try {
+    const [work] = core.ask({ op: "undo", again });
+    taken(work);
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
+}
+
+/** A sheet asking for one name. `done` throws what is wrong with it. */
+function rename(title, from, done) {
+  const name = h("input.input", { type: "text", value: from, "aria-label": "Name", maxLength: 120, spellcheck: false });
+  const go = h("button.btn.primary", { type: "button" }, "Rename");
+  const said = h("span.sub.warn.grow.cut");
+  const run = () => {
+    try {
+      done(name.value);
+      close(el);
+    } catch (e) {
+      said.textContent = e.message;
+    }
+  };
+  go.addEventListener("click", run);
+  name.addEventListener("keydown", (e) => e.key === "Enter" && run());
+  const el = sheet(title, null, h("label.field", null, h("span", null, "Name"), name), [
+    said,
+    h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
+    go,
+  ]);
+  name.focus();
+  name.select();
+}
+
+/** A switch in a sheet. Returns the element and a way to read it. */
+function option(label, on) {
+  const el = h(
+    "button.check" + (on ? ".on" : ""),
+    {
+      type: "button",
+      role: "checkbox",
+      "aria-checked": on ? "true" : "false",
+      onclick: () => {
+        on = !on;
+        el.classList.toggle("on", on);
+        el.setAttribute("aria-checked", on ? "true" : "false");
+      },
+    },
+    h("span.box"),
+    h("span.nm.cut", null, label),
+  );
+  return [el, () => on];
+}
+
+/** Outfit Studio: what a slider starts at and how it behaves. */
+function sliderSettings(sl) {
+  const number = (label, value) => {
+    const input = h("input.input", { type: "number", min: -500, max: 500, step: 1, value: String(value), "aria-label": label });
+    return [h("label.field", null, h("span", null, label), input), input];
+  };
+  const [smallField, small] = number("Low weight", sl.small);
+  const [bigField, big] = number("High weight", sl.big);
+  const [invert, inverted] = option("Inverted", sl.invert);
+  const [hide, hidden] = option("Hidden in BodySlide", sl.hidden);
+  const [clamp, clamped] = option("Kept between 0 and 100", sl.clamp);
+  const [zap, zapped] = option("Removes what it marks", sl.zap);
+  const go = h("button.btn.primary", { type: "button" }, "Done");
+  const said = h("span.sub.warn.grow.cut");
+  go.addEventListener("click", () => {
+    const lo = Number(small.value);
+    const hi = Number(big.value);
+    if (small.value === "" || big.value === "" || !Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    try {
+      change({ do: "settings", name: sl.name, small: lo, big: hi, invert: inverted(), hidden: hidden(), zap: zapped(), uv: sl.uv && !zapped(), clamp: clamped() });
+      close(el);
+    } catch (e) {
+      said.textContent = e.message;
+    }
+  });
+  const el = sheet(sl.name, null, [h("div.pair", null, smallField, bigField), h("div.checks", null, invert, hide, clamp, zap)], [
+    said,
+    h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
+    go,
+  ]);
+}
+
+/** Outfit Studio: save the project, into the output mod, as a set BodySlide can build. */
+function saveProject() {
+  const work = state.work;
+  const field = (label, value) => {
+    const input = h("input.input", { type: "text", value, "aria-label": label, maxLength: 160, spellcheck: false });
+    return [h("label.field", null, h("span", null, label), input), input];
+  };
+  // A project of the mods' is left as it is: this one is saved beside it.
+  const own = state.kept.has(`slidersets/${work.name.toLowerCase()}.osp`);
+  const [nameField, name] = field("Name", own ? work.name : `${work.name} (mine)`);
+  const [folderField, folder] = field("Builds into", work.outputFolder);
+  const [fileField, file] = field("Mesh name", work.outputFile);
+  const [weights, weighted] = option("Two meshes, low and high weight", work.weights);
+  const go = h("button.btn.primary", { type: "button" }, "Save");
+  const said = h("span.sub.warn.grow.cut");
+  const run = async () => {
+    const wanted = name.value.trim();
+    if (!wanted || !file.value.trim()) return;
+    go.disabled = true;
+    try {
+      if (folder.value !== work.outputFolder || file.value !== work.outputFile || weighted() !== work.weights) {
+        change({ do: "output", folder: folder.value, file: file.value, weights: weighted() });
+      }
+      const [saved, bytes] = core.ask({ op: "save", name: wanted });
+      const files = saved.outputs.map((o) => ({ path: `${TOOLS}/${o.path}`, bytes: bytes.slice(o.at, o.at + o.length) }));
+      for (const [i, o] of saved.outputs.entries()) state.kept.set(o.path.toLowerCase(), files[i].bytes);
+      await write(files);
+      // It is a set like the others from here on, and the one being worked on.
+      [state.catalog] = core.ask({ op: "load" });
+      state.set = state.catalog.sets.find((x) => x.name === saved.name) || state.set;
+      remembered.set(`set.${state.game?.id}`, state.set.name);
+      const fits = presetsFor(state.set);
+      state.preset = fits.find((x) => x.name === state.preset?.name) || fits[0] || null;
+      Object.assign(state, presetValues(state.set, state.preset));
+      state.work = { ...state.work, name: saved.name, changed: false };
+      state.saved = saved.name;
+      state.exported = null;
+      state.built = null;
+      close(el);
+      render();
+    } catch (e) {
+      said.textContent = e.message;
+      go.disabled = false;
+    }
+  };
+  go.addEventListener("click", run);
+  name.addEventListener("keydown", (e) => e.key === "Enter" && run());
+  const el = sheet("Save project", null, [nameField, h("div.pair", null, folderField, fileField), h("div.checks", null, weights)], [
+    said,
+    h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"),
+    go,
+  ]);
+  name.focus();
+  name.select();
+}
+
 /** Outfit Studio: write the outfit as it stands as one mesh, into the output mod. */
 function exportMesh() {
-  const path = h("input.input", { type: "text", value: `${state.set.output}.nif`, "aria-label": "Where", spellcheck: false });
+  const path = h("input.input", { type: "text", value: `${cur().output}.nif`, "aria-label": "Where", spellcheck: false });
   const go = h("button.btn.primary", { type: "button" }, "Export");
   const said = h("span.sub.warn.grow.cut");
   const run = async () => {
@@ -942,9 +1187,10 @@ function exportMesh() {
     }
     go.disabled = true;
     try {
-      const [made, bytes] = core.ask({ op: "export", set: state.set.name, values: state.at, path: wanted });
+      const [made, bytes] = core.ask({ op: "export", set: state.set.name, values: state.at, path: wanted, work: Boolean(state.work) });
       await write([{ path: `Data/${made.path}`, bytes }]);
       state.exported = made.path.split("/").pop();
+      state.saved = null;
       close(el);
       render();
     } catch (e) {
@@ -993,8 +1239,11 @@ function renderStudio() {
       null,
       modes(),
       outfitPick("Project"),
-      h("button.btn.ghost", { type: "button", disabled: !state.shapes.length, onclick: exportMesh }, "Export mesh…"),
       h("span.grow"),
+      state.work && h("button.btn.ghost", { type: "button", disabled: !state.work.undo, onclick: () => undo(false) }, "Undo"),
+      state.work && h("button.btn.ghost", { type: "button", disabled: !state.work.redo, onclick: () => undo(true) }, "Redo"),
+      h("button.btn.ghost", { type: "button", disabled: !state.shapes.length, onclick: exportMesh }, "Export mesh…"),
+      state.work && h("button.btn", { type: "button", onclick: saveProject }, "Save project…"),
       h("label.search", { style: "flex: 0 1 220px", html: GLASS }, search),
     ),
     h(
@@ -1006,7 +1255,17 @@ function renderStudio() {
     ),
     ...(state.problem
       ? [h("div.bar", null, h("span.sub.warn.cut", null, state.problem))]
-      : state.exported
+      : state.saved
+        ? [
+            h(
+              "div.bar",
+              null,
+              h("span.sub.cut", null, `${state.saved} saved into ${OUTPUT}`),
+              h("span.grow"),
+              h("button.btn.primary", { type: "button", onclick: () => host.request("apply.review").catch(() => {}) }, "Apply"),
+            ),
+          ]
+        : state.exported
         ? [
             h(
               "div.bar",
@@ -1133,5 +1392,13 @@ async function start() {
   const first = sets.find((s) => s.name === last) || sets.find((s) => /\bbody\b/i.test(s.name)) || sets[0];
   await choose(first, remembered.get(`preset.${state.game?.id}`));
 }
+
+// Outfit Studio: a change is taken back and put back from the keyboard too.
+addEventListener("keydown", (e) => {
+  if (state.mode !== "studio" || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "z") return;
+  if (e.target.closest?.("input, textarea, .scrim")) return;
+  e.preventDefault();
+  undo(e.shiftKey);
+});
 
 start();
