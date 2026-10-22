@@ -79,6 +79,27 @@ size=$(stat -c %s "$pkg")
 [ "$size" -le "$max_pkg" ] || die "package is $size bytes, at most $max_pkg"
 sha=$(sha256sum "$pkg" | cut -d' ' -f1)
 
+# 4b. Only files the website accepts, and nothing that starts like a program.
+# The website's verdict on a release is final: the bucket keeps every version
+# it is given, so a refused package uses up its version number for good.
+allowed=" html htm js mjs css json wasm woff woff2 ttf otf png jpg jpeg gif webp avif svg ico txt md "
+while IFS= read -r entry; do
+  [[ "$entry" == */ ]] && continue
+  # unzip -p reads its argument as a pattern, so names stay plain.
+  [[ "$entry" =~ ^[A-Za-z0-9._/-]+$ ]] || die "the package has a file with an unusual name: $entry"
+  base=${entry##*/}
+  case "${base^^}" in
+    LICENSE|README|NOTICE|COPYING) ;;
+    .*) die "the website refuses $entry (no extension)" ;;
+    *.*) ext=${base##*.}; [[ "$allowed" == *" ${ext,,} "* ]] || die "the website refuses $entry (.$ext files are not accepted)" ;;
+    *) die "the website refuses $entry (no extension)" ;;
+  esac
+  magic=$({ unzip -p "$pkg" "$entry" || true; } | head -c 4 | od -An -tx1 | tr -d ' \n')
+  case "$magic" in
+    7f454c46|4d5a*|feedface|feedfacf|cefaedfe|cffaedfe|cafebabe|cafebabf|bebafeca|bfbafeca) die "the website refuses $entry (it starts like a program)" ;;
+  esac
+done < <(unzip -Z1 "$pkg")
+
 # 5. The release, signed and checked.
 published=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 work=$(mktemp -d)
