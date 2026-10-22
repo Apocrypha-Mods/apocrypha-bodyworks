@@ -172,6 +172,7 @@ rustup target add wasm32-unknown-unknown
 cargo build --release -p apoc-bodyslide-app --target wasm32-unknown-unknown
 node tools/dev.cjs /path/to/a/folder/laid/out/like/the/game   # then open the address it prints
 tools/pack.sh                                                 # dist/bodyworks-<version>.apocaddon
+tools/publish.sh --dry-run --notes "…"                        # a signed release; --publish uploads it once, tags v<version>
 ```
 
 The interface is plain script with no build step and no dependencies. What it
