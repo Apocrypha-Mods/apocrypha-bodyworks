@@ -463,8 +463,20 @@ function saved(s) {
       i += 1;
       gap(false);
       if (s[i] !== ":") throw new Error(UNREADABLE);
-      const end = s.indexOf("}", i);
-      if (end < 0) throw new Error(UNREADABLE);
+      // It ends at the first brace not in a comment.
+      let end = i;
+      for (;;) {
+        const brace = s.indexOf("}", end);
+        if (brace < 0) throw new Error(UNREADABLE);
+        // Looked for only up to the brace, or every array would look on to the end of the file.
+        const semi = s.slice(end, brace).indexOf(";");
+        if (semi < 0) {
+          end = brace;
+          break;
+        }
+        end = s.indexOf("\n", end + semi);
+        if (end < 0) throw new Error(UNREADABLE);
+      }
       let list = s.slice(i + 1, end);
       if (list.includes(";")) list = list.replace(/;[^\n]*/g, "");
       const words = list.trim() ? list.split(",") : [];
