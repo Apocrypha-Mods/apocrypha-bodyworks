@@ -64,6 +64,20 @@ it, and changes that give one other vertices altogether, which left its
 places out of step with the rest of each vertex (they are kept apart) and
 now take them along. Two parts of a head are not merged.
 
+### Older slider data (BSD)
+
+Held against the Devious Devices mod's public files: 3,781 slider data
+files of the older kind (`.bsd`, a file for each slider and shape) and the
+42 sets that name them, 40 of those older `.xml` sets. Every file reads
+and writes back byte for byte (`--example bsd`). Every set builds, and
+each, opened as a project and saved, builds to the same bytes as from the
+set as it came. 365 of their 7,258 references name files the sample has
+not got: 237 the bodies' own (CBBE's `CalienteBody`, UUNP's
+`Unified UNP`), and 128 the mod itself does not ship. In over half the
+files a vertex's four-byte number holds something in its upper two bytes
+on a few vertices; the lower two count on as everywhere else, so only
+those are read, and the rest is kept to write back.
+
 ### Fallout 4
 
 Held against CBBE for Fallout 4's own shipped meshes (348 sets, the "Curvy"
@@ -133,7 +147,7 @@ Outfit Studio:
 - Tools not here: a handle in the view to turn or scale a shape by (it is
   dragged across the view to move it, and turned or scaled from a sheet of
   numbers).
-- Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI
+- Sliders: importing and exporting slider data as FBX (OSD, TRI and BSD
   go both ways).
 - Files: Skyrim's physics files, which the original reads where a mesh
   names one and sets moving in its preview. (FBX goes both ways in its
