@@ -2,13 +2,15 @@
 //!
 //! A slider set (`.osp`) names a mesh and its sliders. Each slider has, for
 //! each shape it moves, a list of vertices and how far each goes when the
-//! slider is full (`.osd`). A preset gives every slider two values, one for
-//! the lightest body and one for the heaviest, and a build moves the mesh's
-//! vertices by each slider's list times its value and writes the result.
+//! slider is full (`.osd`, or a file for each list in the older `.bsd`). A
+//! preset gives every slider two values, one for the lightest body and one
+//! for the heaviest, and a build moves the mesh's vertices by each slider's
+//! list times its value and writes the result.
 //!
 //! Written from real projects' files and from published descriptions of the
 //! formats. Not derived from any other program's source.
 
+pub mod bsd;
 pub mod build;
 pub mod category;
 pub mod conform;
