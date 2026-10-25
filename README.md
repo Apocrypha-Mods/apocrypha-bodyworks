@@ -102,7 +102,8 @@ browser for the screen's own script, drawing apart):
   stroke's end in about 15 ms.
 - FBX files (in Node, the same script): the body written with its 26
   bones in 3 ms; a project of three shapes read back in 19 ms, and the same
-  as Blender writes it (compressed) in 45 ms.
+  as Blender writes it (compressed) in 45 ms. Three shapes the body's size
+  (40,716 vertices) read in 55 ms from binary and 65 ms from text.
 
 Larger meshes cost in proportion: every brush move looks at each vertex and
 triangle of the picked shape once.
@@ -134,11 +135,16 @@ Outfit Studio:
   numbers).
 - Sliders: importing and exporting slider data as BSD or FBX (OSD and TRI
   go both ways).
-- Files: FBX files written as text (the binary kind goes both ways:
-  meshes, their texture places, and the bones they follow with their
-  weights, a bone the project has not got being made where the file
-  stands it; all checked against Blender's own reading and writing),
-  Skyrim's physics files. (Fallout 4's cloth data goes out of a mesh as
+- Files: Skyrim's physics files, which the original reads where a mesh
+  names one and sets moving in its preview. (FBX goes both ways in its
+  binary kind: meshes, their texture places, and the bones they follow
+  with their weights, a bone the project has not got being made where the
+  file stands it; all checked against Blender's own reading and writing.
+  FBX saved as text is read too, from 7.1 on: of 118 files that Maya,
+  3ds Max and others saved both ways, the 100 with meshes read as their
+  binary twins do but four, three whose two saves place things
+  differently and one named `&quot;`, which text cannot tell from a
+  quote. Fallout 4's cloth data goes out of a mesh as
   the Havok file it is and into one; all 215 measured are laid out the
   same, `--example cloth`. A head part's morph file goes both ways: it becomes sliders, and
   sliders go out as one; all 87 of a real body mod's read and write back
@@ -146,10 +152,15 @@ Outfit Studio:
 - View: bones drawn as more than a dot where each is. (What a set says of
   a shape's normals is kept and followed when it is built: left as the
   mesh has them, or a seam's sides lit as one within another angle.)
-- The original's own keyboard shortcuts: this has its own (undo and redo,
-  Ctrl+S and Ctrl+E, Q and the digits for the brushes, the square brackets
-  and minus and equals for a brush's size and strength, X for both sides,
-  W, T, F, H and G for the view).
+- Shortcuts: the original's set is a choice in the View popover, beside
+  this one's own (the default), taken from the original's documentation,
+  not checked against the program. Of its keys these do nothing yet: the
+  Automation dialog (Ctrl+Shift+A), an export with the reference
+  (Ctrl+Alt+E), brushing several shapes at once (B), vertex selection (Q),
+  the Move Vertex dialog (V outside colours), nodes (Shift+N), the UV
+  editor's tools, and BodySlide's Clean (Alt and a click on Build). F takes
+  up the Place tool, which drags a shape, where the original's has
+  handles.
 
 Games: only Skyrim Special Edition has been measured. Skyrim (2011),
 Fallout 4, Fallout 3, New Vegas and Oblivion meshes are read in part or not
