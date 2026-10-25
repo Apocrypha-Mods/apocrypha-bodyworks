@@ -483,8 +483,9 @@ function saved(s) {
       if (words.length !== count) throw new Error(UNREADABLE);
       i = end + 1;
       // From 7.2 on, a curve's key settings are written as the whole numbers their bits make (the
-      // binary twins hold the same bits as single-width numbers); 7.1 wrote them as numbers.
-      const bits = name === "KeyAttrDataFloat" && !(version < 7200);
+      // binary twins hold the same bits as single-width numbers); 7.1 wrote them as numbers. A file
+      // that says no version is taken by what it holds: anything but whole numbers is numbers.
+      const bits = name === "KeyAttrDataFloat" && (typeof version === "number" ? version >= 7200 : words.every((w) => /^\s*[-+]?\d+\s*$/.test(w)));
       const Kind = bits || WHOLE.test(name) ? Int32Array : SINGLE.has(name) ? Float32Array : BITS.has(name) ? Uint8Array : name === "KeyTime" ? Array : Float64Array;
       const out = Kind === Array ? new Array(count) : new Kind(count);
       for (let k = 0; k < count; k++) {
