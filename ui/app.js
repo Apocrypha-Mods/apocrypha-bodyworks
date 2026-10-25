@@ -172,7 +172,7 @@ async function readCatalog() {
   // The folder that has slider sets in it; with none in either, the game's usual one.
   const usual = /fallout/i.test(`${state.game?.id} ${state.game?.name}`) ? TOOL_FOLDERS[1] : TOOL_FOLDERS[0];
   const found = await Promise.all(TOOL_FOLDERS.map((t) => host.request("files.list", { folder: `${t}/SliderSets` }).catch(() => [])));
-  const have = TOOL_FOLDERS.filter((_, i) => found[i].some((f) => /\.osp$/i.test(f.path)));
+  const have = TOOL_FOLDERS.filter((_, i) => found[i].some((f) => /\.(osp|xml)$/i.test(f.path)));
   TOOLS = have.includes(usual) || !have.length ? usual : have[0];
   const lists = await Promise.all(
     [...FOLDERS, "ShapeData"].map((f) => host.request("files.list", { folder: `${TOOLS}/${f}` }).catch(() => [])),

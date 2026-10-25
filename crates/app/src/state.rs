@@ -985,7 +985,11 @@ impl State {
         paths.sort();
         for path in paths {
             let bytes = &self.files[path];
-            let read = if path.starts_with("slidersets/") && path.ends_with(".osp") {
+            // The older `.xml` sets are listed too: mods still ship them there,
+            // and they read as the same sets (`set::read`).
+            let read = if path.starts_with("slidersets/")
+                && (path.ends_with(".osp") || path.ends_with(".xml"))
+            {
                 set::read(bytes).map(|v| found.extend(v.into_iter().map(|s| (s, path.clone()))))
             } else if path.starts_with("sliderpresets/") && path.ends_with(".xml") {
                 preset::read(bytes).map(|v| self.presets.extend(v))
@@ -1180,7 +1184,7 @@ impl State {
                     };
                     let path = format!("ShapeData/{folder}/{}", d.file);
                     let data = cache.entry(key(&path)).or_insert_with(|| {
-                        file(&path).and_then(|b| osd::SliderData::read(&b).ok())
+                        file(&path).and_then(|b| osd::SliderData::read_file(&path, &b).ok())
                     });
                     let Some(list) = data.as_ref().and_then(|x| x.list(&d.list)) else {
                         continue;

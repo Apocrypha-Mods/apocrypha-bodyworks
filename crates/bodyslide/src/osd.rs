@@ -94,6 +94,20 @@ impl SliderData {
         out
     }
 
+    /// A slider data file of either kind, told apart by its name: a
+    /// `.bsd` is read as a file of one list with no name, which is how a
+    /// set names the list in one (`DataRef::list` is empty).
+    pub fn read_file(file: &str, bytes: &[u8]) -> Result<Self, Error> {
+        if crate::bsd::named(file) {
+            let one = crate::bsd::Bsd::read(bytes)?;
+            return Ok(SliderData {
+                version: 0,
+                lists: vec![(String::new(), one.diffs)],
+            });
+        }
+        Self::read(bytes)
+    }
+
     pub fn list(&self, name: &str) -> Option<&[Diff]> {
         self.lists
             .iter()

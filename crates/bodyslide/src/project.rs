@@ -118,7 +118,11 @@ impl Project {
                 let at = path(&["ShapeData", &folder, &d.file]);
                 let diffs = read
                     .entry(at.clone())
-                    .or_insert_with(|| files.read(&at).and_then(|b| SliderData::read(&b).ok()))
+                    .or_insert_with(|| {
+                        files
+                            .read(&at)
+                            .and_then(|b| SliderData::read_file(&at, &b).ok())
+                    })
                     .as_ref()
                     .and_then(|data| data.list(&d.list).map(<[_]>::to_vec));
                 match diffs {
@@ -628,7 +632,7 @@ impl Project {
             .find(|d| d.target == of.target)?;
         let folder = of.data_folder.as_deref().unwrap_or(&self.set.data_folder);
         let data = files.read(&path(&["ShapeData", folder, &d.file]))?;
-        SliderData::read(&data)
+        SliderData::read_file(&d.file, &data)
             .ok()?
             .list(&d.list)
             .map(<[_]>::to_vec)

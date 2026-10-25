@@ -13,9 +13,10 @@ pub struct DataRef {
     pub target: String,
     /// The file is in the set's own data folder.
     pub local: bool,
-    /// The slider data file, as written (`Body.osd`).
+    /// The slider data file, as written (`Body.osd`, or `Breasts1.bsd`).
     pub file: String,
-    /// The list's name inside that file.
+    /// The list's name inside that file; empty for a `.bsd`, which holds
+    /// one list and no name.
     pub list: String,
 }
 
@@ -103,7 +104,11 @@ fn number(value: Option<&str>, otherwise: f32) -> f32 {
         .unwrap_or(otherwise)
 }
 
-/// Every set in a project file.
+/// Every set in a project file: an `.osp`, or the older `.xml` that came
+/// before it. The older names its data folder `SetFolder`, its shapes
+/// `BaseShapeName` and a slider's lists `datafile`, each a file of its own
+/// (`.bsd`), and gives the file no version (`SliderSetInfo` alone); the
+/// rest is the same (Devious Devices' five, `--example bsd`).
 pub fn read(bytes: &[u8]) -> Result<Vec<SliderSet>, Error> {
     let text = text_of(bytes);
     let doc = parse(&text)?;
@@ -116,7 +121,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<SliderSet>, Error> {
         let output = set.children().find(|c| c.has_tag_name("OutputFile"));
         let shapes = set
             .children()
-            .filter(|c| c.has_tag_name("Shape"))
+            .filter(|c| c.has_tag_name("Shape") || c.has_tag_name("BaseShapeName"))
             .map(|s| {
                 let name = s.text().unwrap_or_default().trim().to_string();
                 Shape {
@@ -138,12 +143,16 @@ pub fn read(bytes: &[u8]) -> Result<Vec<SliderSet>, Error> {
                 let default = s.attribute("default");
                 let data = s
                     .children()
-                    .filter(|c| c.has_tag_name("Data"))
+                    .filter(|c| c.has_tag_name("Data") || c.has_tag_name("datafile"))
                     .map(|d| {
                         let text = d.text().unwrap_or_default().trim();
-                        // `File.osd\ListName`; an older set names the list alone.
+                        // `File.osd\ListName`; an older set names the list
+                        // alone, or a file holding only that list
+                        // (`Breasts1.bsd`), which is in the data folder
+                        // where an `.osd` would be.
                         let (file, list) = match text.split_once(['\\', '/']) {
                             Some((file, list)) => (file.to_string(), list.to_string()),
+                            None if crate::bsd::named(text) => (text.to_string(), String::new()),
                             None => (String::new(), text.to_string()),
                         };
                         DataRef {
@@ -179,7 +188,10 @@ pub fn read(bytes: &[u8]) -> Result<Vec<SliderSet>, Error> {
             .collect();
         sets.push(SliderSet {
             name: set.attribute("name").unwrap_or_default().to_string(),
-            data_folder: child_text(set, "DataFolder"),
+            data_folder: match child_text(set, "DataFolder") {
+                folder if folder.is_empty() => child_text(set, "SetFolder"),
+                folder => folder,
+            },
             source_file: child_text(set, "SourceFile"),
             output_path: child_text(set, "OutputPath"),
             output_file: output
@@ -279,6 +291,8 @@ pub fn write(sets: &[SliderSet]) -> String {
                 let local = if d.local { " local=\"true\"" } else { "" };
                 let at = if d.file.is_empty() {
                     escape(&d.list)
+                } else if d.list.is_empty() {
+                    escape(&d.file)
                 } else {
                     format!("{}\\{}", escape(&d.file), escape(&d.list))
                 };

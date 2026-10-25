@@ -125,7 +125,11 @@ pub fn build_with(
     let mut list = |folder: &str, file: &str, name: &str| -> Option<Vec<crate::osd::Diff>> {
         let path = join(&["ShapeData", folder, file]);
         data.entry(path.clone())
-            .or_insert_with(|| files.read(&path).and_then(|b| SliderData::read(&b).ok()))
+            .or_insert_with(|| {
+                files
+                    .read(&path)
+                    .and_then(|b| SliderData::read_file(&path, &b).ok())
+            })
             .as_ref()
             .and_then(|d| d.list(name).map(<[_]>::to_vec))
     };
