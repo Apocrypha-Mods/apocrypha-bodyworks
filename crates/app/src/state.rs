@@ -342,6 +342,7 @@ impl Work {
             Change::Conversion { name, values } => p.conversion(&name, &values),
             Change::ImportMorphs => p.import_morphs(data).map(drop),
             Change::ImportSlider { slider } => p.import_slider(&slider, data).map(drop),
+            Change::ImportBsd { slider, shape } => p.import_bsd(&slider, &shape, data),
             Change::CopyBone { shape, body, bone } => {
                 p.copy_bone(&shape, &body, &bone, Default::default(), &numbers(data))
             }
@@ -728,6 +729,12 @@ enum Change {
     ImportSlider {
         slider: String,
     },
+    /// Take what a slider does to one shape from a file of that list
+    /// alone (`.bsd`): the request's bytes.
+    ImportBsd {
+        slider: String,
+        shape: String,
+    },
     /// Give a shape one bone of a body's, as the body's vertices nearest
     /// each of its own follow it. The request's bytes name vertices to
     /// leave as they are.
@@ -849,6 +856,10 @@ enum Request {
     /// What one slider of the open project does, as a slider data file
     /// after the answer.
     SliderData { slider: String },
+    /// What one slider does to one shape, as a file of that list alone
+    /// (`.bsd`) after the answer, named as the original's own files of
+    /// them are (`Shape#Slider.bsd`).
+    SliderBsd { slider: String, shape: String },
     /// What the open project's sliders do to one shape, as the morph file
     /// of a part of a head, after the answer.
     HeadMorphs { shape: String },
@@ -1484,6 +1495,16 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
         Request::SliderData { slider } => match &state.work {
             Some(work) => match work.project.slider_data(&slider) {
                 Ok(bytes) => Answer::with(json!({ "name": format!("{slider}.osd") }), bytes),
+                Err(e) => Answer::failed(e),
+            },
+            None => Answer::failed("No project is open."),
+        },
+        Request::SliderBsd { slider, shape } => match &state.work {
+            Some(work) => match work.project.slider_bsd(&slider, &shape) {
+                Ok(bytes) => Answer::with(
+                    json!({ "name": format!("{}.bsd", apoc_bodyslide::project::file_name(&format!("{shape}#{slider}"))) }),
+                    bytes,
+                ),
                 Err(e) => Answer::failed(e),
             },
             None => Answer::failed("No project is open."),

@@ -1674,6 +1674,8 @@ function studioSliders() {
             { name: "Flip up and down", value: ["flip", 2] },
             { name: "Export data…", value: "out", rule: true },
             { name: "Import data…", value: "in" },
+            state.shapes[state.picked] && { name: "Export BSD…", value: "bsdOut" },
+            state.shapes[state.picked] && { name: "Import BSD…", value: "bsdIn" },
             sl.uv && state.shapes[state.picked] && { name: "Import texture places…", value: "uvIn" },
             { name: "Delete", value: "delete", danger: true, rule: true },
           ].filter(Boolean),
@@ -1683,6 +1685,7 @@ function studioSliders() {
             if (what === "negate") return attempt({ do: "negateSlider", slider: sl.name });
             if (Array.isArray(what) && what[0] === "flip") return attempt({ do: "flipSlider", slider: sl.name, axis: what[1] });
             if (what === "out" || what === "in") return sliderFile(sl, what === "in");
+            if (what === "bsdOut" || what === "bsdIn") return bsdFile(sl, on, what === "bsdIn");
             if (what === "uvIn") return importUvs(sl, on);
             if (what === "mask") {
               // Covered: the vertices of the picked shape this slider moves.
@@ -3398,6 +3401,23 @@ async function sliderFile(sl, into) {
       return taken(work);
     }
     const [made, bytes] = core.ask({ op: "sliderData", slider: sl.name });
+    await host.request("disk.save", { name: made.name, bytes: bytes.slice(0) });
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
+}
+
+/** Outfit Studio: what a slider does to one shape, out to a file of that alone (BSD) or in from one. */
+async function bsdFile(sl, sh, into) {
+  try {
+    if (into) {
+      const picked = await host.request("disk.open", { extensions: ["bsd"] });
+      if (!picked) return;
+      const [work] = core.ask({ op: "change", change: { do: "importBsd", slider: sl.name, shape: sh.name } }, new Uint8Array(picked.bytes));
+      return taken(work);
+    }
+    const [made, bytes] = core.ask({ op: "sliderBsd", slider: sl.name, shape: sh.name });
     await host.request("disk.save", { name: made.name, bytes: bytes.slice(0) });
   } catch (e) {
     state.problem = e.message;

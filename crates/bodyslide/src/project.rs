@@ -2569,6 +2569,48 @@ impl Project {
         Ok(given)
     }
 
+    /// What one slider does to one of the project's own shapes, as a file
+    /// of that list alone (`.bsd`).
+    pub fn slider_bsd(&self, slider: &str, shape: &str) -> Result<Vec<u8>, Error> {
+        let index = self.slider(slider)?;
+        let target = &self.set.shapes[self.shape(shape)?].target;
+        match self.own[index].iter().find(|o| o.target == *target) {
+            Some(o) => Ok(crate::bsd::Bsd::of(&o.diffs).write()),
+            None => invalid(format!("{slider} does nothing to {shape}.")),
+        }
+    }
+
+    /// Take what a slider does to one of the project's own shapes from a
+    /// file of that list alone (`.bsd`), in place of what it did.
+    pub fn import_bsd(&mut self, slider: &str, shape: &str, file: &[u8]) -> Result<(), Error> {
+        let index = self.slider(slider)?;
+        let of = self.set.shapes[self.shape(shape)?].clone();
+        if of.data_folder.is_some() {
+            return invalid(format!(
+                "{shape}'s slider data is another project's, in {}.",
+                of.data_folder.unwrap_or_default()
+            ));
+        }
+        let diffs = crate::bsd::Bsd::read(file)?.diffs;
+        let count = self
+            .block(&of.name)
+            .and_then(|b| mesh::read(&self.nif, b).ok())
+            .map_or(0, |m| m.positions.len());
+        if let Some(d) = diffs.iter().find(|d| d.vertex as usize >= count) {
+            return invalid(format!(
+                "The file moves vertex {}, and {shape} has {count}: it is for another mesh.",
+                d.vertex
+            ));
+        }
+        let own = &mut self.own[index];
+        own.retain(|o| o.target != of.target);
+        own.push(Own {
+            target: of.target,
+            diffs: Arc::new(diffs),
+        });
+        Ok(())
+    }
+
     /// Where a build of the project goes, and whether as two meshes.
     pub fn output(&mut self, folder: &str, file: &str, weights: bool) -> Result<(), Error> {
         let file = file_name(file.trim().trim_end_matches(".nif"));
