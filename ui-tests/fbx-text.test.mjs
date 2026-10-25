@@ -187,14 +187,24 @@ test("a brace in a comment inside an array does not end the array", async () => 
 });
 
 test("arrays are read in one pass however far off the file's first comment is", async () => {
-  const many = 150000;
-  const arrays = `Extra:  {\n${"	Numbers: *3 {\n		a: 1,2,3\n	}\n".repeat(many)}}\n; a comment at the very end\n`;
-  const text = bytes(`${plain}\n${arrays}`);
-  const start = performance.now();
-  const [got] = await read(text);
-  const took = performance.now() - start;
-  assert.deepEqual([...got.positions], square.positions);
-  assert.ok(took < 1000, `${took} ms for ${many} arrays`);
+  // Searched to the end of the file for a comment, each array would cost the rest of the file: four times
+  // the arrays would take sixteen times as long. Read in one pass, it takes about four.
+  const made = (many) => bytes(`${plain}\nExtra:  {\n${"	Numbers: *3 {\n		a: 1,2,3\n	}\n".repeat(many)}}\n; a comment at the very end\n`);
+  const best = async (text) => {
+    let least = Infinity;
+    for (let k = 0; k < 3; k++) {
+      const start = performance.now();
+      const [got] = await read(text);
+      least = Math.min(least, performance.now() - start);
+      assert.deepEqual([...got.positions], square.positions);
+    }
+    return least;
+  };
+  const many = 40000;
+  const [small, large] = [made(many), made(many * 4)];
+  await best(small);
+  const ratio = (await best(large)) / (await best(small));
+  assert.ok(ratio < 8, `four times the arrays took ${ratio.toFixed(1)} times as long`);
 });
 
 test("a record's values may begin on the next line, and a comma carries them on past a line end", async () => {
