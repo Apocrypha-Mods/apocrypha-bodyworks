@@ -178,6 +178,25 @@ test("an array's numbers go on across line ends and past comments", async () => 
   assert.deepEqual([...(await read(bytes(`${plain}; the end`)))[0].positions], square.positions);
 });
 
+test("a brace in a comment inside an array does not end the array", async () => {
+  const vertices = "a: 0,0,0,1,0,0, ; the second corner } is not the end\n			1,1,0 ;}\n			,0,1,0.5 ; nor {} this";
+  const [got] = await read(bytes(file([geometry(1000, "Square", vertices), model(1001, "Square")].join("\n"), `	C: "OO",1000,1001`)));
+  assert.deepEqual([...got.positions], square.positions);
+  // The brace after the comment's line still ends it: the numbers after it are not the array's.
+  await assert.rejects(read(bytes(file(geometry(1000, "Square", "a: 0,0,0,1,0,0 ; six\n			} 1,1,0,0,1,0.5")))), /cannot read/);
+});
+
+test("arrays are read in one pass however far off the file's first comment is", async () => {
+  const many = 150000;
+  const arrays = `Extra:  {\n${"	Numbers: *3 {\n		a: 1,2,3\n	}\n".repeat(many)}}\n; a comment at the very end\n`;
+  const text = bytes(`${plain}\n${arrays}`);
+  const start = performance.now();
+  const [got] = await read(text);
+  const took = performance.now() - start;
+  assert.deepEqual([...got.positions], square.positions);
+  assert.ok(took < 1000, `${took} ms for ${many} arrays`);
+});
+
 test("a record's values may begin on the next line, and a comma carries them on past a line end", async () => {
   const props = `			P: "Lcl Translation", "Lcl Translation", "", "A",\n				10, 20 ; across two lines\n				, 30`;
   const objects = [geometry(1000, "Square").replace("Vertices: *12 {", "Vertices:\n			*12 {"), model(1001, "Square", "Mesh", props)].join("\n");
