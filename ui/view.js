@@ -10,7 +10,7 @@ void main() { vn = nm * n; vt = t; vm = m; vk = k; gl_Position = mvp * vec4(p, 1
 const FS = `#version 300 es
 precision highp float;
 in vec3 vn; in vec2 vt; in float vm; in vec4 vk; out vec4 o;
-uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha; uniform float coloured; uniform float bright;
+uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha; uniform float coloured; uniform float bright; uniform float lit;
 void main() {
   // The lines of a wireframe are one flat colour.
   if (line.a > 0.0) { o = line; return; }
@@ -24,6 +24,8 @@ void main() {
   float rim = pow(1.0 - max(n.z, 0.0), 3.0);
   // A painted shape is lit harder: a skin texture is darker than the tint.
   float light = (0.22 + 0.72 * key + 0.2 * fill) * mix(1.0, 1.9, painted) * bright;
+  // Unlit, every face is as bright as a face turned to the light half way.
+  if (lit < 0.5) { light = 0.6 * mix(1.0, 1.9, painted) * bright; rim = 0.0; }
   vec3 c = base * light + vec3(0.12) * rim * mix(1.0, 0.35, painted);
   // What a mask covers is drawn dark: the brushes leave it alone.
   float m = clamp(vm, 0.0, 1.0);
@@ -82,11 +84,22 @@ export class View {
     this.uAlpha = gl.getUniformLocation(prog, "alpha");
     this.uColoured = gl.getUniformLocation(prog, "coloured");
     this.uBright = gl.getUniformLocation(prog, "bright");
+    this.uLit = gl.getUniformLocation(prog, "lit");
     /** How wide the eye sees, in radians, and how brightly the shapes are lit (1 is as designed). */
     this.fov = 0.6;
     this.bright = 1;
     /** How shapes are drawn: with their textures, with their edges, and which one is picked out. */
-    this.looks = { painted: true, wire: false, picked: -1, heat: false, colour: false };
+    this.looks = { painted: true, wire: false, picked: -1, heat: false, colour: false, lit: true, grid: false };
+    /** Whether the eye sees straight on, with nothing smaller for being further off. */
+    this.flat = false;
+    /** What a press on the view starts (see `keys.press`): the main button brushes, or turns; any other, or Shift, moves the view. */
+    this.press = (e) => ({ brush: e.button === 0 && !e.shiftKey, then: e.button !== 0 || e.shiftKey ? "pan" : "turn" });
+    /** Told of the wheel first, when set: answers whether it took it, or it zooms. */
+    this.wheel = null;
+    /** Where on a shape a ray first meets one, when set: for a press that makes that what the view turns about. */
+    this.pick = null;
+    /** Where the pointer last was over the view: `{ clientX, clientY }`, or null. */
+    this.pointer = null;
     this.shapes = [];
     /** Textures already on the card, by what the caller names them: a shape shown again wears its own without a second upload. */
     this.skins = new Map();
@@ -113,6 +126,13 @@ export class View {
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
+    this.gridVao = gl.createVertexArray();
+    this.gridBuf = gl.createBuffer();
+    gl.bindVertexArray(this.gridVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.gridBuf);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
     this.pointers();
     new ResizeObserver(() => this.draw()).observe(canvas);
     // Come back to, from a system dialog or another window, the view paints
@@ -135,14 +155,23 @@ export class View {
     // whether it took the stroke), "drag", "up" and "out".
     c.addEventListener("pointerdown", (e) => {
       c.setPointerCapture(e.pointerId);
-      if (this.brush && e.button === 0 && !e.shiftKey && this.brush("down", this.ray(e))) {
+      const press = this.press(e);
+      if (this.brush && press.brush && this.brush("down", this.ray(e))) {
         held = { stroke: true };
         return;
       }
-      held = { x: e.clientX, y: e.clientY, pan: e.button !== 0 || e.shiftKey };
+      if (press.then === "pivot") {
+        const at = this.pick?.(this.ray(e));
+        if (at) this.turnAbout(at);
+      }
+      held = { x: e.clientX, y: e.clientY, pan: press.then === "pan" };
     });
-    c.addEventListener("pointerleave", () => !held && this.brush?.("out"));
+    c.addEventListener("pointerleave", () => {
+      this.pointer = null;
+      if (!held) this.brush?.("out");
+    });
     c.addEventListener("pointermove", (e) => {
+      this.pointer = { clientX: e.clientX, clientY: e.clientY };
       if (!held) return void this.brush?.("over", this.ray(e));
       if (held.stroke) return void this.brush("drag", this.ray(e));
       const dx = e.clientX - held.x;
@@ -171,6 +200,7 @@ export class View {
       "wheel",
       (e) => {
         e.preventDefault();
+        if (this.wheel?.(e)) return;
         this.far = Math.max(0.15, Math.min(4, this.far * Math.exp(e.deltaY * 0.0012)));
         this.draw();
       },
@@ -374,6 +404,9 @@ export class View {
     this.size = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], 1e-3);
     this.wide = Math.max(hi[0] - lo[0], hi[1] - lo[1], 1e-3);
     this.tall = Math.max(hi[2] - lo[2], 1e-3);
+    // Where the floor is, under the middle: for the grid.
+    this.low = lo[2];
+    this.middle = [this.at[0], this.at[1]];
     this.turn = FRONT;
     this.tilt = 0.08;
     this.far = 1;
@@ -389,12 +422,20 @@ export class View {
     const d = Math.max(this.tall * f, (this.wide * f) / aspect) * 0.56 * this.far;
     const near = d * 0.05;
     const farP = d * 4 + this.size;
-    const proj = new Float32Array([
-      f / aspect, 0, 0, 0,
-      0, f, 0, 0,
-      0, 0, (farP + near) / (near - farP), -1,
-      0, 0, (2 * farP * near) / (near - farP), 0,
-    ]);
+    // Seen flat, as much of it fits as fits where it stands seen in depth.
+    const proj = this.flat
+      ? new Float32Array([
+          f / (d * aspect), 0, 0, 0,
+          0, f / d, 0, 0,
+          0, 0, 2 / (near - farP), 0,
+          0, 0, (farP + near) / (near - farP), 1,
+        ])
+      : new Float32Array([
+          f / aspect, 0, 0, 0,
+          0, f, 0, 0,
+          0, 0, (farP + near) / (near - farP), -1,
+          0, 0, (2 * farP * near) / (near - farP), 0,
+        ]);
     const ct = Math.cos(this.turn), st = Math.sin(this.turn);
     const cp = Math.cos(this.tilt), sp = Math.sin(this.tilt);
     // Camera axes in the mesh's space: right, up, and back toward the eye.
@@ -402,19 +443,24 @@ export class View {
     const back = [st * cp, -ct * cp, sp];
     const up = [-st * sp, ct * sp, cp];
     const eye = [this.at[0] + back[0] * d, this.at[1] + back[1] * d, this.at[2] + back[2] * d];
-    return { f, proj, right, up, back, eye };
+    return { f, d, proj, right, up, back, eye };
   }
 
   /** The line from the eye through where a pointer event is, in the mesh's space: `{ origin, dir, back }`. */
   ray(e) {
     const box = this.canvas.getBoundingClientRect();
     const aspect = box.width / Math.max(1, box.height);
-    const { f, right, up, back, eye } = this.camera(aspect);
+    const { f, d, right, up, back, eye } = this.camera(aspect);
     const x = (((e.clientX - box.left) / box.width) * 2 - 1) * (aspect / f);
     const y = (1 - ((e.clientY - box.top) / box.height) * 2) / f;
+    if (this.flat) {
+      // Seen flat, every ray goes straight in, from where the pointer is.
+      const origin = [0, 1, 2].map((k) => eye[k] + (right[k] * x + up[k] * y) * d);
+      return { origin, dir: back.map((c) => -c), back, alt: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey };
+    }
     const dir = [0, 1, 2].map((k) => right[k] * x + up[k] * y - back[k]);
     const l = Math.hypot(dir[0], dir[1], dir[2]);
-    return { origin: eye, dir: dir.map((c) => c / l), back, alt: e.altKey };
+    return { origin: eye, dir: dir.map((c) => c / l), back, alt: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey };
   }
 
   /** How wide the eye sees (`fov`, in degrees) and how brightly the shapes are lit (1 is as designed). */
@@ -424,10 +470,46 @@ export class View {
     this.draw();
   }
 
+  /** Look from straight in front, behind, the left or the right: "front", "back", "left" or "right". */
+  face(side) {
+    // The meshes face +Y with their left toward -X; FRONT is a little to one side of this.
+    this.turn = { front: Math.PI, back: 0, left: -Math.PI / 2, right: Math.PI / 2 }[side] ?? this.turn;
+    this.tilt = 0;
+    this.draw();
+  }
+
+  /** Turn about `point` from here on: it becomes the middle of the view. */
+  turnAbout(point) {
+    this.at = [point[0], point[1], point[2]];
+    this.draw();
+  }
+
   /** Mark where bones are (x, y, z each), one of them picked out; or with null mark none. */
   bones(places, picked = -1) {
     this.marks = places && places.length ? { places, picked } : null;
     this.draw();
+  }
+
+  /** A grid on the floor the shapes stand on, a tenth of their height a square. */
+  floor() {
+    const gl = this.gl;
+    const span = Math.max(this.size, 1e-3) * 1.5;
+    const step = span / 15;
+    const ground = this.low ?? this.at[2] - this.tall / 2;
+    const [cx, cy] = this.middle || this.at;
+    const lines = [];
+    for (let i = -15; i <= 15; i++) {
+      lines.push(cx + i * step, cy - span, ground, cx + i * step, cy + span, ground);
+      lines.push(cx - span, cy + i * step, ground, cx + span, cy + i * step, ground);
+    }
+    gl.bindVertexArray(this.gridVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.gridBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lines), gl.DYNAMIC_DRAW);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.uniform4f(this.uLine, 0.5, 0.52, 0.56, 0.35);
+    gl.drawArrays(gl.LINES, 0, lines.length / 3);
+    gl.disable(gl.BLEND);
   }
 
   /** Show the brush's reach on the shape, or with null stop showing it. */
@@ -497,6 +579,7 @@ export class View {
     };
     gl.uniform1f(this.uAlpha, 1);
     gl.uniform1f(this.uBright, this.bright);
+    gl.uniform1f(this.uLit, this.looks.lit ? 1 : 0);
     this.shapes.forEach((s, i) => s.shown && !s.ghost && face(s, i));
     // Ghosts after everything solid, seen through and hiding nothing.
     if (this.shapes.some((s) => s.shown && s.ghost)) {
@@ -525,6 +608,7 @@ export class View {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, s.ib);
       });
     }
+    if (this.looks.grid) this.floor();
     if (this.marks) {
       // A dot where each bone is, over everything; the picked one stands out.
       const { places, picked } = this.marks;

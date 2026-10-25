@@ -229,6 +229,25 @@ export function carry(positions, from, reached, by) {
   }
 }
 
+/** Draw one number a vertex (a bone's weights) toward the middle of its neighbours', where the brush reaches. */
+export function level(values, weld, near, reached, amount) {
+  const { vertices, weights } = reached;
+  const to = new Float32Array(vertices.length);
+  for (let k = 0; k < vertices.length; k++) {
+    const v = vertices[k];
+    const g = weld[v];
+    const from = near.start[g], end = near.start[g + 1];
+    let sum = 0;
+    for (let n = from; n < end; n++) sum += values[near.next[n]];
+    to[k] = end === from ? values[v] : sum / (end - from);
+  }
+  // All moved at once, so none goes toward a neighbour already moved.
+  for (let k = 0; k < vertices.length; k++) {
+    const v = vertices[k];
+    values[v] += (to[k] - values[v]) * Math.min(1, amount * weights[k]);
+  }
+}
+
 /** Draw what the brush reaches toward the middle of its neighbours. */
 export function smooth(positions, weld, near, reached, amount) {
   const { vertices, weights } = reached;
