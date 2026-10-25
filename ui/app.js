@@ -7,6 +7,7 @@ import { View, welded, shade } from "./view.js";
 import * as brush from "./brush.js";
 import * as fbx from "./fbx.js";
 import * as obj from "./obj.js";
+import * as keys from "./keys.js";
 
 // Where a game's mods keep their slider sets, under the game's folder: Skyrim's
 // in a folder of their own, Fallout 4's one level up.
@@ -125,6 +126,10 @@ const state = {
   heat: null,
   /** Outfit Studio: the part of the picked shape drawn alone, by its place in the list, or null. */
   part: null,
+  /** Which keys do what: Bodyworks' own ("bodyworks") or the original's ("outfit"). */
+  keys: keys.chosen(remembered.get("keys")),
+  /** Outfit Studio: the bones shown whichever list is showing (the original's Shift+B). */
+  bonesShown: false,
   /** Outfit Studio: the open project as it stands, changes and all. */
   work: null,
   /** Files saved here that the mods do not have yet, by lower-case path. */
@@ -302,6 +307,16 @@ function presetValues(set, preset) {
     }
   }
   return { small, big };
+}
+
+/** Put the sliders where preset `p` has them. */
+function usePreset(p) {
+  state.preset = p;
+  Object.assign(state, presetValues(state.set, p));
+  state.built = null;
+  remembered.set(`preset.${state.game?.id}`, p.name);
+  render();
+  reshape();
 }
 
 /** The presets made for a set: those naming one of the groups it is in. */
@@ -583,7 +598,7 @@ async function buildToFolder() {
 }
 
 /** Build each of `sets` with the sliders as they stand, matched by name. */
-async function buildSeveral(sets, progress) {
+async function buildSeveral(sets, progress, folder) {
   const small = new Map(state.set.sliders.map((s, i) => [s.name, state.small[i]]));
   const big = new Map(state.set.sliders.map((s, i) => [s.name, state.big[i]]));
   const files = [];
@@ -600,7 +615,8 @@ async function buildSeveral(sets, progress) {
         big: set.sliders.map((s) => big.get(s.name) ?? s.big),
         morphs: state.morphs,
       });
-      files.push(...filesOf(built, bytes));
+      // Into a folder, laid out as the game's data folder is: `meshes/…`.
+      files.push(...(folder ? built.outputs.map((o) => ({ path: o.path, bytes: bytes.slice(o.at, o.at + o.length) })) : filesOf(built, bytes)));
     } catch {
       failed.push(set.name);
     }
@@ -610,7 +626,8 @@ async function buildSeveral(sets, progress) {
   }
   if (files.length) {
     progress("Saving");
-    await write(files);
+    if (folder) await host.request("disk.folder", { files }, files.map((f) => f.bytes));
+    else await write(files);
   }
   await prepare(state.set);
   return { files: files.length, failed };
@@ -693,8 +710,12 @@ function sheet(title, side, body, foot) {
   return scrim;
 }
 
-function savePreset() {
-  const name = h("input.input", { type: "text", value: state.preset?.name || "", "aria-label": "Name", maxLength: 80 });
+/**
+ * Save the sliders as a preset, under a name asked for: the preset's own to
+ * begin with, or with `how` "new" none; with "now" saved under its own at once.
+ */
+function savePreset(how) {
+  const name = h("input.input", { type: "text", value: how === "new" ? "" : state.preset?.name || "", "aria-label": "Name", maxLength: 80 });
   const save = h("button.btn.primary", { type: "button" }, "Save");
   const said = h("span.sub.warn.grow");
   const go = async () => {
@@ -743,6 +764,7 @@ function savePreset() {
   ]);
   name.focus();
   name.select();
+  if (how === "now" && name.value) go();
 }
 
 /** BodySlide: put the outfit on screen in a group, an old one or a new one, kept in the output mod. */
@@ -833,7 +855,8 @@ async function outOfGroup() {
   render();
 }
 
-function several() {
+/** Build several outfits at once, into the output mod, or with `folder` into a folder picked. */
+function several(folder) {
   const groups = new Set(state.set.groups);
   let group = state.set.groups[0] || null;
   let query = "";
@@ -851,7 +874,29 @@ function several() {
     }
   };
   pickGroup();
-  const rows = h("div.rows", { style: "height: 320px" });
+  // A right click in the list picks all shown, or with all shown picked none (BodySlide's batch build).
+  const rows = h("div.rows", {
+    style: "height: 320px",
+    oncontextmenu: (e) => {
+      if (state.keys !== "outfit") return;
+      e.preventDefault();
+      const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+      const shown = state.catalog.sets.filter((s) => (!group || s.groups.includes(group)) && words.every((w) => s.name.toLowerCase().includes(w)));
+      const outs = new Set([...picked].map((n) => state.catalog.sets.find((s) => s.name === n)?.output.toLowerCase()));
+      const free = shown.filter((s) => !picked.has(s.name) && !outs.has(s.output.toLowerCase()));
+      if (free.length) {
+        // Two sets cannot both write one file: the first of each is picked.
+        for (const s of free) {
+          if (outs.has(s.output.toLowerCase())) continue;
+          outs.add(s.output.toLowerCase());
+          picked.add(s.name);
+        }
+      } else shown.forEach((s) => picked.delete(s.name));
+      const top = rows.scrollTop;
+      fill();
+      rows.scrollTop = top;
+    },
+  });
   const count = h("span.sub");
   const said = h("span.sub.grow");
   const go = h("button.btn.primary", { type: "button" });
@@ -914,7 +959,7 @@ function several() {
     cancel.disabled = true;
     const sets = state.catalog.sets.filter((s) => picked.has(s.name));
     try {
-      const done = await buildSeveral(sets, (t) => (said.textContent = t));
+      const done = await buildSeveral(sets, (t) => (said.textContent = t), folder);
       state.built = done.files;
       state.problem = done.failed.length ? `${done.failed.length} could not be built: ${done.failed.slice(0, 3).join(", ")}${done.failed.length > 3 ? "…" : ""}` : null;
       close(el);
@@ -926,7 +971,7 @@ function several() {
       go.disabled = false;
     }
   });
-  const el = sheet("Build several", count, [h("div.bar", null, groupPick, h("span.sub.quiet", null, "With the sliders as they are")), h("label.search", { html: GLASS }, input), rows], [
+  const el = sheet(folder ? "Build several to a folder" : "Build several", count, [h("div.bar", null, groupPick, h("span.sub.quiet", null, "With the sliders as they are")), h("label.search", { html: GLASS }, input), rows], [
     said,
     cancel,
     go,
@@ -1198,10 +1243,20 @@ function foot() {
       },
       "Open folder",
     ),
-    h("button.btn", { type: "button", disabled: !ready, onclick: several }, "Build several…"),
+    // With the original's keys, Ctrl and a click builds into a folder picked, as its Batch Build does.
+    h("button.btn", { type: "button", disabled: !ready, onclick: (e) => several(state.keys === "outfit" && (e.ctrlKey || e.metaKey)) }, "Build several…"),
     state.built !== null && !state.problem
       ? h("button.btn.primary", { type: "button", onclick: () => host.request("apply.review").catch(() => {}) }, "Apply")
-      : h("button.btn.primary", { type: "button", disabled: !ready, onclick: build }, "Build"),
+      : h(
+          "button.btn.primary",
+          {
+            type: "button",
+            disabled: !ready,
+            // Ctrl and a click, with the original's keys: built outside the mods, as its Build into the working folder is.
+            onclick: (e) => (state.keys === "outfit" && (e.ctrlKey || e.metaKey) ? buildToFolder() : build()),
+          },
+          "Build",
+        ),
   );
 }
 
@@ -1209,26 +1264,7 @@ let canvas = null;
 
 /** The switch between the two tools, at the start of either's top row. */
 function modes() {
-  const go = (mode) => () => {
-    if (state.mode === mode) return;
-    state.mode = mode;
-    remembered.set("mode", mode);
-    // Each tool draws every shape in its own way to begin with, and the
-    // project may no longer be the set it was opened from.
-    view?.look({ wire: false, painted: true });
-    if (view) {
-      state.tool = null;
-      view.brush = null;
-      view.reach(null);
-      canvas.style.cursor = "";
-    }
-    try {
-      showShapes(false);
-    } catch (e) {
-      state.problem = e.message;
-    }
-    render();
-  };
+  const go = (mode) => () => setMode(mode);
   return h(
     "div.seg",
     { role: "group", "aria-label": "Tool" },
@@ -1237,8 +1273,30 @@ function modes() {
   );
 }
 
+/** Show one of the two tools: "bodyslide" or "studio". */
+function setMode(mode) {
+  if (state.mode === mode) return;
+  state.mode = mode;
+  remembered.set("mode", mode);
+  // Each tool draws every shape in its own way to begin with, and the
+  // project may no longer be the set it was opened from.
+  view?.look({ wire: false, painted: true, lit: true });
+  if (view) {
+    state.tool = null;
+    view.brush = null;
+    view.reach(null);
+    canvas.style.cursor = "";
+  }
+  try {
+    showShapes(false);
+  } catch (e) {
+    state.problem = e.message;
+  }
+  render();
+}
+
 function outfitPick(label) {
-  return pickButton(label, cur()?.name || "", (b) =>
+  const b = pickButton(label, cur()?.name || "", (b) =>
     menu(
       b,
       state.catalog.sets
@@ -1248,6 +1306,9 @@ function outfitPick(label) {
       label === "Project" ? "Search projects" : "Search outfits",
     ),
   );
+  // For the keys that open the list from the keyboard.
+  b.id = label === "Project" ? "project" : "outfit";
+  return b;
 }
 
 /** Skyrim's numbers for the parts of a body an armour covers, as the game's editor names them. */
@@ -1294,7 +1355,7 @@ function studioSide() {
     view.hide(i, hidden);
   };
   // The skeleton shows with the list of bones.
-  const bonesShown = state.side === "bones" && picked && !picked.hidden;
+  const bonesShown = (state.side === "bones" || state.bonesShown) && picked && !picked.hidden;
   view.bones(bonesShown ? picked.places : null, bonesShown ? picked.bones.indexOf(state.bone) : -1);
   if (state.side !== "parts" && state.part !== null) showPart(null);
   const rows =
@@ -1522,32 +1583,8 @@ function studioSide() {
                     }
                     if (what === "conformAll") return attempt({ do: "conformAll", body: sh.name });
                     if (what === "textures") return texturesOf(sh);
-                    if (what === "part") {
-                      const parted = [];
-                      sh.mask.forEach((m, v) => m >= 0.5 && parted.push(v));
-                      return rename(
-                        "Separate masked points",
-                        `${sh.name} part`,
-                        (to) => {
-                          const [work] = core.ask({ op: "change", change: { do: "separate", shape: sh.name, to } }, new Uint8Array(Uint32Array.from(parted).buffer));
-                          sh.mask.fill(0);
-                          taken(work);
-                        },
-                        "Separate",
-                      );
-                    }
-                    if (what === "cut") {
-                      const gone = [];
-                      sh.mask.forEach((m, v) => m >= 0.5 && gone.push(v));
-                      try {
-                        const [work] = core.ask({ op: "change", change: { do: "deleteVertices", shape: sh.name } }, new Uint8Array(Uint32Array.from(gone).buffer));
-                        taken(work);
-                      } catch (e) {
-                        state.problem = e.message;
-                        render();
-                      }
-                      return;
-                    }
+                    if (what === "part") return separate(sh);
+                    if (what === "cut") return cutMasked(sh);
                     if (what === "flipU" || what === "flipV") return attempt({ do: "flipUv", shape: sh.name, across: what === "flipU" });
                     if (what === "export") return exportObj(sh);
                     if (what === "exportFbx") return exportFbx([sh], sh.name);
@@ -1672,6 +1709,7 @@ function studioSliders() {
             type: "button",
             role: "checkbox",
             "aria-checked": on ? "true" : "false",
+            "data-slider": i,
             ...more(sl),
             onclick: () => {
               state.at[i] = on ? 0 : 100;
@@ -1700,7 +1738,7 @@ function studioSliders() {
       input.value = 0;
       input.dispatchEvent(new Event("input"));
     });
-    rows.push(h("div.sl.one", more(sl) || null, h("span.cut", null, sl.name), h("span.tr", null, input, out)));
+    rows.push(h("div.sl.one", { "data-slider": i, ...more(sl) }, h("span.cut", null, sl.name), h("span.tr", null, input, out)));
   });
   const top = el.querySelector(".rows")?.scrollTop || 0;
   el.replaceChildren(
@@ -1793,6 +1831,35 @@ function studioSliders() {
   el.querySelector(".rows").scrollTop = top;
 }
 
+/** The masked points of `sh` made a shape of their own, under a name asked for. */
+function separate(sh) {
+  const parted = [];
+  sh.mask.forEach((m, v) => m >= 0.5 && parted.push(v));
+  rename(
+    "Separate masked points",
+    `${sh.name} part`,
+    (to) => {
+      const [work] = core.ask({ op: "change", change: { do: "separate", shape: sh.name, to } }, new Uint8Array(Uint32Array.from(parted).buffer));
+      sh.mask.fill(0);
+      taken(work);
+    },
+    "Separate",
+  );
+}
+
+/** The masked points of `sh` deleted. */
+function cutMasked(sh) {
+  const gone = [];
+  sh.mask.forEach((m, v) => m >= 0.5 && gone.push(v));
+  try {
+    const [work] = core.ask({ op: "change", change: { do: "deleteVertices", shape: sh.name } }, new Uint8Array(Uint32Array.from(gone).buffer));
+    taken(work);
+  } catch (e) {
+    state.problem = e.message;
+    render();
+  }
+}
+
 /** Outfit Studio: a new slider, which the brushes then shape. */
 function newSlider() {
   rename(
@@ -1812,19 +1879,16 @@ function newSlider() {
 
 // ── Brushes ────────────────────────────────────────────────────────────────
 
-const BRUSHES = [
-  ["inflate", "Inflate"],
-  ["deflate", "Deflate"],
-  ["move", "Move"],
-  ["smooth", "Smooth"],
-  ["erase", "Erase"],
-  ["mask", "Mask"],
-  ["weights", "Weights"],
-  ["colour", "Colour"],
-  ["edge", "Edges"],
-  ["place", "Place"],
-  ["pose", "Pose"],
-];
+const { BRUSHES } = keys;
+
+/** What the brushes change: slider `i`, or with -1 the shape itself. */
+function editSlider(i) {
+  state.editing = i;
+  // A slider is changed where its effect shows: at nothing it would show none.
+  if (i >= 0 && applied(cur().sliders[i], state.at[i]) === 0) state.at[i] = cur().sliders[i].invert ? 0 : 100;
+  render();
+  reshape();
+}
 
 /** How far the brush reaches, in the mesh's units. */
 function radius() {
@@ -1867,6 +1931,10 @@ function brushing(what, ray) {
   }
   // A shape still held by its drag is not brushed.
   if (stroke?.tool === "place") return false;
+  // The brush the keys held make of the one in hand, as the stroke began;
+  // between strokes, as they are held now.
+  const use = stroke && what !== "down" ? stroke.use : keys.stroke(state.keys, state.tool, ray);
+  const tool = use.tool;
   const r = radius();
   if (what === "drag" && stroke?.tool === "move") {
     // The middle of the brush follows the pointer, across the view.
@@ -1886,30 +1954,22 @@ function brushing(what, ray) {
   }
   view.reach({ point: found.point, normal: found.normal, radius: r });
   if (what === "over") return false;
-  if (state.tool === "edge") {
+  if (tool === "edge") {
     // No stroke: one click, on the edge of the triangle under it nearest the click.
     if (what !== "down") return false;
     const [a, b] = brush.nearestEdge(found.corners, found.point, s.now);
     attempt({ do: "edge", shape: s.name, a, b, op: state.edgeOp });
     return true;
   }
-  if (state.tool === "colour") {
+  if (tool === "colour") {
     if (!s.colors.length) return false;
-    const reached = alive(s, brush.spared(brush.reach(found.point, r, s.now), s.mask));
-    if (ray.alt) {
+    if (use.alt) {
       // Alt picks up the colour under the middle of the brush.
-      if (what === "down" && reached.vertices.length) {
-        let best = 0;
-        reached.weights.forEach((w, k) => w > reached.weights[best] && (best = k));
-        const at = reached.vertices[best] * 4;
-        state.colour = `#${[0, 1, 2].map((c) => s.colors[at + c].toString(16).padStart(2, "0")).join("")}`;
-        state.alpha = Math.round((s.colors[at + 3] / 255) * 100);
-        remembered.set("brush.colour", state.colour);
-        render();
-      }
+      if (what === "down") pickColour(s, found.point);
       return false;
     }
-    if (what === "down") stroke = { tool: "colour", shape: s, before: new Uint8Array(s.colors), amount: 1 };
+    const reached = alive(s, brush.spared(brush.reach(found.point, r, s.now), s.mask));
+    if (what === "down") stroke = { tool: "colour", use, shape: s, before: new Uint8Array(s.colors), amount: 1 };
     const to = [1, 3, 5].map((c) => parseInt(state.colour.slice(c, c + 2), 16)).concat(Math.round((state.alpha / 100) * 255));
     const strength = state.strength / 100;
     reached.vertices.forEach((v, k) => {
@@ -1919,10 +1979,10 @@ function brushing(what, ray) {
     view.colours(state.picked, s.colors);
     return true;
   }
-  if (state.tool === "weights") {
+  if (tool === "weights") {
     if (!state.heat || !state.bone) return false;
     if (what === "down") {
-      stroke = { tool: "weights", shape: s, before: new Float32Array(state.heat), amount: 1 };
+      stroke = { tool: "weights", use, shape: s, before: new Float32Array(state.heat), amount: 1 };
       // Both sides: the same stroke across the body, for the bone's twin there.
       const other = brush.twin(state.bone);
       if (state.mirror && other !== state.bone) {
@@ -1939,24 +1999,22 @@ function brushing(what, ray) {
     if (far < r * (state.spacing / 100)) return true;
     stroke.last = found.point;
     const reached = alive(s, brush.spared(brush.reach(found.point, r, s.now), s.mask));
-    const by = (ray.alt ? -1 : 1) * (state.strength / 100) * 0.35;
-    reached.vertices.forEach((v, k) => {
-      state.heat[v] = Math.max(0, Math.min(1, state.heat[v] + by * reached.weights[k]));
-    });
-    if (stroke.twin) {
-      const there = alive(s, brush.spared(brush.reach(brush.across(found.point), r, s.now), s.mask));
-      there.vertices.forEach((v, k) => {
-        stroke.twin.heat[v] = Math.max(0, Math.min(1, stroke.twin.heat[v] + by * there.weights[k]));
-      });
-    }
+    const by = (use.alt ? -1 : 1) * (state.strength / 100) * 0.35;
+    // Smoothed (the original's Shift), each weight goes toward its neighbours'.
+    const paint = (heat, reached) =>
+      use.smooth
+        ? brush.level(heat, s.weld, near(s), reached, (state.strength / 100) * 0.6)
+        : reached.vertices.forEach((v, k) => (heat[v] = Math.max(0, Math.min(1, heat[v] + by * reached.weights[k]))));
+    paint(state.heat, reached);
+    if (stroke.twin) paint(stroke.twin.heat, alive(s, brush.spared(brush.reach(brush.across(found.point), r, s.now), s.mask)));
     view.mask(state.picked, state.heat);
     return true;
   }
-  if (state.tool === "mask") {
+  if (tool === "mask") {
     // Not a change to the outfit: what the other brushes are to leave alone.
-    if (what === "down") stroke = { tool: "mask", shape: s, before: s.now, amount: 1 };
+    if (what === "down") stroke = { tool: "mask", use, shape: s, before: s.now, amount: 1 };
     for (const point of state.mirror ? [found.point, brush.across(found.point)] : [found.point]) {
-      brush.cover(s.mask, alive(s, brush.reach(point, r, s.now)), ray.alt);
+      brush.cover(s.mask, alive(s, brush.reach(point, r, s.now)), use.alt);
     }
     view.mask(state.picked, s.mask);
     return true;
@@ -1966,7 +2024,7 @@ function brushing(what, ray) {
     const amount = k < 0 ? 1 : applied(cur().sliders[k], state.at[k]);
     // A slider standing at nothing shows nothing of what a stroke would do to it.
     if (amount === 0) return false;
-    stroke = { tool: state.tool, shape: s, before: new Float32Array(s.now), amount, last: null, near: null };
+    stroke = { tool, use, shape: s, before: new Float32Array(s.now), amount, last: null, near: null };
     if (stroke.tool === "erase") {
       // How far the slider has each vertex from where it starts, to take back.
       const list = s.sliders.find((d) => d.slider === k);
@@ -2014,6 +2072,20 @@ function brushing(what, ray) {
     }
   }
   redraw(s);
+  return true;
+}
+
+/** Take up the colour of the vertex of `s` nearest the middle of the brush at `point`. */
+function pickColour(s, point) {
+  const reached = alive(s, brush.spared(brush.reach(point, radius(), s.now), s.mask));
+  if (!reached.vertices.length) return false;
+  let best = 0;
+  reached.weights.forEach((w, k) => w > reached.weights[best] && (best = k));
+  const at = reached.vertices[best] * 4;
+  state.colour = `#${[0, 1, 2].map((c) => s.colors[at + c].toString(16).padStart(2, "0")).join("")}`;
+  state.alpha = Math.round((s.colors[at + 3] / 255) * 100);
+  remembered.set("brush.colour", state.colour);
+  render();
   return true;
 }
 
@@ -2081,6 +2153,8 @@ function endStroke() {
   stroke = null;
   if (!done) return false;
   if (done.tool === "mask") {
+    // Masked with Ctrl while the weight brush is in hand: the weights are shown again.
+    if (state.heat) view.mask(state.picked, state.heat);
     render();
     return false;
   }
@@ -2385,13 +2459,7 @@ function brushBar() {
     menu(
       b,
       [{ name: "The shape", value: -1, on: state.editing < 0 }, ...sliders],
-      (i) => {
-        state.editing = i;
-        // A slider is changed where its effect shows: at nothing it would show none.
-        if (i >= 0 && applied(cur().sliders[i], state.at[i]) === 0) state.at[i] = cur().sliders[i].invert ? 0 : 100;
-        render();
-        reshape();
-      },
+      editSlider,
       "Search sliders",
       true,
     ),
@@ -2596,7 +2664,36 @@ function heat() {
   view.mask(state.picked, state.heat || s.mask);
 }
 
-/** How the view is drawn: how wide it sees, and how brightly it is lit. */
+/** Which keys do what: Bodyworks' own, or the original's. One choice for both tools. */
+function keysPick() {
+  const seg = h(
+    "div.seg",
+    { role: "group", "aria-label": "Shortcuts" },
+    ...keys.SETS.map(([id, label]) =>
+      h(
+        "button" + (state.keys === id ? ".on" : ""),
+        {
+          type: "button",
+          "aria-pressed": state.keys === id ? "true" : "false",
+          onclick: () => {
+            state.keys = id;
+            remembered.set("keys", id);
+            for (const b of seg.children) {
+              const on = b === seg.children[keys.SETS.findIndex(([k]) => k === id)];
+              b.classList.toggle("on", on);
+              b.setAttribute("aria-pressed", on ? "true" : "false");
+            }
+            if (view) view.press = (e) => keys.press(state.keys, e);
+          },
+        },
+        label,
+      ),
+    ),
+  );
+  return h("div.knob.wide.choice", null, h("span", null, "Shortcuts"), seg);
+}
+
+/** How the view is drawn: how wide it sees, and how brightly it is lit; and which keys do what. */
 function lens(anchor) {
   const box = anchor.getBoundingClientRect();
   const knob = (label, key, min, max, apply) => {
@@ -2616,6 +2713,7 @@ function lens(anchor) {
     { role: "dialog", "aria-label": "View", style: `left: ${Math.max(8, box.left)}px; top: ${box.bottom + 6}px` },
     knob("Field of view", "fov", 15, 80, () => view.lens({ fov: state.fov })),
     knob("Light", "light", 40, 220, () => view.lens({ bright: state.light / 100 })),
+    keysPick(),
   );
   const scrim = h("div.scrim", { onpointerdown: (e) => e.target === scrim && close(scrim) }, panel);
   document.body.append(scrim);
@@ -3640,6 +3738,10 @@ function renderPage() {
     canvas = h("canvas", { "aria-label": "Preview" });
     view = new View(canvas);
     view.lens({ fov: state.fov, bright: state.light / 100 });
+    // The mouse and the wheel as the keys chosen have them.
+    view.press = (e) => keys.press(state.keys, e);
+    view.wheel = wheeled;
+    view.pick = pointedAt;
   }
   if (state.mode === "studio") return renderStudio();
   const set = state.set;
@@ -3682,18 +3784,11 @@ function renderPage() {
           menu(
             b,
             fits.map((p) => ({ name: p.name, value: p, on: p === state.preset })),
-            (p) => {
-              state.preset = p;
-              Object.assign(state, presetValues(set, p));
-              state.built = null;
-              remembered.set(`preset.${state.game?.id}`, p.name);
-              render();
-              reshape();
-            },
+            usePreset,
             "Search presets",
           ),
         ),
-      h("button.btn.ghost", { type: "button", disabled: !set, onclick: savePreset }, "Save preset…"),
+      h("button.btn.ghost", { type: "button", disabled: !set, onclick: () => savePreset() }, "Save preset…"),
       set &&
         h(
           "button.btn.ghost",
@@ -3803,63 +3898,311 @@ addEventListener("keydown", (e) => {
   if (open) close(open);
 });
 
-// Outfit Studio: Q puts the brush down, 1 and up take one in hand in the
-// order they are shown, the square brackets size it, W and T change how the
-// outfit is drawn.
+// ── Keys ───────────────────────────────────────────────────────────────────
+
+/** Whether S is held down: the original sizes the brush with it and the wheel. */
+let sHeld = false;
+addEventListener("keyup", (e) => e.key?.toLowerCase() === "s" && (sHeld = false));
+addEventListener("blur", () => (sHeld = false));
+
+// Each key is looked up in the set chosen (see keys.js), and what it names
+// is done here. Only a key that did something is kept from the page, so the
+// frame's own (Tab, F5, the arrows) work as ever otherwise.
 addEventListener("keydown", (e) => {
-  if (state.mode !== "studio" || !state.work || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.target.closest?.("input, textarea, .scrim") || document.querySelector(".scrim")) return;
-  const key = e.key.toLowerCase();
-  const tool = BRUSHES[Number(key) - 1];
-  if (key === "q") hold(null);
-  else if (tool) hold(tool[0]);
-  else if (key === "[" || key === "]") {
-    state.size = Math.max(1, Math.min(100, state.size + (key === "[" ? -5 : 5)));
-    remembered.set("brush.size", String(state.size));
-    render();
-  } else if (key === "f") view.frame(state.shapes.filter((sh) => !sh.hidden).map((sh) => sh.now));
-  else if (key === "x") {
-    state.mirror = !state.mirror;
-    remembered.set("brush.mirror", state.mirror ? "1" : "0");
-    render();
-  } else if (key === "h" || key === "g") {
-    // The picked shape hidden, or drawn as a ghost; again to bring it back.
-    const sh = state.shapes[state.picked];
-    if (!sh) return;
-    if (key === "h") {
-      sh.hidden = !sh.hidden;
-      view.hide(state.picked, sh.hidden);
-    } else {
-      sh.ghost = !sh.ghost;
-      view.ghost(state.picked, sh.ghost);
+  if (!view) return;
+  if (e.key?.toLowerCase() === "s" && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) sHeld = true;
+  const at = {
+    work: Boolean(state.work),
+    typing: Boolean(e.target.closest?.("input, textarea, .scrim")),
+    sheet: Boolean(document.querySelector(".scrim")),
+    side: state.side,
+    tool: state.tool,
+  };
+  const action = keys.action(state.keys, state.mode, e, at);
+  if (action && run(action)) e.preventDefault();
+});
+
+/** The wheel over the view, as the keys chosen have it: true when it did something other than zoom. */
+function wheeled(e) {
+  if (state.mode !== "studio") return false;
+  const action = keys.wheel(state.keys, e, sHeld);
+  return Boolean(action && run(action));
+}
+
+/** Where a ray first meets a shape that is shown, or null. */
+function pointedAt(ray) {
+  let best = null;
+  state.shapes.forEach((s) => {
+    if (s.hidden) return;
+    const found = brush.hit(ray.origin, ray.dir, s.now, s.shown);
+    if (found && (!best || found.t < best.t)) best = found;
+  });
+  return best?.point || null;
+}
+
+/** The sliders the brushes can change, by their place in the list. */
+function editable() {
+  return cur()
+    .sliders.map((sl, i) => (sl.zap || sl.uv ? -1 : i))
+    .filter((i) => i >= 0);
+}
+
+/** A mask changed by a key: shown, unless the weights are. */
+function masked(sh) {
+  if (!state.heat) view.mask(state.picked, sh.mask);
+  render();
+  return true;
+}
+
+/** Do what a key names (see `keys.action`). False when there was nothing to do it to. */
+function run(a) {
+  const sh = state.shapes[state.picked];
+  const flip = (key) => (view.look({ [key]: !view.looks[key] }), render(), true);
+  switch (a.do) {
+    case "undo":
+      undo(a.again);
+      return true;
+    case "saveProject":
+      return state.work ? (saveProject(), true) : false;
+    case "exportMesh":
+      return state.set ? (exportMesh(), true) : false;
+    case "hold":
+      if (!state.work) return false;
+      hold(a.tool);
+      return true;
+    case "size":
+    case "strength":
+      state[a.do] = Math.max(1, Math.min(100, state[a.do] + a.by));
+      remembered.set(`brush.${a.do}`, String(state[a.do]));
+      render();
+      return true;
+    case "frame":
+      view.frame(state.shapes.filter((s) => !s.hidden).map((s) => s.now));
+      return true;
+    case "mirror":
+      state.mirror = !state.mirror;
+      remembered.set("brush.mirror", state.mirror ? "1" : "0");
+      render();
+      return true;
+    case "connected":
+      state.connected = !state.connected;
+      remembered.set("brush.connected", state.connected ? "1" : "0");
+      render();
+      return true;
+    case "hide":
+    case "ghost":
+      // The picked shape hidden, or drawn as a ghost; again to bring it back.
+      if (!sh) return false;
+      if (a.do === "hide") {
+        sh.hidden = !sh.hidden;
+        view.hide(state.picked, sh.hidden);
+      } else {
+        sh.ghost = !sh.ghost;
+        view.ghost(state.picked, sh.ghost);
+      }
+      render();
+      return true;
+    case "wire":
+      return flip("wire");
+    case "textures":
+      return flip("painted");
+    case "lighting":
+      return flip("lit");
+    case "grid":
+      return flip("grid");
+    case "face":
+      view.face(a.side);
+      return true;
+    case "perspective":
+      view.flat = !view.flat;
+      view.draw();
+      return true;
+    case "pivot": {
+      // What the pointer is over becomes what the view turns about.
+      const point = view.pointer && pointedAt(view.ray(view.pointer));
+      if (!point) return false;
+      view.turnAbout(point);
+      return true;
     }
-    render();
-  } else if (key === "-" || key === "=" || key === "+") {
-    state.strength = Math.max(1, Math.min(100, state.strength + (key === "-" ? -5 : 5)));
-    remembered.set("brush.strength", String(state.strength));
-    render();
-  } else if (key === "w") view.look({ wire: !view.looks.wire }), render();
-  else if (key === "t") view.look({ painted: !view.looks.painted }), render();
-  else return;
-  e.preventDefault();
-});
+    case "bones":
+      state.bonesShown = !state.bonesShown;
+      studioSide();
+      return true;
+    case "newProject":
+      leaving(() => newProject(document.getElementById("new")));
+      return true;
+    case "openProject":
+    case "groups": {
+      const b = document.getElementById(a.do === "openProject" ? "project" : "group");
+      if (!b) return false;
+      b.click();
+      return true;
+    }
+    case "closeProject":
+      if (!state.work) return false;
+      // The project let go of: the set it was opened from is still looked at.
+      leaving(() => {
+        hold(null);
+        state.work = null;
+        state.editing = -1;
+        state.saved = null;
+        state.exported = null;
+        try {
+          showShapes(false);
+        } catch (e) {
+          state.problem = e.message;
+        }
+        render();
+      });
+      return true;
+    case "clearMask":
+    case "invertMask":
+    case "spreadMask":
+      if (!state.work || !sh) return false;
+      if (a.do === "clearMask") sh.mask.fill(0);
+      else if (a.do === "invertMask") sh.mask.forEach((m, v) => (sh.mask[v] = 1 - m));
+      else sh.mask.set(brush.spread(sh.mask, sh.weld, near(sh), a.less));
+      return masked(sh);
+    case "deleteVertices":
+    case "separate":
+      if (!state.work || !sh || !sh.mask.some((m) => m >= 0.5)) return false;
+      if (a.do === "separate") separate(sh);
+      else cutMasked(sh);
+      return true;
+    case "deleteShape":
+      if (!state.work || !sh || state.shapes.length < 2) return false;
+      attempt({ do: "deleteShape", name: sh.name });
+      return true;
+    case "renameShape":
+      if (!state.work || !sh) return false;
+      rename("Rename shape", sh.name, (to) => change({ do: "renameShape", from: sh.name, to }));
+      return true;
+    case "sliderSettings":
+    case "deleteSlider": {
+      const sl = state.work && cur().sliders[state.editing];
+      if (!sl) return false;
+      if (a.do === "sliderSettings") sliderSettings(sl);
+      else {
+        state.editing = -1;
+        attempt({ do: "deleteSlider", name: sl.name });
+      }
+      return true;
+    }
+    case "editSlider": {
+      // The slider under the pointer, or the one the keyboard is on.
+      const row = state.work && document.querySelector("#list [data-slider]:hover, #list [data-slider]:focus-within");
+      const i = row ? Number(row.dataset.slider) : -1;
+      if (!editable().includes(i)) return false;
+      editSlider(i);
+      return true;
+    }
+    case "nextSlider": {
+      const list = state.work ? editable() : [];
+      if (!list.length) return false;
+      const here = list.indexOf(state.editing);
+      editSlider(list[here < 0 ? (a.by > 0 ? 0 : list.length - 1) : (here + a.by + list.length) % list.length]);
+      return true;
+    }
+    case "brushSettings":
+      if (!state.work || !state.tool || ["edge", "place", "pose"].includes(state.tool)) return false;
+      brushSettings();
+      return true;
+    case "pickColour": {
+      // The colour of the vertex under the pointer.
+      if (!sh?.colors.length || !view.pointer) return false;
+      const ray = view.ray(view.pointer);
+      const found = brush.hit(ray.origin, ray.dir, sh.now, sh.shown);
+      return found ? pickColour(sh, found.point) : false;
+    }
+    case "preset":
+    case "outfit": {
+      if (!state.set) return false;
+      const list = a.do === "preset" ? presetsFor(state.set) : state.catalog.sets.filter((s) => !state.group || s.groups.includes(state.group));
+      const here = list.indexOf(a.do === "preset" ? state.preset : state.set);
+      const next = list[Math.max(0, Math.min(list.length - 1, here + a.by))];
+      if (!next || list[here] === next) return Boolean(next);
+      if (a.do === "preset") usePreset(next);
+      else leaving(() => choose(next));
+      return true;
+    }
+    case "clearFilters":
+      state.search = "";
+      state.group = null;
+      render();
+      return true;
+    case "toStudio":
+      setMode("studio");
+      return true;
+    case "savePreset":
+      if (!state.set) return false;
+      savePreset(a.asNew ? "new" : "now");
+      return true;
+    case "refresh":
+      refresh();
+      return true;
+  }
+  return false;
+}
 
-// Outfit Studio: Ctrl+S saves the project and Ctrl+E exports the mesh.
-addEventListener("keydown", (e) => {
-  if (state.mode !== "studio" || !state.work || !(e.ctrlKey || e.metaKey) || document.querySelector(".scrim")) return;
-  const key = e.key.toLowerCase();
-  if (key === "s") saveProject();
-  else if (key === "e") exportMesh();
-  else return;
-  e.preventDefault();
-});
+/** The brush's size, strength, focus and spacing, in a panel where the pointer is (the original's Space). */
+function brushSettings() {
+  const where = view.pointer || (() => {
+    const box = canvas.getBoundingClientRect();
+    return { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 };
+  })();
+  const knob = (label, key) => {
+    const input = h("input", { type: "range", min: 1, max: 100, step: 1, value: state[key], "aria-label": label });
+    const fill = () => input.style.setProperty("--at", `${input.value}%`);
+    fill();
+    input.addEventListener("input", () => {
+      state[key] = Number(input.value);
+      remembered.set(`brush.${key}`, input.value);
+      fill();
+    });
+    return h("label.knob.wide", null, h("span", null, label), input);
+  };
+  const t = state.tool;
+  const panel = h(
+    "div.menu.lens",
+    {
+      role: "dialog",
+      "aria-label": "Brush",
+      style: `left: ${Math.max(8, Math.min(where.clientX, innerWidth - 308))}px; top: ${Math.max(8, Math.min(where.clientY, innerHeight - 160))}px`,
+    },
+    // The knobs the bar under the view has for the brush in hand.
+    knob("Size", "size"),
+    t !== "mask" && t !== "move" && knob("Strength", "strength"),
+    t !== "mask" && t !== "weights" && t !== "colour" && knob("Focus", "focus"),
+    t !== "mask" && t !== "move" && t !== "colour" && knob("Spacing", "spacing"),
+  );
+  const scrim = h(
+    "div.scrim",
+    {
+      onpointerdown: (e) => {
+        if (e.target !== scrim) return;
+        close(scrim);
+        render();
+      },
+    },
+    panel,
+  );
+  document.body.append(scrim);
+}
 
-// Outfit Studio: a change is taken back and put back from the keyboard too.
-addEventListener("keydown", (e) => {
-  if (state.mode !== "studio" || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "z") return;
-  if (e.target.closest?.("input, textarea, .scrim")) return;
-  e.preventDefault();
-  undo(e.shiftKey);
-});
+/** BodySlide's F5: the outfits read again from the mods, the one on screen opened again. */
+async function refresh() {
+  const name = state.set?.name;
+  const preset = state.preset?.name;
+  busy("Reading");
+  try {
+    await readCatalog();
+  } catch (e) {
+    state.problem = e.message;
+  }
+  state.busy = null;
+  const again = state.catalog.sets.find((s) => s.name === name) || state.catalog.sets[0];
+  if (again) await choose(again, preset);
+  else render();
+}
 
 start();
