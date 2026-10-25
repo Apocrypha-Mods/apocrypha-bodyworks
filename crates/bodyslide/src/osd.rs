@@ -115,3 +115,58 @@ impl SliderData {
             .map(|(_, d)| d.as_slice())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bsd::Bsd;
+
+    fn diffs() -> Vec<Diff> {
+        vec![
+            Diff {
+                vertex: 2,
+                offset: [0.5, 0.0, -1.0],
+            },
+            Diff {
+                vertex: 9,
+                offset: [0.0, 3.0, 0.25],
+            },
+        ]
+    }
+
+    #[test]
+    fn a_file_is_read_as_one_list_or_as_named_lists_by_its_name() {
+        let one = Bsd::of(&diffs()).write();
+        for name in ["Breasts.bsd", "ShapeData/Set/collarBreasts.BSD"] {
+            let got = SliderData::read_file(name, &one).unwrap();
+            assert_eq!(got.version, 0);
+            assert_eq!(got.lists, [(String::new(), diffs())]);
+            assert_eq!(got.list(""), Some(diffs().as_slice()));
+        }
+        let named = SliderData {
+            version: 1,
+            lists: vec![("BodyBreasts".into(), diffs()), ("BodyButt".into(), vec![])],
+        };
+        let bytes = named.write();
+        for name in ["Body.osd", "ShapeData/Set/Body.OSD", "no extension"] {
+            assert_eq!(SliderData::read_file(name, &bytes).unwrap(), named);
+        }
+    }
+
+    #[test]
+    fn a_file_of_one_kind_named_as_the_other_is_refused() {
+        let osd = SliderData {
+            version: 1,
+            lists: vec![("BodyBreasts".into(), diffs())],
+        }
+        .write();
+        assert!(SliderData::read_file("Body.osd", &osd).is_ok());
+        assert!(SliderData::read_file("Body.bsd", &osd).is_err());
+        let bsd = Bsd::of(&diffs()).write();
+        assert!(SliderData::read_file("Breasts.bsd", &bsd).is_ok());
+        assert_eq!(
+            SliderData::read_file("Breasts.osd", &bsd),
+            Err(Error::NotThatKind)
+        );
+    }
+}

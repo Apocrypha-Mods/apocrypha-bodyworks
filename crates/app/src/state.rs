@@ -1678,3 +1678,173 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use apoc_bodyslide::bsd::Bsd;
+    use apoc_bodyslide::osd::Diff;
+
+    fn ask(state: &mut State, request: Value, data: &[u8]) -> (Value, Vec<u8>) {
+        let a = handle(state, request.to_string().as_bytes(), data);
+        let v: Value = serde_json::from_str(&a.json).unwrap();
+        assert!(v.get("error").is_none(), "{request}: {v}");
+        (v["ok"].clone(), a.bytes)
+    }
+
+    fn refused(state: &mut State, request: Value, data: &[u8]) -> String {
+        let a = handle(state, request.to_string().as_bytes(), data);
+        let v: Value = serde_json::from_str(&a.json).unwrap();
+        v["error"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{v}"))
+            .to_string()
+    }
+
+    /// An older set, as the `.xml` files that came before `.osp` have it.
+    fn older(name: &str, shape: &str) -> String {
+        format!(
+            r#"<SliderSetInfo>
+    <SliderSet name="{name}">
+        <SetFolder>Mine</SetFolder>
+        <SourceFile>Mine.nif</SourceFile>
+        <OutputPath>meshes\mine</OutputPath>
+        <OutputFile>Mine</OutputFile>
+        <BaseShapeName target="{shape}">{shape}</BaseShapeName>
+        <Slider name="Up" invert="false" small="100" big="100">
+            <datafile name="{shape}Up" target="{shape}" local="true">{shape}Up.bsd</datafile>
+        </Slider>
+    </SliderSet>
+</SliderSetInfo>
+"#
+        )
+    }
+
+    #[test]
+    fn older_xml_sets_are_listed_with_the_osp_sets() {
+        let mut state = State::default();
+        ask(
+            &mut state,
+            json!({ "op": "put", "path": "SliderSets/Old.xml" }),
+            older("Old one", "collar").as_bytes(),
+        );
+        let newer = set::write(&set::read(older("New one", "collar").as_bytes()).unwrap());
+        ask(
+            &mut state,
+            json!({ "op": "put", "path": "SliderSets/New.osp" }),
+            newer.as_bytes(),
+        );
+        // Not a set by where it is, though it reads as one.
+        ask(
+            &mut state,
+            json!({ "op": "put", "path": "SliderPresets/Elsewhere.xml" }),
+            older("Elsewhere", "collar").as_bytes(),
+        );
+        let (catalog, _) = ask(&mut state, json!({ "op": "load" }), &[]);
+        let names: Vec<&str> = catalog["sets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["New one", "Old one"]);
+        assert_eq!(
+            ask(&mut state, json!({ "op": "needs", "set": "Old one" }), &[]).0,
+            json!(["ShapeData/Mine/Mine.nif", "ShapeData/Mine/collarUp.bsd"])
+        );
+    }
+
+    #[test]
+    fn a_sliders_list_for_a_shape_goes_out_as_a_bsd_and_comes_back_in_undoably() {
+        let mesh = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../scratch/samples/ddx/01 UUNP/CalienteTools/BodySlide/ShapeData/DeviousDevicesExpansionUUNP/Corset/Corset.nif",
+        );
+        let Ok(nif_bytes) = std::fs::read(mesh) else {
+            return;
+        };
+        let nif = Nif::read(&nif_bytes).unwrap();
+        let m = mesh::read(&nif, mesh::shapes(&nif)[0]).unwrap();
+        let (shape, count) = (m.name, m.positions.len() as u16);
+        let up = Bsd::of(&[
+            Diff {
+                vertex: 3,
+                offset: [0.0, 0.0, 2.0],
+            },
+            Diff {
+                vertex: count - 1,
+                offset: [1.0, 0.0, 0.0],
+            },
+        ])
+        .write();
+        let mut state = State::default();
+        for (path, bytes) in [
+            (
+                "SliderSets/Old.xml".to_string(),
+                older("Old", &shape).into_bytes(),
+            ),
+            ("ShapeData/Mine/Mine.nif".to_string(), nif_bytes),
+            (format!("ShapeData/Mine/{shape}Up.bsd"), up.clone()),
+        ] {
+            ask(&mut state, json!({ "op": "put", "path": path }), &bytes);
+        }
+        ask(&mut state, json!({ "op": "load" }), &[]);
+
+        // The set's preview shows what the .bsd moves.
+        let (preview, numbers) = ask(&mut state, json!({ "op": "preview", "set": "Old" }), &[]);
+        let sliders = preview["shapes"][0]["sliders"].as_array().unwrap();
+        assert_eq!(sliders.len(), 1);
+        let (from, n) = (
+            sliders[0]["vertices"][0].as_u64().unwrap() as usize,
+            sliders[0]["vertices"][1].as_u64().unwrap() as usize,
+        );
+        let vertices: Vec<u32> = (from..from + n)
+            .map(|k| u32::from_le_bytes(numbers[k * 4..k * 4 + 4].try_into().unwrap()))
+            .collect();
+        assert_eq!(vertices, [3, u32::from(count) - 1]);
+
+        let bsd = |state: &mut State| {
+            ask(
+                state,
+                json!({ "op": "sliderBsd", "slider": "Up", "shape": shape }),
+                &[],
+            )
+        };
+        assert_eq!(
+            refused(
+                &mut state,
+                json!({ "op": "sliderBsd", "slider": "Up", "shape": shape }),
+                &[]
+            ),
+            "No project is open."
+        );
+        ask(&mut state, json!({ "op": "open", "set": "Old" }), &[]);
+        let (named, bytes) = bsd(&mut state);
+        assert_eq!(named["name"], format!("{shape}#Up.bsd"));
+        assert_eq!(bytes, up);
+
+        let new = Bsd::of(&[Diff {
+            vertex: 0,
+            offset: [0.0, -1.0, 0.0],
+        }])
+        .write();
+        let change = json!({ "op": "change", "change": { "do": "importBsd", "slider": "Up", "shape": shape } });
+        let (work, _) = ask(&mut state, change.clone(), &new);
+        assert_eq!(work["changed"], true);
+        assert_eq!(work["undo"], true);
+        assert_eq!(bsd(&mut state).1, new);
+        let (work, _) = ask(&mut state, json!({ "op": "undo" }), &[]);
+        assert_eq!(work["redo"], true);
+        assert_eq!(bsd(&mut state).1, up);
+        ask(&mut state, json!({ "op": "undo", "again": true }), &[]);
+        assert_eq!(bsd(&mut state).1, new);
+
+        // One for another mesh is refused, and the list stays as it was.
+        let beyond = Bsd::of(&[Diff {
+            vertex: count,
+            offset: [1.0, 0.0, 0.0],
+        }])
+        .write();
+        assert!(refused(&mut state, change, &beyond).contains("for another mesh"));
+        assert_eq!(bsd(&mut state).1, new);
+    }
+}

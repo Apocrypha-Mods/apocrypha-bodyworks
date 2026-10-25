@@ -2571,3 +2571,363 @@ fn what_a_set_says_of_a_shapes_normals_is_kept_and_followed() {
         .smooth_seam_angle = None;
     assert_ne!(normals(&usual), as_said);
 }
+
+/// A set made here over a real mesh of the Devious Devices sample: one
+/// slider's data a `.bsd` (named in capitals), another's a list of an
+/// `.osd`. With its files, held as a mod's would be, by lower-case path.
+struct BsdSet {
+    set: set::SliderSet,
+    files: std::collections::HashMap<String, Vec<u8>>,
+    shape: String,
+    count: usize,
+    up: Vec<osd::Diff>,
+    side: Vec<osd::Diff>,
+}
+
+fn bsd_set(shape_folder: Option<&str>) -> Option<BsdSet> {
+    use apoc_nif::{mesh, Nif};
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../scratch/samples/ddx/01 UUNP/CalienteTools/BodySlide/ShapeData/DeviousDevicesExpansionUUNP/Corset/Corset.nif",
+    );
+    let nif_bytes = std::fs::read(path).ok()?;
+    let nif = Nif::read(&nif_bytes).unwrap();
+    let m = mesh::read(&nif, mesh::shapes(&nif)[0]).unwrap();
+    let (shape, count) = (m.name, m.positions.len());
+    let diff = |vertex: usize, offset: [f32; 3]| osd::Diff {
+        vertex: vertex as u16,
+        offset,
+    };
+    let up = vec![diff(3, [0.0, 0.0, 2.0]), diff(count - 1, [1.0, -0.5, 0.0])];
+    let side = vec![diff(5, [0.25, 0.0, 0.0])];
+    let folder = shape_folder
+        .map(|f| format!(" DataFolder=\"{f}\""))
+        .unwrap_or_default();
+    let text = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<SliderSetInfo version="1">
+    <SliderSet name="Mine">
+        <DataFolder>Mine</DataFolder>
+        <SourceFile>Mine.nif</SourceFile>
+        <OutputPath>meshes\mine</OutputPath>
+        <OutputFile GenWeights="false">Mine</OutputFile>
+        <Shape target="{shape}"{folder}>{shape}</Shape>
+        <Slider name="Up" invert="false" small="100" big="100">
+            <Data name="{shape}Up" target="{shape}" local="true">{shape}Up.BSD</Data>
+        </Slider>
+        <Slider name="Side" invert="false" small="0" big="0">
+            <Data name="{shape}Side" target="{shape}" local="true">Mine.osd\{shape}Side</Data>
+        </Slider>
+    </SliderSet>
+</SliderSetInfo>
+"#
+    );
+    let set = set::read(text.as_bytes()).unwrap().remove(0);
+    let mut files = std::collections::HashMap::new();
+    files.insert("shapedata/mine/mine.nif".to_string(), nif_bytes);
+    files.insert(
+        format!("shapedata/mine/{}up.bsd", shape.to_lowercase()),
+        apoc_bodyslide::bsd::Bsd::of(&up).write(),
+    );
+    files.insert(
+        "shapedata/mine/mine.osd".to_string(),
+        osd::SliderData {
+            version: 1,
+            lists: vec![(format!("{shape}Side"), side.clone())],
+        }
+        .write(),
+    );
+    Some(BsdSet {
+        set,
+        files,
+        shape,
+        count,
+        up,
+        side,
+    })
+}
+
+fn positions_of(bytes: &[u8], shape: &str) -> Vec<[f32; 3]> {
+    use apoc_nif::{mesh, Nif};
+    let nif = Nif::read(bytes).unwrap();
+    mesh::shapes(&nif)
+        .into_iter()
+        .map(|at| mesh::read(&nif, at).unwrap())
+        .find(|m| m.name == shape)
+        .unwrap()
+        .positions
+}
+
+#[test]
+fn a_set_whose_data_is_a_bsd_builds_with_it_and_says_when_it_is_missing() {
+    use apoc_bodyslide::build;
+    let Some(b) = bsd_set(None) else {
+        return;
+    };
+    let held = |path: &str| b.files.get(&path.to_lowercase()).cloned();
+    let base = positions_of(&b.files["shapedata/mine/mine.nif"], &b.shape);
+    let moved_by = |built: &build::Built| -> Vec<(usize, [f32; 3])> {
+        let now = positions_of(&built.outputs[0].bytes, &b.shape);
+        assert_eq!(now.len(), base.len());
+        now.iter()
+            .zip(&base)
+            .enumerate()
+            .filter(|(_, (n, w))| (0..3).any(|k| (n[k] - w[k]).abs() > 1e-4))
+            .map(|(i, (n, w))| (i, [n[0] - w[0], n[1] - w[1], n[2] - w[2]]))
+            .collect()
+    };
+    let near = |got: &[(usize, [f32; 3])], want: &[(usize, [f32; 3])]| {
+        got.len() == want.len()
+            && got
+                .iter()
+                .zip(want)
+                .all(|(g, w)| g.0 == w.0 && (0..3).all(|k| (g.1[k] - w.1[k]).abs() < 1e-3))
+    };
+
+    // At the set's own values: the .bsd's list in full, the .osd's not at all.
+    let built = build::build(&b.set, None, &held).unwrap();
+    assert!(built.notes.is_empty(), "{:?}", built.notes);
+    let got = moved_by(&built);
+    let want = [(3, b.up[0].offset), (b.count - 1, b.up[1].offset)];
+    assert!(near(&got, &want), "{got:?}");
+    // Both at full: the two kinds of file side by side.
+    let built = build::build_at(&b.set, &[100.0, 100.0], &[100.0, 100.0], &held).unwrap();
+    let got = moved_by(&built);
+    let want = [
+        (3, b.up[0].offset),
+        (5, b.side[0].offset),
+        (b.count - 1, b.up[1].offset),
+    ];
+    assert!(near(&got, &want), "{got:?}");
+
+    // Without the .bsd, the build says so and moves nothing by it.
+    let without = |path: &str| {
+        let path = path.to_lowercase();
+        (!path.ends_with("up.bsd"))
+            .then(|| b.files.get(&path).cloned())
+            .flatten()
+    };
+    let built = build::build(&b.set, None, &without).unwrap();
+    assert_eq!(
+        built.notes,
+        [format!("Up: its data for {} is missing.", b.shape)]
+    );
+    assert!(moved_by(&built).is_empty());
+}
+
+#[test]
+fn a_project_opened_from_a_bsd_set_gives_and_takes_each_list_as_a_bsd() {
+    use apoc_bodyslide::bsd::Bsd;
+    use apoc_bodyslide::project::Project;
+    let Some(b) = bsd_set(None) else {
+        return;
+    };
+    let held = |path: &str| b.files.get(&path.to_lowercase()).cloned();
+    let mut project = Project::open(&b.set, &held).unwrap();
+    assert!(project.notes.is_empty(), "{:?}", project.notes);
+    let up_file = &b.files[&format!("shapedata/mine/{}up.bsd", b.shape.to_lowercase())];
+    assert_eq!(&project.slider_bsd("Up", &b.shape).unwrap(), up_file);
+    assert_eq!(
+        project.slider_bsd("Side", &b.shape).unwrap(),
+        Bsd::of(&b.side).write()
+    );
+    assert!(project.slider_bsd("Nothing", &b.shape).is_err());
+    assert!(project.slider_bsd("Up", "No shape").is_err());
+
+    // Taken in, in place of what the slider did; its last vertex is the
+    // shape's last, and one past it is refused, leaving the list as it was.
+    let last = b.count as u16 - 1;
+    let new = Bsd::of(&[
+        osd::Diff {
+            vertex: 0,
+            offset: [0.0, 1.0, 0.0],
+        },
+        osd::Diff {
+            vertex: last,
+            offset: [0.0, 0.0, -3.0],
+        },
+    ])
+    .write();
+    project.import_bsd("Side", &b.shape, &new).unwrap();
+    assert_eq!(project.slider_bsd("Side", &b.shape).unwrap(), new);
+    let beyond = Bsd::of(&[osd::Diff {
+        vertex: last + 1,
+        offset: [1.0, 0.0, 0.0],
+    }])
+    .write();
+    let refused = project.import_bsd("Up", &b.shape, &beyond).unwrap_err();
+    assert!(
+        refused.to_string().contains("for another mesh"),
+        "{refused}"
+    );
+    assert_eq!(&project.slider_bsd("Up", &b.shape).unwrap(), up_file);
+    assert!(project
+        .import_bsd("Up", &b.shape, &new[..new.len() - 1])
+        .is_err());
+
+    // A shape whose data is another project's takes none in.
+    let Some(other) = bsd_set(Some("CalienteBody")) else {
+        return;
+    };
+    let mut theirs = Project::open(&other.set, &held).unwrap();
+    let refused = theirs.import_bsd("Up", &b.shape, &new).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("another project's, in CalienteBody"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_bsd_set_saved_as_a_project_builds_the_same_bytes_as_the_set() {
+    use apoc_bodyslide::{build, morph, project::Project};
+    let Some(b) = bsd_set(None) else {
+        return;
+    };
+    let held = |path: &str| b.files.get(&path.to_lowercase()).cloned();
+    let (small, big) = (
+        vec![100.0, 40.0],
+        morph::values(&b.set, None, true)
+            .iter()
+            .map(|v| v + 60.0)
+            .collect::<Vec<_>>(),
+    );
+    let direct = build::build_at(&b.set, &small, &big, &held).unwrap();
+    assert!(direct.notes.is_empty(), "{:?}", direct.notes);
+    let (saved, written) = Project::open(&b.set, &held).unwrap().save("Saved").unwrap();
+    assert_eq!(
+        written.iter().map(|o| o.path.as_str()).collect::<Vec<_>>(),
+        [
+            "SliderSets/Saved.osp",
+            "ShapeData/Saved/Saved.nif",
+            "ShapeData/Saved/Saved.osd"
+        ]
+    );
+    assert!(saved
+        .sliders
+        .iter()
+        .flat_map(|s| &s.data)
+        .all(|d| d.file == "Saved.osd" && !d.list.is_empty()));
+    assert_eq!(
+        set::read(&written[0].bytes).unwrap(),
+        std::slice::from_ref(&saved)
+    );
+    let only_saved = |path: &str| {
+        written
+            .iter()
+            .find(|o| o.path.eq_ignore_ascii_case(path))
+            .map(|o| o.bytes.clone())
+    };
+    let again = build::build_at(&saved, &small, &big, &only_saved).unwrap();
+    assert_eq!(again, direct);
+}
+
+#[test]
+fn every_real_bsd_writes_back_byte_for_byte() {
+    use apoc_bodyslide::bsd::{self, Bsd};
+    let all = files("bsd", Some("samples/ddx"));
+    if all.is_empty() {
+        return;
+    }
+    let mut kept = 0;
+    for path in &all {
+        assert!(bsd::named(&path.to_string_lossy()));
+        let bytes = std::fs::read(path).unwrap();
+        let read = Bsd::read(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        kept += usize::from(!read.unused.is_empty());
+        assert_eq!(read.write(), bytes, "{}", path.display());
+        let data = osd::SliderData::read_file(&path.to_string_lossy(), &bytes).unwrap();
+        assert_eq!(data.list(""), Some(read.diffs.as_slice()));
+    }
+    // Over half hold something past a vertex's number, kept by the write.
+    assert!(kept * 2 > all.len(), "{kept} of {}", all.len());
+    eprintln!("{} BSDs, {kept} with something past a number", all.len());
+    // The older sets that name them read as sets, each list a file of its own.
+    let older = files("xml", Some("samples/ddx"));
+    let older: Vec<_> = older
+        .iter()
+        .filter(|p| p.to_string_lossy().to_lowercase().contains("slidersets"))
+        .collect();
+    assert!(!older.is_empty());
+    for path in older {
+        let sets = set::read(&std::fs::read(path).unwrap()).unwrap();
+        assert!(!sets.is_empty(), "{}", path.display());
+        for s in &sets {
+            assert!(
+                !s.data_folder.is_empty() && !s.shapes.is_empty(),
+                "{}",
+                path.display()
+            );
+            let refs: Vec<_> = s.sliders.iter().flat_map(|x| &x.data).collect();
+            assert!(!refs.is_empty());
+            assert!(
+                refs.iter()
+                    .all(|d| bsd::named(&d.file) && d.list.is_empty()),
+                "{}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_shape_conformed_to_a_reference_body_whose_data_is_a_bsd_takes_what_it_does() {
+    use apoc_bodyslide::{bsd::Bsd, conform, project::Project};
+    use apoc_nif::{mesh, Nif};
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../scratch/samples/ddx/01 CBBE/CalienteTools/BodySlide/ShapeData/Devious Devices Expansion/straitjacket_ebonite_hobble.nif",
+    );
+    let Ok(nif_bytes) = std::fs::read(path) else {
+        return;
+    };
+    let nif = Nif::read(&nif_bytes).unwrap();
+    let body = mesh::shapes(&nif)
+        .into_iter()
+        .map(|at| mesh::read(&nif, at).unwrap())
+        .find(|m| m.name == "body")
+        .unwrap();
+    // The body's every vertex up by one, kept in another project's folder.
+    let up: Vec<osd::Diff> = (0..body.positions.len())
+        .map(|v| osd::Diff {
+            vertex: v as u16,
+            offset: [0.0, 0.0, 1.0],
+        })
+        .collect();
+    let text = r#"<?xml version="1.0" encoding="UTF-8"?>
+<SliderSetInfo version="1">
+    <SliderSet name="Jacket">
+        <DataFolder>Jacket</DataFolder>
+        <SourceFile>Jacket.nif</SourceFile>
+        <OutputPath>meshes\mine</OutputPath>
+        <OutputFile GenWeights="false">Jacket</OutputFile>
+        <Shape target="arms">arms</Shape>
+        <Shape target="body" DataFolder="Body Data">body</Shape>
+        <Slider name="Up" invert="false" small="0" big="100">
+            <Data name="bodyUp" target="body">bodyUp.bsd</Data>
+        </Slider>
+    </SliderSet>
+</SliderSetInfo>
+"#;
+    let set = set::read(text.as_bytes()).unwrap().remove(0);
+    let up_file = Bsd::of(&up).write();
+    let held = |path: &str| match path.to_lowercase().as_str() {
+        "shapedata/jacket/jacket.nif" => Some(nif_bytes.clone()),
+        "shapedata/body data/bodyup.bsd" => Some(up_file.clone()),
+        _ => None,
+    };
+    let mut project = Project::open(&set, &held).unwrap();
+    assert!(project.slider_bsd("Up", "arms").is_err());
+    let moving = project
+        .conform("arms", "body", &held, conform::Options::default(), &[])
+        .unwrap();
+    assert_eq!(moving, 1);
+    let arms = Bsd::read(&project.slider_bsd("Up", "arms").unwrap()).unwrap();
+    assert!(!arms.diffs.is_empty());
+    assert!(
+        arms.diffs.iter().all(|d| d.offset[0].abs() < 1e-4
+            && d.offset[1].abs() < 1e-4
+            && (d.offset[2] - 1.0).abs() < 1e-3),
+        "{:?}",
+        &arms.diffs[..4]
+    );
+}

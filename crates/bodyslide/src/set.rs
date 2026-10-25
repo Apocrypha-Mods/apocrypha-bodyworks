@@ -309,3 +309,160 @@ pub fn write(sets: &[SliderSet]) -> String {
     out.push_str("</SliderSetInfo>\n");
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MIXED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<SliderSetInfo version="1">
+    <SliderSet name="Collar">
+        <DataFolder>DD\Collar</DataFolder>
+        <SourceFile>Collar.nif</SourceFile>
+        <OutputPath>meshes\DD</OutputPath>
+        <OutputFile GenWeights="true">Collar</OutputFile>
+        <Shape target="collar">collar</Shape>
+        <Shape target="BaseShape" DataFolder="CalienteBody">CBBE</Shape>
+        <Slider name="Breasts" invert="true" small="100" big="100">
+            <Data name="collarBreasts" target="collar" local="true">collarBreasts.bsd</Data>
+            <Data name="BaseShapeBreasts" target="BaseShape">CBBE.osd\BaseShapeBreasts</Data>
+        </Slider>
+        <Slider name="Butt" invert="false" small="0" big="50">
+            <Data name="collarButt" target="collar">collarButt.BSD</Data>
+        </Slider>
+    </SliderSet>
+</SliderSetInfo>
+"#;
+
+    fn data(name: &str, target: &str, local: bool, file: &str, list: &str) -> DataRef {
+        DataRef {
+            name: name.into(),
+            target: target.into(),
+            local,
+            file: file.into(),
+            list: list.into(),
+        }
+    }
+
+    #[test]
+    fn a_set_naming_bsd_and_osd_lists_reads_and_writes_each_back_as_it_was_named() {
+        let sets = read(MIXED.as_bytes()).unwrap();
+        assert_eq!(sets.len(), 1);
+        let s = &sets[0];
+        assert_eq!(s.data_folder, "DD\\Collar");
+        assert_eq!(
+            s.sliders[0].data,
+            [
+                data("collarBreasts", "collar", true, "collarBreasts.bsd", ""),
+                data(
+                    "BaseShapeBreasts",
+                    "BaseShape",
+                    false,
+                    "CBBE.osd",
+                    "BaseShapeBreasts"
+                ),
+            ]
+        );
+        assert_eq!(
+            s.sliders[1].data,
+            [data("collarButt", "collar", false, "collarButt.BSD", "")]
+        );
+        let written = write(&sets);
+        assert!(written.contains(
+            "<Data name=\"collarBreasts\" target=\"collar\" local=\"true\">collarBreasts.bsd</Data>"
+        ));
+        assert!(written
+            .contains("<Data name=\"BaseShapeBreasts\" target=\"BaseShape\">CBBE.osd\\BaseShapeBreasts</Data>"));
+        assert!(written.contains(">collarButt.BSD</Data>"));
+        assert_eq!(read(written.as_bytes()).unwrap(), sets);
+        // A list named alone is still a list with no file.
+        let alone = MIXED.replace(">collarButt.BSD<", ">collarButt<");
+        assert_eq!(
+            read(alone.as_bytes()).unwrap()[0].sliders[1].data,
+            [data("collarButt", "collar", false, "", "collarButt")]
+        );
+    }
+
+    #[test]
+    fn an_older_xml_set_reads_as_the_osp_that_says_the_same() {
+        let older = r#"<SliderSetInfo>
+    <SliderSet name="DDX - Collar">
+        <SetFolder>DeviousDevicesExpansionUUNP\RestrictiveCollar</SetFolder>
+        <SourceFile>CollarHDT.nif</SourceFile>
+        <OutputPath>meshes\Devious\Expansion</OutputPath>
+        <OutputFile>EbRestrictiveCollar</OutputFile>
+        <BaseShapeName target="collar">collar</BaseShapeName>
+        <BaseShapeName target="BaseShape" DataFolder="CalienteBody">UUNP</BaseShapeName>
+        <Slider name="Breasts" invert="true" small="100" big="100">
+            <datafile name="collarBreasts" target="collar" local="true">collarBreasts.bsd</datafile>
+            <datafile name="BaseShapeBreasts" target="BaseShape">BaseShapeBreasts.bsd</datafile>
+        </Slider>
+        <Slider name="Waist" invert="false" small="0" big="0">
+            <datafile name="collarWaist" target="collar">collarWaist.bsd</datafile>
+        </Slider>
+    </SliderSet>
+</SliderSetInfo>
+"#;
+        let osp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<SliderSetInfo version="1">
+    <SliderSet name="DDX - Collar">
+        <DataFolder>DeviousDevicesExpansionUUNP\RestrictiveCollar</DataFolder>
+        <SourceFile>CollarHDT.nif</SourceFile>
+        <OutputPath>meshes\Devious\Expansion</OutputPath>
+        <OutputFile>EbRestrictiveCollar</OutputFile>
+        <Shape target="collar">collar</Shape>
+        <Shape target="BaseShape" DataFolder="CalienteBody">UUNP</Shape>
+        <Slider name="Breasts" invert="true" small="100" big="100">
+            <Data name="collarBreasts" target="collar" local="true">collarBreasts.bsd</Data>
+            <Data name="BaseShapeBreasts" target="BaseShape">BaseShapeBreasts.bsd</Data>
+        </Slider>
+        <Slider name="Waist" invert="false" small="0" big="0">
+            <Data name="collarWaist" target="collar">collarWaist.bsd</Data>
+        </Slider>
+    </SliderSet>
+</SliderSetInfo>
+"#;
+        let a = read(older.as_bytes()).unwrap();
+        let b = read(osp.as_bytes()).unwrap();
+        assert_eq!(a, b);
+        let s = &a[0];
+        assert_eq!(
+            s.data_folder,
+            "DeviousDevicesExpansionUUNP\\RestrictiveCollar"
+        );
+        assert_eq!(
+            s.shapes
+                .iter()
+                .map(|x| (x.name.as_str(), x.target.as_str(), x.data_folder.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("collar", "collar", None),
+                ("UUNP", "BaseShape", Some("CalienteBody"))
+            ]
+        );
+        assert_eq!(
+            s.sliders[0].data,
+            [
+                data("collarBreasts", "collar", true, "collarBreasts.bsd", ""),
+                data(
+                    "BaseShapeBreasts",
+                    "BaseShape",
+                    false,
+                    "BaseShapeBreasts.bsd",
+                    ""
+                ),
+            ]
+        );
+        assert_eq!(s.sliders[1].data.len(), 1);
+        // Written, it is an .osp, and reads as the same set.
+        let written = write(&a);
+        assert!(written.contains("<DataFolder>") && !written.contains("SetFolder"));
+        assert_eq!(read(written.as_bytes()).unwrap(), a);
+        // A data folder named both ways is the newer's.
+        let both = older.replace(
+            "<SourceFile>",
+            "<DataFolder>Newer</DataFolder>\n        <SourceFile>",
+        );
+        assert_eq!(read(both.as_bytes()).unwrap()[0].data_folder, "Newer");
+    }
+}

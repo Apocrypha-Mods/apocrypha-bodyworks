@@ -93,3 +93,184 @@ pub fn named(file: &str) -> bool {
             .get(file.len() - 4..)
             .is_some_and(|e| e.eq_ignore_ascii_case(".bsd"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    /// The system's allocator, keeping the largest room asked for on each
+    /// thread, so a test can say what reading cost.
+    struct Largest;
+
+    thread_local! {
+        static LARGEST: Cell<usize> = const { Cell::new(0) };
+    }
+
+    unsafe impl GlobalAlloc for Largest {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let _ = LARGEST.try_with(|l| l.set(l.get().max(layout.size())));
+            System.alloc(layout)
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            System.dealloc(ptr, layout)
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            let _ = LARGEST.try_with(|l| l.set(l.get().max(size)));
+            System.realloc(ptr, layout, size)
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: Largest = Largest;
+
+    fn diff(vertex: u16, offset: [f32; 3]) -> Diff {
+        Diff { vertex, offset }
+    }
+
+    /// A file as the layout has it: a count, then a slot and three numbers
+    /// for each vertex.
+    fn file(rows: &[(u16, u16, [f32; 3])]) -> Vec<u8> {
+        let mut out = (rows.len() as u32).to_le_bytes().to_vec();
+        for (vertex, unused, offset) in rows {
+            out.extend(vertex.to_le_bytes());
+            out.extend(unused.to_le_bytes());
+            for c in offset {
+                out.extend(c.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_file_reads_and_writes_back_as_it_was() {
+        let bytes = file(&[(3, 0, [0.5, -1.25, 2.0]), (700, 0, [0.0, 0.0, -0.125])]);
+        let got = Bsd::read(&bytes).unwrap();
+        assert_eq!(
+            got.diffs,
+            [diff(3, [0.5, -1.25, 2.0]), diff(700, [0.0, 0.0, -0.125])]
+        );
+        assert!(got.unused.is_empty());
+        assert_eq!(got.write(), bytes);
+        let none = file(&[]);
+        assert_eq!(none, [0, 0, 0, 0]);
+        assert_eq!(Bsd::read(&none).unwrap(), Bsd::default());
+        assert_eq!(Bsd::default().write(), none);
+    }
+
+    #[test]
+    fn a_file_of_diffs_alone_writes_nothing_past_each_number() {
+        let diffs = [diff(1, [1.0, 2.0, 3.0]), diff(65535, [-4.0, 0.0, 0.25])];
+        let made = Bsd::of(&diffs);
+        assert_eq!(made.diffs, diffs);
+        assert!(made.unused.is_empty());
+        let bytes = made.write();
+        assert_eq!(
+            bytes,
+            file(&[(1, 0, [1.0, 2.0, 3.0]), (65535, 0, [-4.0, 0.0, 0.25])])
+        );
+        assert_eq!(&bytes[6..8], [0, 0]);
+        assert_eq!(&bytes[22..24], [0, 0]);
+    }
+
+    #[test]
+    fn what_a_slot_holds_past_its_number_is_kept_byte_for_byte() {
+        let bytes = file(&[
+            (10, 0, [1.0, 0.0, 0.0]),
+            (11, 0xbeef, [0.0, 1.0, 0.0]),
+            (12, 1, [0.0, 0.0, 1.0]),
+        ]);
+        let got = Bsd::read(&bytes).unwrap();
+        // The number is the lower two bytes alone.
+        assert_eq!(
+            got.diffs.iter().map(|d| d.vertex).collect::<Vec<_>>(),
+            [10, 11, 12]
+        );
+        assert_eq!(got.unused, [0, 0xbeef, 1]);
+        assert_eq!(got.write(), bytes);
+        // Fewer kept than there are vertices: the rest are written as nothing.
+        let short = Bsd {
+            diffs: got.diffs.clone(),
+            unused: vec![7],
+        };
+        assert_eq!(
+            short.write(),
+            file(&[
+                (10, 7, [1.0, 0.0, 0.0]),
+                (11, 0, [0.0, 1.0, 0.0]),
+                (12, 0, [0.0, 0.0, 1.0]),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_file_cut_anywhere_or_carrying_more_is_refused() {
+        let bytes = file(&[(3, 9, [0.5, -1.25, 2.0]), (4, 0, [1.0, 1.0, 1.0])]);
+        for cut in 0..bytes.len() {
+            assert_eq!(
+                Bsd::read(&bytes[..cut]),
+                Err(Error::Truncated),
+                "cut at {cut}"
+            );
+        }
+        assert!(Bsd::read(&bytes).is_ok());
+        for more in 1..=16 {
+            let mut long = bytes.clone();
+            long.extend(std::iter::repeat_n(0, more));
+            assert_eq!(
+                Bsd::read(&long),
+                Err(Error::Invalid(format!(
+                    "{more} bytes after the last vertex"
+                ))),
+            );
+        }
+    }
+
+    #[test]
+    fn a_count_far_past_the_file_is_refused_before_room_is_made_for_it() {
+        for count in [u32::MAX, u32::MAX / 16 + 1, 1 << 24] {
+            let mut bytes = count.to_le_bytes().to_vec();
+            bytes.extend([0; 16]);
+            LARGEST.with(|l| l.set(0));
+            assert_eq!(Bsd::read(&bytes), Err(Error::Truncated), "{count}");
+            let largest = LARGEST.with(Cell::get);
+            assert!(largest < 4096, "{largest} bytes asked for, for {count}");
+        }
+        // The same measure sees what a real read costs.
+        let bytes = file(&vec![(1, 0, [0.0; 3]); 1000]);
+        LARGEST.with(|l| l.set(0));
+        assert_eq!(Bsd::read(&bytes).unwrap().diffs.len(), 1000);
+        assert!(LARGEST.with(Cell::get) >= 1000 * std::mem::size_of::<Diff>());
+    }
+
+    #[test]
+    fn a_file_is_one_of_these_by_its_name_alone() {
+        for yes in [
+            "Breasts1.bsd",
+            "a.bsd",
+            "COLLAR.BSD",
+            "x.Bsd",
+            "collar7B BCup High.bsd",
+            "Folder\\Shape#Slider.bsd",
+            "ShapeData/X/y.bSd",
+        ] {
+            assert!(named(yes), "{yes}");
+        }
+        for no in [
+            "",
+            ".bsd",
+            "bsd",
+            "a.osd",
+            "Body.osd",
+            "a.bsd.osd",
+            "abcbsd",
+            "a.bsdx",
+            "a.bs",
+            "a日本",
+            "日本.bs",
+        ] {
+            assert!(!named(no), "{no}");
+        }
+    }
+}
