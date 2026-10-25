@@ -1,6 +1,8 @@
 // FBX, the binary kind every 3D program trades in: shapes written out, and
-// the meshes of a file read back in. Written from the published layout of
-// the format and checked against what Blender reads and writes.
+// the meshes of a file read back in, binary or saved as text. Written from
+// the published layout of the format and checked against what Blender reads
+// and writes, and, for text, against the binary twins of files other
+// programs saved both ways.
 //
 // A file is a tree of named records. Each has a few values (numbers, text,
 // or arrays of numbers, which may be compressed) and records of its own.
@@ -307,8 +309,19 @@ async function inflated(bytes, want) {
   return out;
 }
 
-/** The records of a file, each `{ name, values, records }`. */
+/** The records of a file, binary or saved as text, each `{ name, values, records }`. */
 async function records(bytes) {
+  const binary = new TextDecoder().decode(bytes.subarray(0, 18)) === MAGIC.slice(0, 18);
+  const tree = binary ? await packed(bytes) : saved(new TextDecoder().decode(bytes));
+  // The version is in the header of both kinds. Before 7.1 a file was laid out otherwise: its
+  // meshes inside the objects that place them, and joined by name.
+  const said = binary ? new DataView(bytes.buffer, bytes.byteOffset).getUint32(23, true) : child(tree.find((r) => r.name === "FBXHeaderExtension"), "FBXVersion")?.values[0];
+  if (said < 7100) throw new Error("The file is FBX from before 7.1, which this does not read.");
+  return tree;
+}
+
+/** The records of a binary file. */
+async function packed(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (bytes.length < 27 || new TextDecoder().decode(bytes.subarray(0, MAGIC.length)) !== MAGIC) throw new Error("That is not a binary FBX file.");
   const version = view.getUint32(23, true);
@@ -383,6 +396,159 @@ async function records(bytes) {
     if (!r) break;
     out.push(r);
     at = next;
+  }
+  return out;
+}
+
+// FBX saved as text holds the same tree: `Name: value, value {`, its records, `}`. Text is in
+// double quotes, an array is `*count { a: n,n,… }`, and from a `;` to the line's end is a comment.
+// Found from 118 files that Maya, 3ds Max, MotionBuilder and Marvelous Designer saved both ways
+// (ufbx's test files): read as text, each gives the tree its binary twin does.
+const UNREADABLE = "The file is FBX text this cannot read.";
+
+// Text does not say what kind of number an array holds: these are what the binary twins hold.
+const WHOLE = /Index$|^(Edges|Indexes|Materials|Smoothing|PolygonGroup|KeyAttrFlags|KeyAttrRefCount)$/;
+const SINGLE = new Set(["KeyAttrDataFloat", "KeyValueFloat"]);
+const BITS = new Set(["Hole", "Visibility"]);
+
+/** A number as text writes it, the ways a program may write one that is not a number among them. */
+function number(word) {
+  const n = +word;
+  if (n === n) return n;
+  if (/^\s*[-+]?(nan(\(\w*\))?|\d*\.?#(nan|ind|qnan|snan)\w*)\s*$/i.test(word)) return NaN;
+  if (/^\s*[-+]?(inf(inity)?|\d*\.?#inf\w*)\s*$/i.test(word)) return /^\s*-/.test(word) ? -Infinity : Infinity;
+  return undefined;
+}
+
+const named = (v) => `${v.slice(v.indexOf("::") + 2)}\0\x01${v.slice(0, v.indexOf("::"))}`;
+
+/** The records of a file saved as text. */
+function saved(s) {
+  const n = s.length;
+  let i = 0;
+  let left = 4_000_000;
+  let version;
+  // Spaces and comments; line ends too where a record may go on past one.
+  const gap = (lines) => {
+    for (;;) {
+      const c = s.charCodeAt(i);
+      if (c === 59) {
+        const end = s.indexOf("\n", i);
+        i = end < 0 ? n : end;
+      } else if (c === 32 || c === 9 || c === 13 || c === 0xfeff || (lines && c === 10)) i += 1;
+      else return;
+    }
+  };
+  const value = (name) => {
+    if (s[i] === '"') {
+      const end = s.indexOf('"', i + 1);
+      if (end < 0) throw new Error(UNREADABLE);
+      const t = s.slice(i + 1, end);
+      i = end + 1;
+      // A quote and the line ends within are written as names. (A name that was itself `&quot;`
+      // reads as a quote: text cannot tell the two apart.)
+      return t.includes("&") ? t.replace(/&(quot|cr|lf);/g, (_, k) => ({ quot: '"', cr: "\r", lf: "\n" })[k]) : t;
+    }
+    if (s[i] === "*") {
+      const at = i + 1;
+      while (s.charCodeAt(i + 1) >= 48 && s.charCodeAt(i + 1) <= 57) i += 1;
+      const count = Number(s.slice(at, i + 1));
+      i += 1;
+      gap(true);
+      if (s[i] !== "{") throw new Error(UNREADABLE);
+      i += 1;
+      gap(true);
+      // An array's numbers are the one record `a` inside it.
+      if (s[i] !== "a") throw new Error(UNREADABLE);
+      i += 1;
+      gap(false);
+      if (s[i] !== ":") throw new Error(UNREADABLE);
+      const end = s.indexOf("}", i);
+      if (end < 0) throw new Error(UNREADABLE);
+      let list = s.slice(i + 1, end);
+      if (list.includes(";")) list = list.replace(/;[^\n]*/g, "");
+      const words = list.trim() ? list.split(",") : [];
+      if (words.length !== count) throw new Error(UNREADABLE);
+      i = end + 1;
+      // From 7.2 on, a curve's key settings are written as the whole numbers their bits make (the
+      // binary twins hold the same bits as single-width numbers); 7.1 wrote them as numbers.
+      const bits = name === "KeyAttrDataFloat" && !(version < 7200);
+      const Kind = bits || WHOLE.test(name) ? Int32Array : SINGLE.has(name) ? Float32Array : BITS.has(name) ? Uint8Array : name === "KeyTime" ? Array : Float64Array;
+      const out = Kind === Array ? new Array(count) : new Kind(count);
+      for (let k = 0; k < count; k++) {
+        const v = number(words[k]);
+        if (v === undefined) throw new Error(UNREADABLE);
+        out[k] = v;
+      }
+      return bits ? new Float32Array(out.buffer) : out;
+    }
+    // A number, or a word left bare (`Shading: Y`).
+    const at = i;
+    while (i < n && !",{}\n;".includes(s[i])) i += 1;
+    const word = s.slice(at, i).trim();
+    const v = number(word);
+    if (v === undefined) return word;
+    // Whole numbers too large to hold exactly stay as text, as the binary kind's do.
+    return Number.isInteger(v) && !Number.isSafeInteger(v) && /^[-+]?\d+$/.test(word) ? word.replace(/^\+/, "") : v;
+  };
+  const record = (depth) => {
+    const at = i;
+    while (i < n && !':{},"\n'.includes(s[i])) i += 1;
+    const name = s.slice(at, i).trim();
+    left -= 1;
+    if (s[i] !== ":" || !name || depth > 64 || left < 0) throw new Error(UNREADABLE);
+    i += 1;
+    const values = [];
+    // A record's values may begin on the line after its name, and a comma before or after a line's
+    // end carries them on past it (as files before 7.1 lay them out). One with nothing before it
+    // (`Content: ,`) begins what is written in pieces.
+    const onward = (more) => {
+      gap(false);
+      if (s[i] !== "\n") return;
+      const at = i;
+      gap(true);
+      if (!more.test(s[i] || "")) i = at;
+    };
+    onward(/[-+.\d",*]/);
+    while (i < n && s[i] !== "{" && s[i] !== "}" && s[i] !== "\n") {
+      if (s[i] === ",") {
+        i += 1;
+        gap(true);
+        continue;
+      }
+      values.push(value(name));
+      onward(/,/);
+      if (s[i] !== ",") break;
+      i += 1;
+      gap(true);
+    }
+    const inner = [];
+    if (s[i] === "{") {
+      i += 1;
+      for (;;) {
+        gap(true);
+        if (i >= n) throw new Error(UNREADABLE);
+        if (s[i] === "}") {
+          i += 1;
+          break;
+        }
+        inner.push(record(depth + 1));
+      }
+    }
+    // What the binary kind keeps as bytes (a picture, a sound) text writes as letters: it is not read.
+    if (name === "Content") values.fill(null);
+    if (name === "FBXVersion" && depth === 1) version = values[0];
+    // A thing named by kind is `Kind::Name` in text and `Name`, two bytes, `Kind` in the binary kind:
+    // its own name, and where another names it (a texture's, a selection's); never a setting's text.
+    if (name !== "P") for (let k = 0; k < values.length; k++) if (typeof values[k] === "string" && /^[A-Z][A-Za-z]*::/.test(values[k])) values[k] = named(values[k]);
+    return { name, values, records: inner };
+  };
+  const out = [];
+  for (;;) {
+    gap(true);
+    if (i >= n) break;
+    if (out.length === 0 && !/^[A-Za-z]/.test(s[i])) throw new Error("That is not an FBX file.");
+    out.push(record(0));
   }
   return out;
 }

@@ -29,7 +29,7 @@ test("a file cut short is refused, or read as far as it is whole", async () => {
     else assert.deepEqual([...got[0].positions], square.positions, `cut at ${n}`);
   }
   assert.ok(refused > whole.length / 2);
-  await assert.rejects(read(new TextEncoder().encode("; FBX 7.4.0 project file\n")), /not a binary FBX/);
+  await assert.rejects(read(new TextEncoder().encode("; FBX 7.4.0 project file\n")), /no meshes/);
 });
 
 test("a face that names a vertex the mesh lacks is refused", async () => {
