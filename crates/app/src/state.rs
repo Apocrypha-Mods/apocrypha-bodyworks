@@ -1464,7 +1464,7 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                             answer["missing"] = json!(missing);
                             answer["notes"] = json!(notes);
                             answer["skinTone"] = json!(skin);
-                            answer["faceTint"] = face.map_or(Value::Null, |f| f.json(skin));
+                            answer["faceTint"] = face.map_or(Value::Null, |f| f.json());
                             Answer::ok(answer)
                         }
                         Err(e) => Answer::failed(e),

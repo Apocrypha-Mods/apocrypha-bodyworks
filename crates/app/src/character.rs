@@ -69,13 +69,18 @@ pub struct Made {
 /// comparing with each `FaceTint` texture): start with the skin tone (an
 /// NPC's `QNAM`) and lay each layer over it in its record's order, a lerp
 /// toward its colour by the mask's red times its strength, with no gamma.
-/// The skin tone layer (`TINP` 6) is left out, as the skin tone already is
-/// it: an NPC's `QNAM` is mid grey (127) laid with that layer. A colour's
-/// alpha is left out: no layer laid on by any of those NPCs has one.
+/// The skin tone layer (`TINP` 6) is not laid: an NPC's `QNAM` already is
+/// it, mid grey (127) lerped toward its colour by its strength (1,736 of
+/// the 1,737 NPCs with one). A save keeps that layer's colour as its skin
+/// tone, so the start is made from the layer the same way; a save without
+/// one starts with its skin tone. A colour's alpha is left out: no layer
+/// laid on by any of those NPCs has one.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FaceTint {
     /// The face's shape in the built mesh.
     pub shape: String,
+    /// What the layers are laid over: red, green, blue, 0 to 1.
+    pub base: [f32; 3],
     /// The race's mask textures for the sex, by `TINI`, as the race names them.
     pub masks: Vec<(u16, String)>,
     /// The layers to lay, with no strength left out.
@@ -83,10 +88,10 @@ pub struct FaceTint {
 }
 
 impl FaceTint {
-    pub fn json(&self, skin_tone: [f32; 3]) -> Value {
+    pub fn json(&self) -> Value {
         json!({
             "shape": self.shape,
-            "base": skin_tone,
+            "base": self.base,
             "masks": self.masks.iter().map(|(i, p)| (i.to_string(), json!(p))).collect::<serde_json::Map<_, _>>(),
             "layers": self.layers.iter().map(|t| {
                 let colour = [0, 1, 2].map(|c| f32::from(t.colour[c]) / 255.0);
@@ -338,6 +343,17 @@ fn face_tint(look: &Look, records: &LoadOrder, shape: &str) -> Option<FaceTint> 
     if layers.is_empty() {
         return None;
     }
+    let base = match look
+        .tints
+        .iter()
+        .find(|t| mask(t.mask).is_some_and(|m| m.kind == Some(SKIN_TONE_LAYER)))
+    {
+        Some(t) => [0, 1, 2].map(|c| {
+            let grey = 127.0 / 255.0;
+            grey + (f32::from(t.colour[c]) / 255.0 - grey) * t.strength.clamp(0.0, 1.0)
+        }),
+        None => look.skin_tone.unwrap_or([1.0; 3]),
+    };
     let masks = head
         .tints
         .iter()
@@ -346,6 +362,7 @@ fn face_tint(look: &Look, records: &LoadOrder, shape: &str) -> Option<FaceTint> 
         .collect();
     Some(FaceTint {
         shape: shape.to_string(),
+        base,
         masks,
         layers,
     })
