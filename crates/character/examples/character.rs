@@ -112,6 +112,56 @@ fn main() {
         );
     }
 
+    // In one space: each head part's bind for a bone the body follows too
+    // is the body's.
+    let binds = |s: &apoc_character::build::Shape| {
+        let names = mesh::bone_names(&built.nif, s.block);
+        let b = apoc_nif::weights::bone_binds(&built.nif, s.block).unwrap_or_default();
+        names.into_iter().zip(b).collect::<Vec<_>>()
+    };
+    let body: Vec<_> = built
+        .shapes
+        .iter()
+        .filter(|s| !s.head)
+        .flat_map(binds)
+        .collect();
+    let (mut compared, mut worst) = (0, 0.0f32);
+    for s in built.shapes.iter().filter(|s| s.head) {
+        let mut mine = 0.0f32;
+        for (name, t) in binds(s) {
+            for (_, b) in body.iter().filter(|(n, _)| *n == name) {
+                compared += 1;
+                let d = (0..3)
+                    .map(|c| (t.translation[c] - b.translation[c]).abs())
+                    .chain((0..9).map(|c| (t.rotation[c] - b.rotation[c]).abs()))
+                    .chain([(t.scale - b.scale).abs()])
+                    .fold(0.0f32, f32::max);
+                mine = mine.max(d);
+            }
+        }
+        println!("  {} binds off the body's by at most {mine:.2e}", s.name);
+        worst = worst.max(mine);
+    }
+    println!("bind agreement: {compared} head-part binds against the body's, worst {worst:.2e}");
+    for (n, spread) in &built.placing {
+        let z = built
+            .shapes
+            .iter()
+            .find(|s| &s.name == n)
+            .and_then(|s| mesh::read(&built.nif, s.block).ok())
+            .map(|m| {
+                m.positions
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+                        (lo.min(p[2]), hi.max(p[2]))
+                    })
+            })
+            .unwrap_or_default();
+        println!(
+            "  placed {n}: up from {:.1} to {:.1}; its bones' binds disagree by {spread:.2e}",
+            z.0, z.1
+        );
+    }
     let bytes = built.nif.write();
     let back = Nif::read(&bytes).unwrap();
     assert_eq!(back.write(), bytes, "reads back as written");

@@ -153,6 +153,8 @@ fn main() {
                 "data\\Textures\\Actors\\Character\\FaceGenData\\FaceTint\\Skyrim.esm\\{:08X}.dds",
                 id
             )),
+            // The pre-built faces keep their parts about the head bone.
+            keep_head_space: true,
         };
         let t = Instant::now();
         let built = match build(&p, &files, &options) {
@@ -476,7 +478,15 @@ fn max_error(
             files.insert(&k, b);
         }
     }
-    let built = build(&p, files, &Options::default()).ok()?;
+    let built = build(
+        &p,
+        files,
+        &Options {
+            keep_head_space: true,
+            ..Options::default()
+        },
+    )
+    .ok()?;
     let mut worst = 0.0f32;
     for fb in mesh::shapes(fg) {
         let theirs = mesh::read(fg, fb).ok()?;
