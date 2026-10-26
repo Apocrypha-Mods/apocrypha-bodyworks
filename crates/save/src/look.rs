@@ -35,10 +35,17 @@
 //! The refId UESP calls the face's "skin" lands on a `TXST` record in
 //! Skyrim.esm in every save here: it is the face texture set.
 //!
-//! Not found: the body weight and height. No field of the NPC change form
-//! is left unexplained (UESP's layout accounts for every byte of all 88),
-//! and nothing in the block above or near it is a constant 0 to 100 per
-//! character.
+//! The body weight and height are not in the save, as far as 88 saves of
+//! 14 characters show. The player has no change forms but these two. No
+//! field of the NPC change form is left unexplained: UESP's layout accounts
+//! for every byte of all 88. In the placed-actor change form, no 4-byte
+//! value at a fixed distance from its start, its end or the tint block
+//! (600 bytes either side) is a 0 to 100 float that holds steady across a
+//! character's saves and differs between characters. Neither is one in
+//! global data tables 1 to 3, by any fixed offset from an entry's start or
+//! end, or as a value found anywhere in an entry, Papyrus (type 1001)
+//! aside. The near misses were global variables (type 3) that mods set.
+//! The weight is the NPC_ record's `NAM7`, then.
 
 use crate::io::Reader;
 use crate::{Form, RefId, Save, SaveError, KIND_ACHR, KIND_NPC};
@@ -271,7 +278,8 @@ pub struct Look {
     pub presets: Vec<i32>,
     /// Empty when the player block was not found.
     pub tints: Vec<Tint>,
-    /// Not found in any save here (see the module); always `None` for now.
+    /// Always `None`: no save here holds a weight (see the module), so it
+    /// comes from the player's NPC_ record (`NAM7`) instead.
     pub weight: Option<f32>,
 }
 
