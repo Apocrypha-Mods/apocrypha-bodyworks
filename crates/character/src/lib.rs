@@ -18,6 +18,7 @@ pub mod files;
 pub mod look;
 pub mod morph;
 pub mod parts;
+pub mod place;
 pub mod plan;
 pub mod records;
 pub mod tri;

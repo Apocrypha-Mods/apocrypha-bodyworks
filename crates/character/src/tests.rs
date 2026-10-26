@@ -328,3 +328,39 @@ fn a_build_without_its_files_names_them_and_does_not_panic() {
         Err(CharacterError::Nothing)
     );
 }
+
+#[test]
+fn texture_paths_are_under_textures() {
+    use crate::build::rooted;
+    assert_eq!(
+        rooted("Actors\\Character\\Female\\FemaleBody_1.dds"),
+        "textures\\Actors\\Character\\Female\\FemaleBody_1.dds"
+    );
+    assert_eq!(rooted("\\actors\\a.dds"), "textures\\actors\\a.dds");
+    for kept in [
+        "textures\\a.dds",
+        "Textures/a.dds",
+        "TEXTURES\\a.dds",
+        "data\\Textures\\a.dds",
+        "",
+    ] {
+        assert_eq!(rooted(kept), kept);
+    }
+}
+
+#[test]
+fn the_skeleton_is_among_the_files() {
+    let mut w = body_world();
+    let mut race = w.races[&100].clone();
+    race.sexes[0].skeleton = Some("Actors\\Character\\Character Assets\\skeleton.nif".into());
+    w.races.insert(100, race);
+    let look = Look {
+        race: Some(f(100)),
+        ..Look::default()
+    };
+    let p = plan(&look, &w).unwrap();
+    assert_eq!(
+        p.files()[0],
+        "meshes/actors/character/character assets/skeleton.nif"
+    );
+}

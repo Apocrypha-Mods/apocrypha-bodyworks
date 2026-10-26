@@ -19,6 +19,10 @@ pub struct Options {
     /// (`data\Textures\Actors\Character\FaceGenData\FaceTint\Skyrim.esm\<id>.dds`);
     /// a character without one has none.
     pub face_tint: Option<String>,
+    /// Leave the head parts about their bones, as their models store them
+    /// and as the game's pre-built faces keep them, in place of moving them
+    /// onto the body ([`crate::place`]). For comparing with those faces.
+    pub keep_head_space: bool,
 }
 
 /// One shape of a build.
@@ -40,6 +44,11 @@ pub struct Built {
     pub missing: Vec<String>,
     /// Each a sentence: what else was left out and why.
     pub notes: Vec<String>,
+    /// For each shape placed in the skeleton's space, how far its own bones'
+    /// binds disagree about where it stands (units, and the parts of a
+    /// rotation); a shape whose binds agree is placed exactly for all of
+    /// them. By shape name.
+    pub placing: Vec<(String, f32)>,
 }
 
 /// Where a lighting shader of the tinted kinds keeps its colour: three
@@ -139,6 +148,23 @@ fn bring(out: &mut Option<Nif>, from: Nif, key: &str, notes: &mut Vec<String>) -
     }
 }
 
+/// A texture path as the game and the add-on find it: under the Data
+/// folder, so with `textures\` before it where a texture set leaves that
+/// out. A path that has it (in any case, with either slash, after `data\`
+/// or not) is left as it is, and so is no path at all.
+pub fn rooted(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    let k = crate::files::key(path);
+    if k.starts_with("textures/") {
+        path.to_string()
+    } else {
+        let trimmed = path.trim_start_matches(['\\', '/']);
+        format!("textures\\{trimmed}")
+    }
+}
+
 fn textured(
     nif: &mut Nif,
     block: usize,
@@ -162,6 +188,9 @@ fn textured(
             *have = s.to_string();
         }
     }
+    for have in t.iter_mut() {
+        *have = rooted(have);
+    }
     if t != m.textures {
         let _ = mesh::set_textures(nif, block, &t);
     }
@@ -176,6 +205,7 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
         shapes: Vec::new(),
         missing: Vec::new(),
         notes: plan.notes.clone(),
+        placing: Vec::new(),
     };
     let mut out: Option<Nif> = None;
     let mut shapes: Vec<Shape> = Vec::new();
@@ -329,7 +359,35 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
         }
     }
 
-    built.nif = out.ok_or(CharacterError::Nothing)?;
+    let mut nif = out.ok_or(CharacterError::Nothing)?;
+    if !options.keep_head_space {
+        let skeleton = plan
+            .skeleton
+            .as_deref()
+            .and_then(|k| read_nif(k, files, &mut built));
+        match skeleton {
+            None => built.notes.push(
+                "Without the race's skeleton the head parts stay where their models keep them, about the head bone."
+                    .into(),
+            ),
+            Some(sk) => {
+                let places = crate::place::bone_places(&sk);
+                for s in shapes.iter() {
+                    match crate::place::place_shape(&mut nif, s.block, &places) {
+                        Ok(spread) => built.placing.push((s.name.clone(), spread)),
+                        Err(e) => built
+                            .notes
+                            .push(format!("{} stays where its model keeps it: {e}.", s.name)),
+                    }
+                }
+                crate::place::place_bones(&mut nif, &places);
+            }
+        }
+    }
+    for s in &shapes {
+        textured(&mut nif, s.block, &Default::default(), None);
+    }
+    built.nif = nif;
     built.shapes = shapes;
     Ok(built)
 }

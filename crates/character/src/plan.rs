@@ -54,6 +54,9 @@ pub struct Plan {
     /// The hair colour, red, green and blue from 0 to 1.
     pub hair_colour: Option<[f32; 3]>,
     pub skin_tone: Option<[f32; 3]>,
+    /// The race's skeleton for the sex (`ANAM`), under `meshes`: where the
+    /// head parts are placed on the body.
+    pub skeleton: Option<String>,
     /// What was left out, each a sentence: a record that is not there.
     pub notes: Vec<String>,
 }
@@ -67,6 +70,9 @@ impl Plan {
                 out.push(k.clone());
             }
         };
+        if let Some(s) = &self.skeleton {
+            add(s);
+        }
         for b in &self.body {
             match &b.weights {
                 Some((light, heavy)) => {
@@ -180,7 +186,14 @@ pub fn plan(look: &Look, records: &dyn Records) -> Result<Plan, CharacterError> 
         .race(race_form)
         .ok_or(CharacterError::MissingRecord("RACE", race_form.id))?;
     let sex = look.female as usize;
-    let mut plan = Plan::default();
+    let mut plan = Plan {
+        skeleton: race.sexes[sex]
+            .skeleton
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| under("meshes", s)),
+        ..Plan::default()
+    };
 
     // The race whose head morphs these are, and whether it is a vampire's.
     let extra = records.race_extra(race_form);
