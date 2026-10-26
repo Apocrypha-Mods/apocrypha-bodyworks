@@ -8,6 +8,7 @@ import * as brush from "./brush.js";
 import * as fbx from "./fbx.js";
 import * as obj from "./obj.js";
 import * as keys from "./keys.js";
+import * as tint from "./tint.js";
 
 // Where a game's mods keep their slider sets, under the game's folder: Skyrim's
 // in a folder of their own, Fallout 4's one level up.
@@ -132,6 +133,8 @@ const state = {
   bonesShown: false,
   /** Outfit Studio: the open project as it stands, changes and all. */
   work: null,
+  /** A save's character's face tint, as the module gave it when the character opened; null for any other project. */
+  face: null,
   /** Files saved here that the mods do not have yet, by lower-case path. */
   kept: new Map(),
   busy: null,
@@ -424,6 +427,7 @@ async function choose(set, presetName) {
   state.note = null;
   view?.forget();
   state.work = null;
+  state.face = null;
   state.editing = -1;
   stroke = null;
   state.exported = null;
@@ -492,8 +496,76 @@ function dyeOf(s, out = false) {
   if (!out) return null;
   if (s.look?.kind === 5 && tint) return tint.map((c) => c * 2);
   const tone = state.work?.skinTone;
-  if (s.look?.kind === 4 && Array.isArray(tone)) return tone.map((c) => c * 2);
+  if (s.look?.kind === 4 && Array.isArray(tone) && !tintsFace(s)) return tone.map((c) => c * 2);
   return null;
+}
+
+// ── Face tint ──────────────────────────────────────────────────────────────
+
+/** Whether shape `s` is the character's face with tint layers to lay (`state.face`: the module's `faceTint` for a save's character). */
+function tintsFace(s) {
+  const t = state.face;
+  return Boolean(t && s.name === t.shape && t.layers?.length);
+}
+
+/** How many characters' faces have been tinted: each one's pictures are kept apart by it. */
+let tintsMade = 0;
+
+/** The size the tint is laid at: the game's baked ones are 512 square. */
+const TINT_SIZE = 512;
+
+/** A PNG's pixels as the file has them: no colour space changed, see-through pixels kept apart from their colour. */
+async function pixelsOf(png) {
+  const picture = await createImageBitmap(new Blob([png], { type: "image/png" }), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+  const canvas = document.createElement("canvas");
+  [canvas.width, canvas.height] = [picture.width, picture.height];
+  const g = canvas.getContext("2d", { willReadFrequently: true });
+  g.drawImage(picture, 0, 0);
+  return g.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+/** The tint laid for `faceTint`, cached on it: the race's masks fetched, a missing one skipped. */
+function tintOf(faceTint) {
+  if (!faceTint.composed) {
+    faceTint.composed = (async () => {
+      const t0 = performance.now();
+      const masks = new Map();
+      await Promise.all(
+        Object.entries(faceTint.masks).map(async ([index, path]) => {
+          try {
+            const png = await host.request("files.picture", { path: `Data/${textureFile(path)}`, longest: TINT_SIZE });
+            masks.set(Number(index), await pixelsOf(png));
+          } catch {
+            // A mask the mods and the game have not got is skipped.
+          }
+        }),
+      );
+      const t1 = performance.now();
+      const layers = faceTint.layers.map((l) => ({ mask: masks.get(l.mask) || null, colour: l.colour, strength: l.strength }));
+      const data = tint.compose(faceTint.base, layers, TINT_SIZE, TINT_SIZE);
+      console.info(`Face tint: masks ${Math.round(t1 - t0)} ms, laid ${Math.round(performance.now() - t1)} ms, ${layers.length} layers`);
+      return { width: TINT_SIZE, height: TINT_SIZE, data };
+    })().catch(() => null);
+  }
+  return faceTint.composed;
+}
+
+/** The face's colour texture from its head texture's PNG, tinted ([`tint.face`]), as ImageData; null when there is no tint. */
+async function tintedFace(png) {
+  const t = state.face && (await tintOf(state.face));
+  if (!t) return null;
+  const head = await pixelsOf(png);
+  const made = tint.face(head, t);
+  return new ImageData(made.data, made.width, made.height);
+}
+
+/** ImageData as a PNG. */
+async function pngOf(pixels) {
+  const canvas = document.createElement("canvas");
+  [canvas.width, canvas.height] = [pixels.width, pixels.height];
+  canvas.getContext("2d").putImageData(pixels, 0, 0);
+  const blob = await new Promise((done) => canvas.toBlob(done, "image/png"));
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /** Paint each shape with its texture, where the mods have it. */
@@ -502,6 +574,23 @@ function paint(set) {
     if (!s.texture) return;
     view.dye_with(i, dyeOf(s));
     const path = `Data/${textureFile(s.texture)}`;
+    if (tintsFace(s)) {
+      // Each character's face is its own picture.
+      const key = `${path} tinted ${state.face.made}`;
+      if (!pictures.has(key)) {
+        pictures.set(
+          key,
+          host
+            .request("files.picture", { path, longest: 2048 })
+            .then((png) => tintedFace(png))
+            .catch(() => null),
+        );
+      }
+      pictures.get(key).then((picture) => {
+        if (picture && state.set === set && state.shapes[i] === s) view.paint_with(i, picture, key);
+      });
+      return;
+    }
     if (!pictures.has(path)) {
       pictures.set(
         path,
@@ -2401,11 +2490,13 @@ async function exportObj(sh) {
  * FBX has no way to tell a program, so it is left out.
  */
 async function picturesOf(sh) {
-  const one = async (texture, dye) => {
+  const one = async (texture, dye, tinted = false) => {
     if (!texture) return null;
     const name = textureFile(texture);
     try {
       const png = await host.request("files.picture", { path: `Data/${name}`, longest: 4096 });
+      const face = tinted ? await tintedFace(png) : null;
+      if (face) return { name: `${name.replace(/\.dds$/i, "")} tinted`, png: await pngOf(face) };
       return { name: dye ? `${name.replace(/\.dds$/i, "")} ${dyeName(dye)}` : name, png: dye ? await dyed(png, dye) : new Uint8Array(png) };
     } catch {
       return null;
@@ -2413,7 +2504,7 @@ async function picturesOf(sh) {
   };
   const [colour, normal] = sh.textures;
   const flat = normal && !/_msn\.dds$/i.test(normal);
-  return { colour: await one(colour, dyeOf(sh, true)), normal: flat ? await one(normal, null) : null };
+  return { colour: await one(colour, dyeOf(sh, true), tintsFace(sh)), normal: flat ? await one(normal, null) : null };
 }
 
 /** A colour as a short name, for telling a picture dyed one way from another: "dyed 72604f". */
@@ -3173,6 +3264,7 @@ async function newProject(anchor) {
         const name = rel.split("/").pop().replace(/\.nif$/i, "").replace(/_[01]$/, "");
         const [work] = core.ask({ op: "new", name, path: rel }, new Uint8Array(bytes));
         state.work = work;
+        state.face = null;
         state.at = [];
         state.editing = -1;
         state.picked = 0;
@@ -3326,6 +3418,8 @@ async function openCharacter(sv, weight) {
     if (file) core.ask({ op: "characterFile", path }, new Uint8Array(file));
   });
   const [work] = core.ask({ op: "character", weight });
+  // Kept apart from the work, which each change answers anew without it.
+  state.face = work.faceTint ? { ...work.faceTint, made: ++tintsMade } : null;
   state.work = work;
   state.at = [];
   state.editing = -1;
