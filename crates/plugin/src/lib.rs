@@ -42,3 +42,6 @@ pub enum PluginError {
     #[error("bytes were fed that were not asked for ({0})")]
     Unasked(String),
 }
+
+#[cfg(test)]
+mod tests;
