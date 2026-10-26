@@ -738,3 +738,434 @@ fn a_deleted_winner_is_no_record() {
     assert!(order.winner(&f("x.esp", 0x801)).is_some());
     assert!(order.get::<Colour>(&f("x.esp", 0x801)).is_none());
 }
+
+/// Drives a walk over bytes in memory as [`read`] does, but gives up (a
+/// test failure, not a hang) if it has not ended after `cap` reads.
+fn walk_capped(bytes: &[u8], wanted: &[[u8; 4]], cap: usize) -> Result<Plugin, PluginError> {
+    let mut walk = Walk::new("x.esp", bytes.len() as u64, wanted);
+    let mut reads = 0;
+    while let Some((at, len)) = walk.need() {
+        reads += 1;
+        assert!(reads <= cap, "the walk did not end after {cap} reads");
+        walk.feed(at, &bytes[at as usize..at as usize + len])?;
+    }
+    walk.finish()
+}
+
+/// A plugin of a header and one group, its size field set to `size`.
+fn one_group(label: &[u8; 4], size: u32) -> Vec<u8> {
+    let mut b = tes4(0, &[]);
+    let at = b.len();
+    b.extend(grup(label, &rec(label, 0, 0x801, &[])));
+    b[at + 4..at + 8].copy_from_slice(&size.to_le_bytes());
+    b
+}
+
+#[test]
+fn groups_of_fewer_bytes_than_their_own_header_are_refused() {
+    let empty = grup(b"HDPT", &[]);
+    assert_eq!(GroupHeader::read(&empty).unwrap().size, 24);
+    for size in [0, 1, 23] {
+        for wanted in [true, false] {
+            let b = one_group(b"CLFM", size);
+            let asked: &[[u8; 4]] = if wanted { &[*b"CLFM"] } else { &[] };
+            assert!(
+                matches!(walk_capped(&b, asked, 10), Err(PluginError::Corrupt(_))),
+                "size {size}, wanted {wanted}"
+            );
+        }
+    }
+    // The right size reads, asked for or not.
+    let b = one_group(b"CLFM", 48);
+    assert_eq!(walk_capped(&b, &[*b"CLFM"], 10).unwrap().records.len(), 1);
+    assert!(walk_capped(&b, &[], 10).unwrap().records.is_empty());
+    // Inside a group: a nested group smaller than a header, or larger than
+    // what is left of its parent.
+    for size in [23u32, 49] {
+        let mut nested = grup(b"CLFM", &rec(b"CLFM", 0, 0x801, &[]));
+        nested[4..8].copy_from_slice(&size.to_le_bytes());
+        let mut p = Plugin::default();
+        assert!(p.read_group(&nested).is_err(), "nested {size}");
+    }
+    let mut p = Plugin::default();
+    p.read_group(&grup(b"CLFM", &rec(b"CLFM", 0, 0x801, &[])))
+        .unwrap();
+    assert_eq!(p.records.len(), 1);
+}
+
+#[test]
+fn groups_and_records_that_run_past_the_end_are_refused() {
+    let good = one_group(b"CLFM", 48);
+    assert!(read("x", &good, &[*b"CLFM"]).is_ok());
+    for (size, wanted) in [(49, true), (49, false), (u32::MAX, true), (u32::MAX, false)] {
+        let b = one_group(b"CLFM", size);
+        let asked: &[[u8; 4]] = if wanted { &[*b"CLFM"] } else { &[] };
+        assert_eq!(
+            walk_capped(&b, asked, 10).err(),
+            Some(PluginError::Truncated),
+            "size {size}, wanted {wanted}"
+        );
+    }
+    // A record whose size runs past its group, and bytes after the last
+    // record too few to be one.
+    let mut p = Plugin::default();
+    let mut r = rec(b"CLFM", 0, 0x801, &[1, 2, 3]);
+    r[4] = 4;
+    assert_eq!(p.read_group(&r), Err(PluginError::Truncated));
+    let mut r = rec(b"CLFM", 0, 0x801, &[]);
+    r.extend([0; 23]);
+    assert_eq!(p.read_group(&r), Err(PluginError::Truncated));
+    // The TES4 record claiming more than the file.
+    let mut b = tes4(0, &[]);
+    let n = b.len() as u32 - 24;
+    b[4..8].copy_from_slice(&(n + 1).to_le_bytes());
+    assert_eq!(read("x", &b, &[]).err(), Some(PluginError::Truncated));
+    b[4..8].copy_from_slice(&n.to_le_bytes());
+    assert!(read("x", &b, &[]).unwrap().0.records.is_empty());
+}
+
+#[test]
+fn the_xxxx_override_sizes_the_next_subrecord_only() {
+    // XXXX's size, not the next subrecord's own (5 here), is used; the one
+    // after has its own again.
+    let mut d = sub(b"XXXX", &3u32.to_le_bytes());
+    d.extend(b"DATA");
+    d.extend(5u16.to_le_bytes());
+    d.extend([1, 2, 3]);
+    d.extend(sub(b"FULL", &[4, 5]));
+    let s: Vec<_> = subrecords(&d).collect::<Result<_, _>>().unwrap();
+    assert_eq!(s.len(), 2);
+    assert_eq!((&s[0].kind, s[0].data), (b"DATA", &[1u8, 2, 3][..]));
+    assert_eq!((&s[1].kind, s[1].data), (b"FULL", &[4u8, 5][..]));
+    // A size of 0 is a subrecord of no bytes.
+    let mut d = sub(b"XXXX", &0u32.to_le_bytes());
+    d.extend(b"DATA\x09\x00");
+    let s: Vec<_> = subrecords(&d).collect::<Result<_, _>>().unwrap();
+    assert_eq!(s[0].data, &[] as &[u8]);
+    // An XXXX at the end, one whose subrecord header is cut, one whose
+    // size runs past the end.
+    let alone = sub(b"XXXX", &8u32.to_le_bytes());
+    assert_eq!(subrecords(&alone).last(), Some(Err(PluginError::Truncated)));
+    let mut cut = alone.clone();
+    cut.extend(b"DAT");
+    assert_eq!(subrecords(&cut).last(), Some(Err(PluginError::Truncated)));
+    let mut past = alone.clone();
+    past.extend(b"DATA\x00\x00");
+    past.extend([0; 7]);
+    assert_eq!(subrecords(&past).last(), Some(Err(PluginError::Truncated)));
+    past.push(0);
+    assert_eq!(subrecords(&past).last().unwrap().unwrap().data.len(), 8);
+    for n in [0u8, 3, 5, 8] {
+        let mut wrong = b"XXXX".to_vec();
+        wrong.extend((n as u16).to_le_bytes());
+        wrong.extend(vec![0; n as usize]);
+        wrong.extend(sub(b"DATA", &[]));
+        assert!(
+            matches!(
+                subrecords(&wrong).next(),
+                Some(Err(PluginError::Corrupt(_)))
+            ),
+            "XXXX of {n}"
+        );
+    }
+}
+
+/// 16 MiB is the most a compressed record may claim to inflate to.
+#[test]
+fn a_record_may_claim_16_mib_inflated_and_no_more() {
+    let data = sub(b"EDID", b"x\0");
+    let mut z = zlib(&data);
+    z[..4].copy_from_slice(&(16u32 << 20).to_le_bytes());
+    assert!(matches!(
+        inflate(COMPRESSED, &z),
+        Err(PluginError::Inflate(_))
+    ));
+    z[..4].copy_from_slice(&((16u32 << 20) + 1).to_le_bytes());
+    assert!(matches!(
+        inflate(COMPRESSED, &z),
+        Err(PluginError::TooLarge(_))
+    ));
+    // An empty record inflates to nothing.
+    assert_eq!(inflate(COMPRESSED, &zlib(&[])).unwrap(), Vec::<u8>::new());
+}
+
+#[test]
+fn a_compressed_header_record_is_inflated() {
+    let mut d = sub(b"HEDR", &[0, 0, 0x80, 0x3f, 2, 0, 0, 0, 0, 8, 0, 0]);
+    d.extend(sub(b"MAST", b"Skyrim.esm\0"));
+    let t = rec(b"TES4", COMPRESSED | 0x1, 0, &zlib(&d));
+    let h = Header::read(&RecordHeader::read(&t).unwrap(), &t[24..]).unwrap();
+    assert_eq!(h.masters, ["Skyrim.esm"]);
+    assert_eq!(h.records, 2);
+    assert!(h.esm());
+}
+
+/// A walk over a file it is told is 1 TiB long, fed only the bytes it
+/// asks for: the header and one group header, of `size` bytes.
+fn huge_walk(label: &[u8; 4], size: u32) -> (Walk, Result<(), PluginError>, u64) {
+    let head = tes4(0, &[]);
+    let at = head.len() as u64;
+    let mut g = grup(label, &[]);
+    g[4..8].copy_from_slice(&size.to_le_bytes());
+    let mut walk = Walk::new("x", 1 << 40, &[*b"NPC_"]);
+    assert_eq!(walk.need(), Some((0, 24)));
+    walk.feed(0, &head[..24]).unwrap();
+    assert_eq!(walk.need(), Some((24, head.len())));
+    let r = walk.feed(24, &[&head[24..], &g[..]].concat());
+    (walk, r, at)
+}
+
+/// A group asked for is read whole, up to 512 MiB; one not asked for is
+/// stepped over whatever its size.
+#[test]
+fn a_group_asked_for_may_be_512_mib_and_no_more() {
+    let max = 512u32 << 20;
+    let (walk, r, at) = huge_walk(b"NPC_", max);
+    r.unwrap();
+    assert_eq!(walk.need(), Some((at + 24, max as usize)));
+    let (walk, r, _) = huge_walk(b"NPC_", max + 1);
+    assert!(matches!(r, Err(PluginError::TooLarge(_))));
+    assert_eq!(walk.need(), None);
+    let (walk, r, at) = huge_walk(b"WEAP", u32::MAX);
+    r.unwrap();
+    assert_eq!(walk.need(), Some((at + u32::MAX as u64, 24)));
+}
+
+#[test]
+fn the_walk_refuses_short_long_or_late_bytes() {
+    let bytes = small_plugin();
+    let all = [*b"RACE", *b"CLFM"];
+    // Every step of the walk, fed one byte short or one byte long, or at
+    // the next offset, is refused, and ends it.
+    let mut steps = Vec::new();
+    let mut walk = Walk::new("Mod.esp", bytes.len() as u64, &all);
+    while let Some(want) = walk.need() {
+        steps.push(want);
+        let (at, len) = (want.0 as usize, want.1);
+        walk.feed(want.0, &bytes[at..at + len]).unwrap();
+    }
+    assert_eq!(steps.len(), 5);
+    for (i, &(at, len)) in steps.iter().enumerate() {
+        let a = at as usize;
+        for (off, n) in [(0, len - 1), (0, len + 1), (1, len)] {
+            let mut walk = Walk::new("Mod.esp", bytes.len() as u64, &all);
+            for &(at, len) in &steps[..i] {
+                walk.feed(at, &bytes[at as usize..at as usize + len])
+                    .unwrap();
+            }
+            // Past the end of the file, the extra byte is a zero.
+            let mut fed = bytes[a + off..(a + off + n).min(bytes.len())].to_vec();
+            fed.resize(n, 0);
+            assert!(
+                matches!(
+                    walk.feed(at + off as u64, &fed),
+                    Err(PluginError::Unasked(_))
+                ),
+                "step {i}: {} bytes at {}",
+                fed.len(),
+                at + off as u64
+            );
+            assert_eq!(walk.need(), None);
+        }
+    }
+    // Once done, anything more is refused.
+    assert!(matches!(
+        walk.feed(0, &bytes[..24]),
+        Err(PluginError::Unasked(_))
+    ));
+}
+
+#[test]
+fn records_keep_their_flags_but_compression_and_their_version() {
+    let mut body = rec(
+        b"CLFM",
+        COMPRESSED | 0x20 | 0x400,
+        0x801,
+        &zlib(&sub(b"EDID", b"x\0")),
+    );
+    let mut plain = rec(b"CLFM", 0x400, 0x802, &[]);
+    plain[20..22].copy_from_slice(&40u16.to_le_bytes());
+    body.extend(plain);
+    let mut p = Plugin::default();
+    p.read_group(&body).unwrap();
+    assert_eq!(p.records[0].flags, 0x420);
+    assert!(p.records[0].deleted());
+    assert_eq!(p.records[0].data, sub(b"EDID", b"x\0"));
+    assert_eq!((p.records[1].flags, p.records[1].version), (0x400, 40));
+    assert!(!p.records[1].deleted());
+    // A plugin's copy asked for as another type is not one.
+    assert!(p.typed::<Colour>(&f("", 0x802)).is_some());
+    assert!(p.typed::<Race>(&f("", 0x802)).is_none());
+    assert!(p.typed::<Colour>(&f("", 0x803)).is_none());
+}
+
+#[test]
+fn a_deleted_override_hides_the_copies_before_it() {
+    let colour = |flags, id| rec(b"CLFM", flags, id, &sub(b"CNAM", &[1, 2, 3, 0]));
+    let plugin = |name: &str, masters: &[&str], records: Vec<Vec<u8>>| {
+        let mut b = tes4(0, masters);
+        b.extend(grup(b"CLFM", &records.concat()));
+        read(name, &b, &[*b"CLFM"]).unwrap().0
+    };
+    let base = plugin("Skyrim.esm", &[], vec![colour(0, 0x801), colour(0, 0x802)]);
+    let patch = plugin("Patch.esp", &["Skyrim.esm"], vec![colour(0x20, 0x801)]);
+    let order = LoadOrder::new(vec![base, patch]);
+    assert_eq!(
+        order.winner(&f("Skyrim.esm", 0x801)).unwrap().0.name(),
+        "Patch.esp"
+    );
+    assert!(order.get::<Colour>(&f("Skyrim.esm", 0x801)).is_none());
+    assert_eq!(order.copies(&f("Skyrim.esm", 0x801)).len(), 2);
+    // The form it did not touch still reads.
+    let c = order
+        .get::<Colour>(&f("Skyrim.esm", 0x802))
+        .unwrap()
+        .unwrap();
+    assert_eq!(c.rgba, [1, 2, 3, 0]);
+}
+
+#[test]
+fn race_details_the_main_race_test_leaves_out() {
+    let m = names("Mod.esp", &["Skyrim.esm"]);
+    let mut d = sub(b"RNAM", &0x13746u32.to_le_bytes());
+    let mut hclf = 0u32.to_le_bytes().to_vec();
+    hclf.extend(0x0100_0801u32.to_le_bytes());
+    d.extend(sub(b"HCLF", &hclf));
+    d.extend(sub(b"NAM0", &[]));
+    d.extend(sub(b"FNAM", &[]));
+    // A HEAD with no INDX takes its place in the list; a null one is
+    // skipped but uses up its INDX.
+    d.extend(sub(b"HEAD", &0x10u32.to_le_bytes()));
+    d.extend(sub(b"INDX", &5u32.to_le_bytes()));
+    d.extend(sub(b"HEAD", &0u32.to_le_bytes()));
+    d.extend(sub(b"HEAD", &0x11u32.to_le_bytes()));
+    // An MPAV without MPAI is marked as of no feature.
+    d.extend(sub(b"MPAV", &[0; 32]));
+    // TINV and TIRS before any TINC set nothing.
+    d.extend(sub(b"TINI", &3u16.to_le_bytes()));
+    d.extend(sub(b"TINV", &0.5f32.to_le_bytes()));
+    d.extend(sub(b"TIRS", &7u16.to_le_bytes()));
+    d.extend(sub(b"TINC", &0u32.to_le_bytes()));
+    d.extend(sub(b"TIRS", &8u16.to_le_bytes()));
+    // A later DFTF wins, even a null one.
+    d.extend(sub(b"DFTF", &0x3B523u32.to_le_bytes()));
+    d.extend(sub(b"DFTF", &0u32.to_le_bytes()));
+    let r = Race::read(&record(b"RACE", d), &m).unwrap();
+    assert_eq!(r.morph_race, Some(f("Skyrim.esm", 0x13746)));
+    assert_eq!(r.skin, None);
+    assert_eq!(r.default_hair_colour, [None, Some(f("Mod.esp", 0x801))]);
+    let h = &r.sexes[1].head;
+    assert_eq!(
+        h.parts,
+        [(0, f("Skyrim.esm", 0x10)), (1, f("Skyrim.esm", 0x11))]
+    );
+    assert_eq!(h.morphs[0].index, u32::MAX);
+    assert_eq!(
+        h.tints[0].presets,
+        [TintPreset {
+            colour: None,
+            value: 0.0,
+            number: 8
+        }]
+    );
+    assert_eq!(h.default_face_texture, None);
+    assert!(r.sexes[0].head.parts.is_empty());
+    for (kind, data) in [
+        (b"HCLF", &[0u8; 4][..]),
+        (b"HCLF", &[0; 12]),
+        (b"MPAV", &[0; 28]),
+        (b"TINI", &[0; 4]),
+        (b"INDX", &[0; 2]),
+    ] {
+        let mut d = sub(b"NAM0", &[]);
+        d.extend(sub(b"TINI", &[0; 2]));
+        d.extend(sub(kind, data));
+        assert!(
+            Race::read(&record(b"RACE", d), &m).is_err(),
+            "{} of {}",
+            String::from_utf8_lossy(kind),
+            data.len()
+        );
+    }
+}
+
+#[test]
+fn an_addon_has_a_model_for_each_sex_and_person() {
+    let m = names("x", &[]);
+    let mut d = sub(b"MOD2", b"m.nif\0");
+    d.extend(sub(b"MOD3", b"f.nif\0"));
+    d.extend(sub(b"MOD5", b"1st_f.nif\0"));
+    d.extend(sub(b"NAM1", &0x55u32.to_le_bytes()));
+    d.extend(sub(b"NAM2", &0x56u32.to_le_bytes()));
+    let a = ArmorAddon::read(&record(b"ARMA", d), &m).unwrap();
+    assert_eq!(
+        (a.model(false), a.model(true)),
+        (Some("m.nif"), Some("f.nif"))
+    );
+    assert_eq!(a.models[3].as_deref(), Some("1st_f.nif"));
+    assert_eq!(a.models[2], None);
+    assert_eq!(
+        a.skin_textures,
+        [None, Some(f("x", 0x55)), Some(f("x", 0x56)), None]
+    );
+    // Only a female model: a male has none.
+    let a = ArmorAddon::read(&record(b"ARMA", sub(b"MOD3", b"f.nif\0")), &m).unwrap();
+    assert_eq!((a.model(false), a.model(true)), (None, Some("f.nif")));
+}
+
+#[test]
+fn armour_names_and_short_slots() {
+    let m = names("Skyrim.esm", &[]);
+    let mut d = sub(b"FULL", b"Iron Helmet\0");
+    d.extend(sub(b"BOD2", &[1, 0, 0, 0]));
+    d.extend(sub(b"MODL", &0u32.to_le_bytes()));
+    let a = Armor::read(&record(b"ARMO", d), &m).unwrap();
+    assert_eq!(a.name, Some(Name::Text("Iron Helmet".into())));
+    assert_eq!(a.slots, 1);
+    assert!(a.addons.is_empty());
+    let mut loc = m.clone();
+    loc.localized = true;
+    let a = Armor::read(&record(b"ARMO", sub(b"FULL", &7u32.to_le_bytes())), &loc).unwrap();
+    assert_eq!(a.name, Some(Name::Id(7)));
+    for kind in [b"BOD2", b"BODT"] {
+        assert!(Armor::read(&record(b"ARMO", sub(kind, &[1, 2, 3])), &m).is_err());
+    }
+    // A localized name must be four bytes.
+    assert!(Armor::read(&record(b"ARMO", sub(b"FULL", b"Iron\0")), &loc).is_err());
+}
+
+#[test]
+fn npc_tint_fields_need_a_tini_before_them() {
+    let m = names("x", &[]);
+    for kind in [b"TINC", b"TINV", b"TIAS"] {
+        let n = if kind == b"TIAS" { 2 } else { 4 };
+        let data = vec![1; n];
+        assert!(Npc::read(&record(b"NPC_", sub(kind, &data)), &m).is_err());
+        let mut d = sub(b"TINI", &2u16.to_le_bytes());
+        d.extend(sub(kind, &data));
+        let t = Npc::read(&record(b"NPC_", d), &m).unwrap().tints[0];
+        assert_eq!(t.index, 2);
+        assert!(t.rgba != [0; 4] || t.value != 0 || t.preset != 0);
+    }
+}
+
+/// The `TES4` record's size is held only to the file's length, not to
+/// [`crate::walk::MAX_GROUP`] as a group's is: a file of a few GiB whose
+/// header claims nearly all of it is asked for whole. On wasm32 it is worse:
+/// `need` turns the claimed size plus 24 into a `usize`, which wraps past
+/// 4 GiB, so a 5 GiB file whose header claims `u32::MAX` bytes is asked for
+/// 23 and then sliced to `u32::MAX`, a panic.
+#[test]
+#[ignore = "the TES4 record's size is not bounded like a group's (see the comment)"]
+fn a_header_record_claiming_more_than_a_group_may_hold_is_refused() {
+    let head = tes4(0, &[]);
+    let mut big = head[..24].to_vec();
+    big[4..8].copy_from_slice(&((512u32 << 20) + 1).to_le_bytes());
+    let mut walk = Walk::new("x", 1 << 40, &[]);
+    let r = walk.feed(0, &big);
+    assert!(
+        matches!(r, Err(PluginError::TooLarge(_))),
+        "{r:?}, then asked for {:?}",
+        walk.need()
+    );
+}
