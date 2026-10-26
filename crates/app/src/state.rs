@@ -1442,6 +1442,7 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 Ok(built) => built,
                 Err(e) => return Answer::failed(e),
             };
+            let skin = making.skin_tone();
             let name = making.name.trim().to_string();
             let name = if name.is_empty() {
                 "Character".to_string()
@@ -1461,6 +1462,7 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                         Ok(mut answer) => {
                             answer["missing"] = json!(missing);
                             answer["notes"] = json!(notes);
+                            answer["skinTone"] = json!(skin);
                             Answer::ok(answer)
                         }
                         Err(e) => Answer::failed(e),

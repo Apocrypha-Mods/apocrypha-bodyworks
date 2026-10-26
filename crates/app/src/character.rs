@@ -202,6 +202,11 @@ impl Making {
         apoc_character::needed(&self.look(records, None), records).map_err(|e| e.to_string())
     }
 
+    /// The character's skin tone, red, green and blue from 0 to 1.
+    pub fn skin_tone(&self) -> [f32; 3] {
+        [0, 1, 2].map(|c| f32::from(self.look.skin_tone[c]) / 255.0)
+    }
+
     /// The character, built from the files given.
     pub fn build(&self, weight: Option<f32>) -> Result<Made, String> {
         let records = self
@@ -235,7 +240,15 @@ impl Making {
             head_parts: l.head_parts.iter().filter_map(form).collect(),
             face_morphs: l.morphs.clone(),
             face_parts: l.presets.clone(),
-            hair_colour: form(&l.hair_colour),
+            // A colour from a plugin that is not there is the race's own for the sex.
+            hair_colour: form(&l.hair_colour)
+                .filter(|c| apoc_character::Records::colour(records, c).is_some())
+                .or_else(|| {
+                    let race = l.race.as_ref().and_then(form)?;
+                    apoc_character::Records::race(records, &race)?.default_hair_colour
+                        [usize::from(l.sex == 1)]
+                    .clone()
+                }),
             face_texture: form(&l.face_texture_set),
             skin: player.as_ref().and_then(|p| p.skin.clone()),
             skin_tone: Some([0, 1, 2].map(|c| f32::from(l.skin_tone[c]) / 255.0)),

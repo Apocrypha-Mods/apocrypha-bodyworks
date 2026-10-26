@@ -479,9 +479,21 @@ function textureFile(texture) {
   return /^textures\//i.test(path) ? path : `textures/${path}`;
 }
 
-/** The colour the game lays over a shape's texture: hair's own colour, which its texture is grey to take. */
-function dyeOf(s) {
-  return s.look?.kind === 6 && Array.isArray(s.look.tint) ? s.look.tint : null;
+/**
+ * The colour the game lays over a shape's texture: hair's own colour,
+ * which its texture is grey to take, and, for a file, a skin's tone, which
+ * its texture is dark to take (twice the tone, as near as was judged; the
+ * view lights skin harder instead). A face takes the character's tone until
+ * its tint layers are laid on.
+ */
+function dyeOf(s, out = false) {
+  const tint = Array.isArray(s.look?.tint) ? s.look.tint : null;
+  if (s.look?.kind === 6) return tint;
+  if (!out) return null;
+  if (s.look?.kind === 5 && tint) return tint.map((c) => c * 2);
+  const tone = state.work?.skinTone;
+  if (s.look?.kind === 4 && Array.isArray(tone)) return tone.map((c) => c * 2);
+  return null;
 }
 
 /** Paint each shape with its texture, where the mods have it. */
@@ -2401,7 +2413,7 @@ async function picturesOf(sh) {
   };
   const [colour, normal] = sh.textures;
   const flat = normal && !/_msn\.dds$/i.test(normal);
-  return { colour: await one(colour, dyeOf(sh)), normal: flat ? await one(normal, null) : null };
+  return { colour: await one(colour, dyeOf(sh, true)), normal: flat ? await one(normal, null) : null };
 }
 
 /** A colour as a short name, for telling a picture dyed one way from another: "dyed 72604f". */
