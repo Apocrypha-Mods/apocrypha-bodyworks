@@ -10,6 +10,7 @@
 //! folder that were handed to it, and the sets, presets, groups and
 //! categories read from them.
 
+mod character;
 mod state;
 
 pub use state::{handle, Answer};

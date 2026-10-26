@@ -11,6 +11,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 apoc-bodyslide = { path = "../bodyslide" }
+apoc-character = { path = "../character" }
 apoc-nif = { path = "../nif" }
+apoc-plugin = { path = "../plugin" }
+apoc-save = { path = "../save" }
 serde = { workspace = true }
 serde_json = { workspace = true }

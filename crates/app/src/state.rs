@@ -22,6 +22,8 @@ pub struct State {
     categories: Vec<category::Category>,
     /// Files that could not be read, each with why.
     problems: Vec<String>,
+    /// A save's character being read, between its steps.
+    making: Option<crate::character::Making>,
 }
 
 /// A project being worked on, with the way back from each change.
@@ -906,6 +908,24 @@ enum Request {
     GroupRemove { group: String, set: String },
     /// A presets file holding one preset, as text to save.
     PresetFile { preset: PresetIn },
+    /// Begin reading a save's character: the request's bytes are the save.
+    /// The answer names the pieces of plugins wanted next.
+    CharacterSave,
+    /// The pieces asked for, their bytes one after another in the
+    /// request's. The answer names more, or none and the files the
+    /// character's parts are made of.
+    CharacterPieces {
+        pieces: Vec<crate::character::Piece>,
+    },
+    /// One of those files, the request's bytes, at its path under the data folder.
+    CharacterFile { path: String },
+    /// The character, built from the files given, as the project. Any open
+    /// project is let go. `weight` (0 to 100) is the body's, which a save
+    /// does not keep.
+    Character {
+        #[serde(default)]
+        weight: Option<f32>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -1369,6 +1389,78 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
         Request::Put { path } => {
             state.files.insert(key(&path), data.to_vec());
             Answer::ok(json!(null))
+        }
+        Request::CharacterSave => match crate::character::Making::new(data) {
+            Ok(making) => {
+                let answer = json!({ "name": making.name, "pieces": making.pieces(), "files": [] });
+                state.making = Some(making);
+                Answer::ok(answer)
+            }
+            Err(e) => {
+                state.making = None;
+                Answer::failed(e)
+            }
+        },
+        Request::CharacterPieces { pieces } => {
+            let Some(making) = state.making.as_mut() else {
+                return Answer::failed("No save is being read.");
+            };
+            if let Err(e) = making.feed(&pieces, data) {
+                return Answer::failed(e);
+            }
+            let files = match making.files_needed() {
+                Ok(files) => files,
+                Err(e) => return Answer::failed(e),
+            };
+            let missing: Vec<Value> = making
+                .missing_plugins()
+                .into_iter()
+                .map(|(plugin, why)| json!({ "plugin": plugin, "why": why }))
+                .collect();
+            Answer::ok(
+                json!({ "pieces": making.pieces(), "files": files, "missingPlugins": missing }),
+            )
+        }
+        Request::CharacterFile { path } => match state.making.as_mut() {
+            Some(making) => {
+                making.files.insert(&path, data.to_vec());
+                Answer::ok(json!(null))
+            }
+            None => Answer::failed("No save is being read."),
+        },
+        Request::Character { weight } => {
+            let Some(making) = state.making.as_ref() else {
+                return Answer::failed("No save is being read.");
+            };
+            let (mesh, missing) = match making.build(weight) {
+                Ok(built) => built,
+                Err(e) => return Answer::failed(e),
+            };
+            let name = making.name.trim().to_string();
+            let name = if name.is_empty() {
+                "Character".to_string()
+            } else {
+                name
+            };
+            state.work = None;
+            match Project::from_mesh(&name, "meshes/character.nif", &mesh)
+                .map_err(|e| e.to_string())
+                .and_then(Work::of)
+            {
+                Ok(mut work) => {
+                    work.changed = true;
+                    state.work = Some(work);
+                    state.making = None;
+                    match state.working() {
+                        Ok(mut answer) => {
+                            answer["missing"] = json!(missing);
+                            Answer::ok(answer)
+                        }
+                        Err(e) => Answer::failed(e),
+                    }
+                }
+                Err(e) => Answer::failed(e),
+            }
         }
         Request::Clear => {
             *state = State::default();

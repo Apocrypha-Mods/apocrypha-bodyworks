@@ -22,7 +22,10 @@ name = "apoc-bodyslide-app"
 version = "0.1.0"
 dependencies = [
  "apoc-bodyslide",
+ "apoc-character",
  "apoc-nif",
+ "apoc-plugin",
+ "apoc-save",
  "serde",
  "serde_json",
 ]
