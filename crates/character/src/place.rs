@@ -1,15 +1,19 @@
 //! Moving every shape into one space: the skeleton's, standing as the body
 //! does.
 //!
-//! A body model is stored where it stands (Skyrim's `malebody_1.nif` from 0
-//! to about 120 up). A head part is stored about its bone: `femalehead.nif`'s
-//! vertices lie round the origin and its `NPC Head [Head]` bind is the
-//! identity, and the game puts it on the head through the skeleton. For one
-//! mesh of every shape, each head part is moved to where its bone stands in
-//! the race's skeleton, and its binds made again so that skinning still
-//! takes each vertex where it was relative to its bones. After that a head
-//! part's bind for a bone the body also follows is the body's
-//! (`--example character` measures it).
+//! A head part is stored about its bone: `femalehead.nif`'s vertices lie
+//! round the origin, and the game puts it on the head through the
+//! skeleton. Each head part is moved to where the skeleton has its head
+//! bone, and its binds made again so every bone still takes each vertex
+//! where it took it; its binds then agree with the body's for the bones
+//! both follow (within 3.1e-5, `--example character`).
+//!
+//! A body piece is not moved by a bone. Only its own stored placement, the
+//! shape's transform, is baked in (a vanilla body's +120): a piece made for
+//! another skeleton (CBBE's or the beast hands, whose bones disagree with
+//! the vanilla skeleton by up to 8.76) stays where its file has it, which is
+//! where the game shows it beside the body. Moved by its first bone instead,
+//! a CBBE Dark Elf's left hand stood off its wrist.
 
 use std::collections::HashMap;
 
@@ -78,18 +82,20 @@ fn skin_data(nif: &Nif, block: usize) -> Option<usize> {
 pub fn place_shape(
     nif: &mut Nif,
     block: usize,
-    places: &HashMap<String, Transform>,
+    places: Option<&HashMap<String, Transform>>,
 ) -> Result<f32, String> {
+    let stream = nif.header.stream.version;
+    let own = TriShape::read(&nif.blocks[block].data, stream)
+        .map_err(|e| e.to_string())?
+        .av
+        .transform;
     let bones = mesh::bone_names(nif, block);
     let at = skin_data(nif, block).ok_or("it has no skin to place it by")?;
-    let mut data = SkinData::read(&nif.blocks[at].data).map_err(|e| e.to_string())?;
+    let data = SkinData::read(&nif.blocks[at].data).map_err(|e| e.to_string())?;
     if data.bones.len() != bones.len() || bones.is_empty() {
         return Err("its skin lists its bones twice over differently".into());
     }
     let by = bones.iter().position(|b| b == HEAD).unwrap_or(0);
-    let world = places
-        .get(&bones[by])
-        .ok_or_else(|| format!("the skeleton has no {}", bones[by]))?;
     // Found from the files (`--example binds`): a bone takes a vertex to
     // where it stands by its place in the skeleton after its bind, W·T·v.
     // Hair, eyes and mouths keep vertices about the head bone and binds
@@ -97,6 +103,19 @@ pub fn place_shape(
     // vertices 120 below that, with the shape's own transform 120 up and the
     // skin's overall transform 120 down, and W·T is that 120 up again. The
     // skin's overall transform is the shape's undone and takes no part.
+    //
+    // A body piece is not moved by a bone: only its own stored placement
+    // (the shape's transform) is baked in, so one made for another skeleton
+    // (CBBE's hands, the beast hands, whose bones disagree with the
+    // skeleton's by up to 8.76) stays where its file has it, as the game
+    // shows it beside the body. A vanilla body's +120 is that transform.
+    let Some(places) = places else {
+        let m = own;
+        return moved_by(nif, block, at, data, m).map(|_| 0.0);
+    };
+    let world = places
+        .get(&bones[by])
+        .ok_or_else(|| format!("the skeleton has no {}", bones[by]))?;
     let m = composed(world, &data.bones[by].transform);
     // How far another bone would place it otherwise: what moving it by one
     // bone costs the vertices that follow the rest.
@@ -112,6 +131,19 @@ pub fn place_shape(
             }
         }
     }
+    moved_by(nif, block, at, data, m)?;
+    Ok(spread)
+}
+
+/// Move the shape at `block` (its skin data at `at`) by `m`, its binds made
+/// again so every bone takes each vertex where it did.
+fn moved_by(
+    nif: &mut Nif,
+    block: usize,
+    at: usize,
+    mut data: SkinData,
+    m: Transform,
+) -> Result<(), String> {
     let shape = mesh::read(nif, block).map_err(|e| e.to_string())?;
     let moved: Vec<[f32; 3]> = shape.positions.iter().map(|p| m.apply(*p)).collect();
     // What turns with it: normals and the tangent space.
@@ -146,7 +178,7 @@ pub fn place_shape(
     let mut shape = TriShape::read(&nif.blocks[block].data, stream).map_err(|e| e.to_string())?;
     shape.av.transform = Transform::IDENTITY;
     nif.blocks[block].data = shape.write(stream);
-    Ok(spread)
+    Ok(())
 }
 
 /// Stand every bare bone hung from the root (as a copied shape brings

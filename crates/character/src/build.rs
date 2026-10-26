@@ -32,6 +32,8 @@ pub struct Shape {
     /// Its block in [`Built::nif`].
     pub block: usize,
     pub head: bool,
+    /// The head part's or armour addon's editor id it came from.
+    pub piece: String,
 }
 
 /// A built character.
@@ -277,6 +279,7 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
                 name: mesh::name(o, block).unwrap_or_default(),
                 block,
                 head: false,
+                piece: piece.name.clone(),
             });
         }
     }
@@ -355,6 +358,7 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
                 name: mesh::name(o, block).unwrap_or_default(),
                 block,
                 head: true,
+                piece: piece.name.clone(),
             });
         }
     }
@@ -373,8 +377,17 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
             Some(sk) => {
                 let places = crate::place::bone_places(&sk);
                 for s in shapes.iter() {
-                    match crate::place::place_shape(&mut nif, s.block, &places) {
-                        Ok(spread) => built.placing.push((s.name.clone(), spread)),
+                    let by = s.head.then_some(&places);
+                    match crate::place::place_shape(&mut nif, s.block, by) {
+                        Ok(spread) => {
+                            if spread > 0.5 {
+                                built.notes.push(format!(
+                                    "{}'s bones disagree with the skeleton by {spread:.2}; it is placed by the head bone.",
+                                    s.name
+                                ));
+                            }
+                            built.placing.push((s.name.clone(), spread))
+                        }
                         Err(e) => built
                             .notes
                             .push(format!("{} stays where its model keeps it: {e}.", s.name)),

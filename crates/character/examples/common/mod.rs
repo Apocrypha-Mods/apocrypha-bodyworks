@@ -49,8 +49,14 @@ pub fn sample_roots() -> Vec<PathBuf> {
 /// Every file under the roots by its lower-case path with forward slashes,
 /// later roots winning.
 pub fn index() -> HashMap<String, PathBuf> {
+    // `CHAR_DATA` names one folder to read in their place (a Data folder
+    // with a mod's body in it).
+    let roots = match std::env::var_os("CHAR_DATA") {
+        Some(d) => vec![PathBuf::from(d)],
+        None => sample_roots(),
+    };
     let mut out = HashMap::new();
-    for r in sample_roots() {
+    for r in roots {
         walk(&r, &r, &mut out);
     }
     out

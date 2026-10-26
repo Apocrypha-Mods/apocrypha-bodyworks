@@ -162,6 +162,31 @@ fn main() {
             z.0, z.1
         );
     }
+    // Seams: where hands, feet and head meet the body, before (every shape
+    // moved by its own bone, as the build first did) and now.
+    let mut before = build(
+        &p,
+        &files,
+        &Options {
+            keep_head_space: true,
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    if let Some(sk) = p
+        .skeleton
+        .as_deref()
+        .and_then(|k| apoc_character::Source::read(&files, k))
+        .and_then(|b| Nif::read(b).ok())
+    {
+        let places = apoc_character::place::bone_places(&sk);
+        for s in &before.shapes {
+            let _ = apoc_character::place::place_shape(&mut before.nif, s.block, Some(&places));
+        }
+    }
+    for (label, b) in [("before", &before), ("now", &built)] {
+        seams(label, b, &p);
+    }
     let bytes = built.nif.write();
     let back = Nif::read(&bytes).unwrap();
     assert_eq!(back.write(), bytes, "reads back as written");
@@ -176,6 +201,79 @@ fn main() {
     if let Some(out) = args.get(1) {
         std::fs::write(out, &bytes).unwrap();
         println!("written to {out}");
+    }
+}
+
+/// The vertices on an edge only one triangle has.
+fn boundary(nif: &Nif, block: usize) -> Vec<[f32; 3]> {
+    let Ok(m) = mesh::read(nif, block) else {
+        return Vec::new();
+    };
+    let mut edges: std::collections::HashMap<(u16, u16), u32> = Default::default();
+    for t in &m.triangles {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    let mut on: Vec<u16> = edges
+        .into_iter()
+        .filter(|(_, n)| *n == 1)
+        .flat_map(|((a, b), _)| [a, b])
+        .collect();
+    on.sort();
+    on.dedup();
+    on.into_iter().map(|v| m.positions[v as usize]).collect()
+}
+
+/// For each side, the largest distance from a boundary vertex of `part` to
+/// the nearest boundary vertex of `body`, over the part's boundary
+/// vertices within 1 unit of the body's: the seam ring (the hand's other
+/// openings are 2 to 8 units from the wrist). A part that does not meet the
+/// body has none there, so the count says whether the seam is met at all.
+fn seam(part: &[[f32; 3]], body: &[[f32; 3]]) -> ([f32; 2], [usize; 2]) {
+    let mut out = [0.0f32; 2];
+    let mut count = [0usize; 2];
+    for p in part {
+        let near = body
+            .iter()
+            .map(|b| ((0..3).map(|c| (p[c] - b[c]).powi(2)).sum::<f32>()).sqrt())
+            .fold(f32::MAX, f32::min);
+        if near > 1.0 {
+            continue;
+        }
+        let side = (p[0] < 0.0) as usize;
+        out[side] = out[side].max(near);
+        count[side] += 1;
+    }
+    (out, count)
+}
+
+fn seams(label: &str, built: &apoc_character::Built, p: &apoc_character::Plan) {
+    let of = |want: &dyn Fn(&apoc_character::build::Shape) -> bool| -> Vec<[f32; 3]> {
+        built
+            .shapes
+            .iter()
+            .filter(|s| want(s))
+            .flat_map(|s| boundary(&built.nif, s.block))
+            .collect()
+    };
+    let lower = |s: &apoc_character::build::Shape| s.piece.to_ascii_lowercase();
+    let body = of(&|s| {
+        !s.head
+            && lower(s).contains("torso")
+            && mesh::read(&built.nif, s.block).is_ok_and(|m| m.positions.len() > 1000)
+    });
+    let hands = of(&|s| !s.head && lower(s).contains("hands"));
+    let feet = of(&|s| !s.head && lower(s).contains("feet"));
+    let face = p
+        .head
+        .iter()
+        .find(|h| h.kind == Some(apoc_plugin::records::HeadPartKind::Face))
+        .map(|h| h.name.clone());
+    let head = of(&|s| s.head && Some(&s.name) == face.as_ref());
+    for (name, part) in [("hands", &hands), ("feet", &feet), ("head", &head)] {
+        let ([l, r], [nl, nr]) = seam(part, &body);
+        println!("  seam {label}: {name} to body, largest gap x+ {l:.3} ({nl} vertices), x- {r:.3} ({nr})");
     }
 }
 
