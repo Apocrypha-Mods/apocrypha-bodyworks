@@ -1,3 +1,6 @@
+//! An NPC's hair colour, skin tone and tint layers beside each shape of
+//! its pre-built face: lighting kind and tint colour. How the hair tint
+//! (twice the colour) was found.
 mod common;
 use apoc_character::{build::tint, Look, Records};
 use apoc_nif::{mesh, Nif};

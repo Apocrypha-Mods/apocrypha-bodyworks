@@ -31,6 +31,8 @@ struct Tally {
     shapes_e3: usize,
     shapes_e5: usize,
     shapes_whole: usize,
+    /// Shapes within 1e-2 and 5e-2, by kind of part.
+    bands: BTreeMap<String, [usize; 5]>,
     causes: BTreeMap<String, Vec<String>>,
     worst: Vec<(f32, String)>,
 }
@@ -104,6 +106,27 @@ fn main() {
         tally.npcs += 1;
         let t = Instant::now();
         let look = Look::of_form(&order, &form);
+        // Presets the race's masks (MPAI/MPAV) leave out: whether the face
+        // has them anyway.
+        let mut masked: Vec<&str> = Vec::new();
+        if let Ok(l) = &look {
+            if let Some(race) = l.race.as_ref().and_then(|r| order.race(r)) {
+                for m in &race.sexes[l.female as usize].head.morphs {
+                    let at = match m.index {
+                        0 => 0,
+                        2 => 2,
+                        3 => 3,
+                        _ => continue,
+                    };
+                    if let Some(n) = l.face_parts.get(at).filter(|n| **n >= 0 && **n < 256) {
+                        let (word, bit) = (*n as usize / 32, *n as usize % 32);
+                        if m.flags[word] & (1 << bit) == 0 {
+                            masked.push(["nose", "", "eyes", "lips"][at]);
+                        }
+                    }
+                }
+            }
+        }
         let mut p = match look.and_then(|l| plan(&l, &order)) {
             Ok(p) => p,
             Err(e) => {
@@ -202,6 +225,13 @@ fn main() {
                 sum += e as f64;
             }
             let mean = sum / mine.positions.len().max(1) as f64;
+            let b = tally.bands.entry(kind.clone()).or_default();
+            b[0] += 1;
+            for (i, lim) in [1e-5f32, 1e-3, 1e-2, 5e-2].iter().enumerate() {
+                if most <= *lim {
+                    b[i + 1] += 1;
+                }
+            }
             if most <= 1e-3 {
                 tally.shapes_e3 += 1;
             }
@@ -327,6 +357,18 @@ fn main() {
             }
         }
         let _ = whole_npc;
+        for m in &masked {
+            let eyes_ok = built.shapes.iter().any(|s| {
+                p.head.iter().any(|h| {
+                    h.name == s.name && h.kind == Some(apoc_plugin::records::HeadPartKind::Eyes)
+                })
+            });
+            cause(
+                &mut tally,
+                format!("the face uses a {m} preset its race's mask leaves out (face off by at most {worst_npc:.4}; eyes built {eyes_ok})"),
+                id,
+            );
+        }
         // A face far off: would the records before a later plugin make it?
         if worst_npc > 0.05 && worst_npc.is_finite() {
             for n in (1..order.plugins.len()).rev() {
@@ -362,6 +404,13 @@ fn main() {
         "{} shapes: {} within 1e-3, {} within 1e-5; {} match in everything (positions within 1e-3, triangles, textures, tint)",
         tally.shapes, tally.shapes_e3, tally.shapes_e5, tally.shapes_whole
     );
+    println!("by kind of part: shapes, and how many within 1e-5, 1e-3, 1e-2, 5e-2:");
+    for (k, b) in &tally.bands {
+        println!(
+            "  {k:<12} {:>5} {:>5} {:>5} {:>5} {:>5}",
+            b[0], b[1], b[2], b[3], b[4]
+        );
+    }
     println!(
         "{} pre-built faces have bytes after the footer; {} of them write back byte for byte",
         trailing.0, trailing.1

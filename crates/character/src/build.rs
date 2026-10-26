@@ -234,7 +234,12 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
             if let Some(p) = pos {
                 let _ = mesh::move_vertices(o, block, &p, true);
             }
-            textured(o, block, &piece.textures, None);
+            // The skin's textures are for what is drawn as skin: a body
+            // model's other shapes (the underwear of Skyrim's own) keep
+            // theirs.
+            if tint(o, block).is_some_and(|(k, _)| k == SKIN_TINT) {
+                textured(o, block, &piece.textures, None);
+            }
             if let Some(t) = plan.skin_tone {
                 set_tint(o, block, SKIN_TINT, t);
             }
