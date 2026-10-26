@@ -9,3 +9,6 @@ description = "Reads the records of plugins (.esm, .esp, .esl) a character is ma
 [dependencies]
 thiserror = { workspace = true }
 miniz_oxide = { workspace = true }
+
+[dev-dependencies]
+apoc-nif = { path = "../nif" }

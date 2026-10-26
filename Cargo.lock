@@ -38,6 +38,7 @@ dependencies = [
 name = "apoc-plugin"
 version = "0.1.0"
 dependencies = [
+ "apoc-nif",
  "miniz_oxide",
  "thiserror",
 ]
