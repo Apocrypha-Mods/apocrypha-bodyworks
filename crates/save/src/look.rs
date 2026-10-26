@@ -45,6 +45,17 @@
 //! global data tables 1 to 3, by any fixed offset from an entry's start or
 //! end, or as a value found anywhere in an entry, Papyrus (type 1001)
 //! aside. The near misses were global variables (type 3) that mods set.
+//! A second pass dropped the rule that the value differs between
+//! characters and looked for Skyrim.esm's own default instead (the Player
+//! record's `NAM7`, 100.0) at fixed places. It is not:
+//! - in the face, whose 19th morph is the float maximum and whose two
+//!   unknown bytes are 1 in all 88;
+//! - in the placed-actor change form, at any fixed distance from its start
+//!   or end, the race refIds or the end of the tints (1,500 bytes each
+//!   way);
+//! - in global data, where the only fixed places that hold 100.0 or 1.0 are
+//!   type 3's global variables (refId and value pairs).
+//!
 //! The weight is the NPC_ record's `NAM7`, then.
 
 use crate::io::Reader;
