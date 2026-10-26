@@ -545,8 +545,11 @@ pub fn resolve(
             form_of(full, plugins, light)
         }
         1 => {
+            // UESP: kind 1 is Skyrim.esm's, wherever the save lists it (as
+            // the save spells it, if it lists it at all).
             let plugin = plugins
-                .first()
+                .iter()
+                .find(|p| p.eq_ignore_ascii_case("Skyrim.esm"))
                 .cloned()
                 .unwrap_or_else(|| "Skyrim.esm".into());
             Ok(Form::Plugin(FormRef {
@@ -1462,10 +1465,15 @@ mod tests {
             form_of(0xFEFF_E000, &plugins, &light[..0xFFF]),
             at("LFFE.esl", 0)
         );
-        // Kind 1 is the first plugin's, all 22 bits of it; kind 2 made in
-        // game, under 0xFF.
-        assert_eq!(r(0x7F_FFFF), at("P0.esp", 0x3F_FFFF));
-        assert_eq!(r(0x40_0000), at("P0.esp", 0));
+        // Kind 1 is Skyrim.esm's, all 22 bits of it, even where the list
+        // does not have it or has it later; kind 2 made in game, under 0xFF.
+        assert_eq!(r(0x7F_FFFF), at("Skyrim.esm", 0x3F_FFFF));
+        assert_eq!(r(0x40_0000), at("Skyrim.esm", 0));
+        let later = ["Other.esm".to_string(), "SKYRIM.ESM".to_string()];
+        assert_eq!(
+            resolve(RefId(0x40_0007), &[], &later, &[]),
+            at("SKYRIM.ESM", 7)
+        );
         assert_eq!(r(0xBF_FFFF), Ok(Form::Created(0xFF3F_FFFF)));
         assert!(r(0xC0_0000).is_err());
         assert_eq!(
