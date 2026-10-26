@@ -1312,12 +1312,21 @@ mod tests {
         let s = Save::read(&spec.with_body(&body)).unwrap();
         assert!(s.change_forms().is_empty());
         assert_eq!(s.form_ids(), [1, 2]);
-        // One past it is outside.
-        body[table + 16..table + 20].copy_from_slice(&(end + 1).to_le_bytes());
-        assert!(matches!(
-            Save::read(&spec.with_body(&body)),
-            Err(SaveError::Corrupt(_))
-        ));
+        // One past it is outside, and so is anything before the body, even
+        // with nothing to read there.
+        let start = spec.base() as u32;
+        for at in [end + 1, start - 1, 0] {
+            body[table + 16..table + 20].copy_from_slice(&at.to_le_bytes());
+            assert!(
+                matches!(
+                    Save::read(&spec.with_body(&body)),
+                    Err(SaveError::Corrupt(_))
+                ),
+                "{at}"
+            );
+        }
+        body[table + 16..table + 20].copy_from_slice(&start.to_le_bytes());
+        assert!(Save::read(&spec.with_body(&body)).is_ok());
     }
 
     /// Counts that the bytes left could never hold are refused before
