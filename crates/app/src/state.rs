@@ -1287,6 +1287,8 @@ impl State {
                 "look": mesh::look(&nif, m.block).map(|l| json!({
                     "glow": l.glow, "glowStrength": l.glow_strength, "alpha": l.alpha,
                     "gloss": l.gloss, "shine": l.shine, "shineStrength": l.shine_strength, "switches": l.switches, "kind": l.kind, "smooth": l.smooth,
+                    // What the game tints the texture with: hair by its colour, skin by its tone.
+                    "tint": apoc_character::build::tint(&nif, m.block).map(|(_, c)| c),
                 })),
                 "sliders": sliders,
                 "textured": textured,

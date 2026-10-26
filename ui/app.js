@@ -469,11 +469,27 @@ async function choose(set, presetName) {
 /** Pictures already fetched, by the path a shape names. */
 const pictures = new Map();
 
+/**
+ * A texture's path under the data folder: as a mesh names it, or, as the
+ * game also reads them, under `textures` where the name leaves that out
+ * (a texture set's records give their paths so).
+ */
+function textureFile(texture) {
+  const path = texture.replace(/\\/g, "/").replace(/^\/+/, "");
+  return /^textures\//i.test(path) ? path : `textures/${path}`;
+}
+
+/** The colour the game lays over a shape's texture: hair's own colour, which its texture is grey to take. */
+function dyeOf(s) {
+  return s.look?.kind === 6 && Array.isArray(s.look.tint) ? s.look.tint : null;
+}
+
 /** Paint each shape with its texture, where the mods have it. */
 function paint(set) {
   state.shapes.forEach((s, i) => {
     if (!s.texture) return;
-    const path = `Data/${s.texture.replace(/\\/g, "/").replace(/^\/+/, "")}`;
+    view.dye_with(i, dyeOf(s));
+    const path = `Data/${textureFile(s.texture)}`;
     if (!pictures.has(path)) {
       pictures.set(
         path,
@@ -2373,19 +2389,44 @@ async function exportObj(sh) {
  * FBX has no way to tell a program, so it is left out.
  */
 async function picturesOf(sh) {
-  const one = async (texture) => {
+  const one = async (texture, dye) => {
     if (!texture) return null;
-    const name = texture.replace(/\\/g, "/").replace(/^\/+/, "");
+    const name = textureFile(texture);
     try {
       const png = await host.request("files.picture", { path: `Data/${name}`, longest: 4096 });
-      return { name, png: new Uint8Array(png) };
+      return { name: dye ? `${name.replace(/\.dds$/i, "")} ${dyeName(dye)}` : name, png: dye ? await dyed(png, dye) : new Uint8Array(png) };
     } catch {
       return null;
     }
   };
   const [colour, normal] = sh.textures;
   const flat = normal && !/_msn\.dds$/i.test(normal);
-  return { colour: await one(colour), normal: flat ? await one(normal) : null };
+  return { colour: await one(colour, dyeOf(sh)), normal: flat ? await one(normal, null) : null };
+}
+
+/** A colour as a short name, for telling a picture dyed one way from another: "dyed 72604f". */
+function dyeName(dye) {
+  return `dyed ${dye.map((c) => Math.round(Math.min(1, c) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** A PNG with each pixel's colour times `dye`, as the game draws it, as a PNG again. */
+async function dyed(png, dye) {
+  // As the file has it: no colour space changed, and see-through pixels kept apart from their colour.
+  const picture = await createImageBitmap(new Blob([png], { type: "image/png" }), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+  const canvas = document.createElement("canvas");
+  [canvas.width, canvas.height] = [picture.width, picture.height];
+  const g = canvas.getContext("2d");
+  g.drawImage(picture, 0, 0);
+  const pixels = g.getImageData(0, 0, canvas.width, canvas.height);
+  const d = pixels.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = Math.min(255, d[i] * dye[0]);
+    d[i + 1] = Math.min(255, d[i + 1] * dye[1]);
+    d[i + 2] = Math.min(255, d[i + 2] * dye[2]);
+  }
+  g.putImageData(pixels, 0, 0);
+  const blob = await new Promise((done) => canvas.toBlob(done, "image/png"));
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /** Outfit Studio: shapes as they stand, as one FBX file saved where the person says, their pictures inside it. */
@@ -3278,8 +3319,10 @@ async function openCharacter(sv, weight) {
   state.editing = -1;
   state.picked = 0;
   state.shapes = [];
-  const missing = [...(step.missingPlugins || []).map((m) => m.plugin), ...(work.missing || [])];
-  state.problem = missing.length ? `Not found: ${missing.map((m) => m.split("/").pop()).join(", ")}` : null;
+  // What of the character could not be had: the plugins its parts are in, and the files.
+  const plugins = (step.missingPlugins || []).map((m) => m.plugin);
+  const files = (work.missing || []).map((m) => m.split("/").pop());
+  state.problem = [plugins.length && `Not installed: ${plugins.join(", ")}`, files.length && `Not found: ${files.join(", ")}`].filter(Boolean).join(". ") || null;
   state.saved = null;
   state.exported = null;
   state.busy = null;

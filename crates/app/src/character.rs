@@ -139,13 +139,29 @@ impl Making {
         Ok(())
     }
 
-    /// The plugins that could not be read, each with why.
+    /// The plugins the character's own forms are in (race, head parts,
+    /// colours, textures) that could not be read, each with why. A save
+    /// lists every plugin it was played with, and most have no part in
+    /// how the character looks.
     pub fn missing_plugins(&self) -> Vec<(String, String)> {
+        let l = &self.look;
+        let theirs: Vec<&str> = l
+            .race
+            .iter()
+            .chain([&l.hair_colour, &l.face_texture_set])
+            .chain(&l.head_parts)
+            .filter_map(|f| match f {
+                apoc_save::Form::Plugin(r) => Some(r.plugin.as_str()),
+                _ => None,
+            })
+            .collect();
         self.order
             .iter()
             .zip(&self.readings)
             .filter_map(|(name, r)| match r {
-                Reading::Missing(why) => Some((name.clone(), why.clone())),
+                Reading::Missing(why) if theirs.iter().any(|t| t.eq_ignore_ascii_case(name)) => {
+                    Some((name.clone(), why.clone()))
+                }
                 _ => None,
             })
             .collect()

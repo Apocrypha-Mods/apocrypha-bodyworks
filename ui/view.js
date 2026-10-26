@@ -10,13 +10,14 @@ void main() { vn = nm * n; vt = t; vm = m; vk = k; gl_Position = mvp * vec4(p, 1
 const FS = `#version 300 es
 precision highp float;
 in vec3 vn; in vec2 vt; in float vm; in vec4 vk; out vec4 o;
-uniform vec3 tint; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha; uniform float coloured; uniform float bright; uniform float lit;
+uniform vec3 tint; uniform vec3 dye; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha; uniform float coloured; uniform float bright; uniform float lit;
 void main() {
   // The lines of a wireframe are one flat colour.
   if (line.a > 0.0) { o = line; return; }
   vec3 n = normalize(vn);
-  // The texture where the shape has one, the plain tint where it has not.
-  vec3 base = mix(tint, pow(texture(skin, vt).rgb, vec3(2.2)), painted);
+  // The texture where the shape has one, the plain tint where it has not;
+  // a texture the game colours (hair by its colour) is coloured so too.
+  vec3 base = mix(tint, pow(min(texture(skin, vt).rgb * dye, vec3(1.0)), vec3(2.2)), painted);
   // With the colour brush in hand, a shape is drawn in the colours its vertices carry.
   if (coloured > 0.5) base = pow(vk.rgb, vec3(2.2));
   float key = max(dot(n, normalize(vec3(0.35, 0.55, 0.75))), 0.0);
@@ -78,6 +79,7 @@ export class View {
     this.uMvp = gl.getUniformLocation(prog, "mvp");
     this.uNm = gl.getUniformLocation(prog, "nm");
     this.uTint = gl.getUniformLocation(prog, "tint");
+    this.uDye = gl.getUniformLocation(prog, "dye");
     this.uPainted = gl.getUniformLocation(prog, "painted");
     this.uLine = gl.getUniformLocation(prog, "line");
     this.uHeat = gl.getUniformLocation(prog, "heat");
@@ -307,6 +309,14 @@ export class View {
    * coordinates. `key` names the picture: one already sent under that name
    * is used again as it is.
    */
+  /** Colour shape `i`'s texture as the game does (`[r, g, b]`, or null for as it is). */
+  dye_with(i, dye) {
+    const s = this.shapes[i];
+    if (!s) return;
+    s.dye = dye;
+    this.draw();
+  }
+
   paint_with(i, picture, key) {
     const gl = this.gl;
     const s = this.shapes[i];
@@ -574,6 +584,8 @@ export class View {
       // The picked shape keeps the tint; the others step back from it.
       const dim = picked >= 0 && picked !== i ? 0.62 : 1;
       gl.uniform3f(this.uTint, this.tint[0] * dim, this.tint[1] * dim, this.tint[2] * dim);
+      const dye = s.dye || [1, 1, 1];
+      gl.uniform3f(this.uDye, dye[0], dye[1], dye[2]);
       if (skinned) gl.bindTexture(gl.TEXTURE_2D, s.skin);
       gl.drawElements(gl.TRIANGLES, s.count, gl.UNSIGNED_INT, 0);
     };
