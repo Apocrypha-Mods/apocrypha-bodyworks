@@ -75,8 +75,8 @@ fn push_form(list: &mut Vec<FormRef>, s: &Subrecord, names: &Masters) -> Result<
 
 /// The slots of a body template: `BOD2` (eight bytes, slots then armour
 /// type) or the older `BODT` (twelve: slots, a flag byte, three unused, armour
-/// type). Both hold the slots first; Skyrim.esm still has `BODT` in 1,7xx
-/// ARMA records and both in none.
+/// type). Both hold the slots first; Skyrim.esm's ARMA records still use
+/// `BODT`, its ARMO records `BOD2`.
 fn slots(s: &Subrecord) -> Result<u32, PluginError> {
     if s.data.len() < 4 {
         return Err(wrong(s, "at least 4"));
@@ -144,7 +144,7 @@ pub struct MorphPresets {
     pub index: u32,
     /// 32 bytes. The first u32 is a mask over the feature's preset morphs
     /// (Nord male nose `0x001FFF3E`: presets 1–5 and 8–20 offered); the other
-    /// seven are `0xFFFFFFFF` in every vanilla race, as if unused.
+    /// seven are `0xFFFFFFFF` in NordRace, as if unused.
     pub flags: [u32; 8],
 }
 
@@ -608,8 +608,7 @@ pub struct FaceMorphs {
 }
 
 /// `NAMA`: the preset morph chosen for each feature, -1 for none. UESP calls
-/// the second unknown; it is -1 in every humanoid NPC_ read (brows are not
-/// chosen this way).
+/// the second unknown, usually -1 on humanoids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FaceParts {
     pub nose: i32,
