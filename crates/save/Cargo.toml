@@ -1,0 +1,11 @@
+[package]
+name = "apoc-save"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Reads Skyrim save games (.ess): who the character is, the plugins it was played with, and how the character looks."
+
+[dependencies]
+thiserror = { workspace = true }
+miniz_oxide = { workspace = true }

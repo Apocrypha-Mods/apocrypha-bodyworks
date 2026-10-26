@@ -1,0 +1,11 @@
+[package]
+name = "apoc-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Reads the records of plugins (.esm, .esp, .esl) a character is made from: races, head parts, texture sets, armour and hair colours."
+
+[dependencies]
+thiserror = { workspace = true }
+miniz_oxide = { workspace = true }
