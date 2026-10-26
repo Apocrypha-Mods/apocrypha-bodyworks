@@ -58,6 +58,17 @@ fn a_file_reads_and_writes_back_as_it_was() {
 }
 
 #[test]
+fn bytes_after_the_footer_are_kept_and_written_back() {
+    let mut long = sample(100);
+    long.extend([0, 0xAB, 7]);
+    let nif = Nif::read(&long).unwrap();
+    assert_eq!(nif.trailing, [0, 0xAB, 7]);
+    assert_eq!(nif.roots, [0]);
+    assert_eq!(nif.write(), long);
+    assert!(Nif::read(&sample(100)).unwrap().trailing.is_empty());
+}
+
+#[test]
 fn a_changed_block_changes_only_its_own_size() {
     let mut nif = Nif::read(&sample(100)).unwrap();
     nif.blocks[0].data.extend([9, 9]);
@@ -89,10 +100,6 @@ fn a_broken_file_is_refused_not_read_past() {
     for cut in 0..bytes.len() {
         assert!(Nif::read(&bytes[..cut]).is_err(), "cut at {cut}");
     }
-    // Bytes after the footer.
-    let mut long = bytes.clone();
-    long.push(0);
-    assert!(matches!(Nif::read(&long), Err(NifError::Corrupt(_))));
     // A block of a kind the table does not have.
     let mut bad = bytes.clone();
     let at = bad.windows(10).position(|w| w == b"BSTriShape").unwrap() + 10;

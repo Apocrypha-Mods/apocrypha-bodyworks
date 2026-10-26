@@ -116,6 +116,10 @@ pub struct Nif {
     pub blocks: Vec<Block>,
     /// The blocks at the top of the scene, by index; -1 for none.
     pub roots: Vec<i32>,
+    /// Bytes after the footer, kept as they were and written back. 23 of
+    /// Skyrim Special Edition's own pre-built faces (FaceGen NIFs) have
+    /// some; nothing in the format says what they are.
+    pub trailing: Vec<u8>,
 }
 
 impl Nif {
@@ -213,12 +217,7 @@ impl Nif {
         for _ in 0..root_count {
             roots.push(r.i32()?);
         }
-        if r.left() != 0 {
-            return Err(NifError::Corrupt(format!(
-                "{} bytes after the end",
-                r.left()
-            )));
-        }
+        let trailing = r.take(r.left())?.to_vec();
 
         Ok(Nif {
             header: Header {
@@ -241,6 +240,7 @@ impl Nif {
             },
             blocks,
             roots,
+            trailing,
         })
     }
 
@@ -293,6 +293,7 @@ impl Nif {
         for root in &self.roots {
             w.i32(*root);
         }
+        w.bytes(&self.trailing);
         w.out
     }
 
