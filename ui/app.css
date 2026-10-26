@@ -131,6 +131,15 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bo
 .sheet-body { display: flex; flex-direction: column; gap: 12px; min-height: 0; padding: 0 24px; }
 .sheet-foot { display: flex; align-items: center; gap: 8px; padding: 12px 24px 20px; }
 .sheet .rows { min-height: 0; overflow-y: auto; border-radius: 12px; background: var(--bg-surface); box-shadow: inset 0 0 0 1px var(--border); padding: 4px 0; scrollbar-width: thin; scrollbar-color: var(--bg-selected) transparent; }
+.saves { max-height: 360px; }
+.save { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 6px 12px; background: none; text-align: left; }
+.save:hover { background: var(--bg-hover); }
+.save.on { background: var(--bg-selected); }
+.save .grow { display: flex; flex-direction: column; min-width: 0; }
+.save .shot { flex-shrink: 0; width: 64px; height: 36px; border-radius: 6px; object-fit: cover; background: var(--bg-sunken); }
+.weight .row { display: flex; align-items: center; gap: 12px; }
+.weight input { flex: 1; }
+.weight .num { min-width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
 .check { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 36px; padding: 4px 12px; background: none; text-align: left; }
 .check:hover { background: var(--bg-hover); }
 .check .box { flex-shrink: 0; width: 16px; height: 16px; border-radius: 5px; box-shadow: inset 0 0 0 1.5px var(--border-field); }

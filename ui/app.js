@@ -3080,8 +3080,18 @@ function newBone() {
 /** Every mesh the mods have, listed once: `{ name, note, value }` for the menu. */
 let meshes = null;
 
-/** Outfit Studio: begin a project from a mesh of the mods'. */
+/** The game's saves, as the mod manager lists them, or null where it cannot. */
+let saveList;
+
+/** A value no mesh's path can be: the menu's row for a character from a save. */
+const FROM_SAVE = "\0save";
+
+/** Outfit Studio: begin a project from a mesh of the mods', or from a save's character. */
 async function newProject(anchor) {
+  if (saveList === undefined) {
+    // A mod manager from before saves could be asked has no such row.
+    saveList = await host.request("saves.list").catch(() => null);
+  }
   if (!meshes) {
     busy("Reading");
     const list = await host.request("files.list", { folder: "Data/meshes" }).catch(() => []);
@@ -3097,10 +3107,12 @@ async function newProject(anchor) {
     render();
     anchor = document.getElementById("new") || anchor;
   }
+  const saved = saveList?.length ? [{ name: "Character from a save…", value: FROM_SAVE }] : [];
   menu(
     anchor,
-    meshes,
+    saved.length ? [...saved, { ...meshes[0], rule: true }, ...meshes.slice(1)] : meshes,
     async (path) => {
+      if (path === FROM_SAVE) return fromSave();
       busy("Opening");
       try {
         const bytes = await host.request("files.read", { path });
@@ -3125,6 +3137,154 @@ async function newProject(anchor) {
     },
     "Search meshes",
   );
+}
+
+/** Each save's picture, as a URL to show it by, as it comes. */
+const savePictures = new Map();
+
+/** A save's date as it is shown: "30 Sep 2022". */
+function saveDate(seconds) {
+  return new Date(seconds * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** Outfit Studio: pick a save, and its character becomes the project. */
+function fromSave() {
+  const all = saveList || [];
+  let chosen = all[0] || null;
+  const rows = h("div.rows.saves", { role: "listbox", "aria-label": "Saves" });
+  const picture = (sv) => {
+    const img = h("img.shot", { alt: "", width: 64, height: 36 });
+    if (!sv.screenshot) return img;
+    if (!savePictures.has(sv.name)) {
+      savePictures.set(
+        sv.name,
+        host
+          .request("saves.picture", { name: sv.name })
+          .then((png) => URL.createObjectURL(new Blob([png], { type: "image/png" })))
+          .catch(() => null),
+      );
+    }
+    savePictures.get(sv.name).then((url) => url && (img.src = url));
+    return img;
+  };
+  const fill = (query) => {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const shown = all.filter((sv) => words.every((w) => `${sv.character} ${sv.location} ${sv.race}`.toLowerCase().includes(w)));
+    rows.replaceChildren(
+      ...shown.slice(0, 300).map((sv) =>
+        h(
+          "button.save" + (sv === chosen ? ".on" : ""),
+          {
+            type: "button",
+            role: "option",
+            "aria-selected": sv === chosen ? "true" : "false",
+            onclick: () => {
+              chosen = sv;
+              fill(input.value);
+            },
+            ondblclick: () => ((chosen = sv), go.click()),
+          },
+          picture(sv),
+          h("span.grow.cut", null, h("span.nm.cut", null, sv.character || sv.name), h("span.sub.quiet.cut", null, [`Level ${sv.level}`, sv.location].filter(Boolean).join(" · "))),
+          h("span.sub.quiet", null, saveDate(sv.savedAt)),
+        ),
+      ),
+    );
+    if (!shown.length) rows.append(h("div.sub.quiet", { style: "padding: 8px 12px" }, "Nothing found"));
+  };
+  const input = h("input", { type: "text", placeholder: "Search saves", "aria-label": "Search saves", oninput: () => fill(input.value) });
+  // A save keeps no weight: the game's own for the player is the heaviest.
+  const weight = h("input", { type: "range", min: 0, max: 100, step: 1, value: 100, "aria-label": "Weight" });
+  const shownWeight = h("span.sub.num", null, "100");
+  weight.addEventListener("input", () => (shownWeight.textContent = weight.value));
+  const go = h("button.btn.primary", { type: "button" }, "Open");
+  const said = h("span.sub.warn.grow.cut");
+  go.addEventListener("click", async () => {
+    if (!chosen) return;
+    go.disabled = true;
+    said.textContent = "";
+    try {
+      await openCharacter(chosen, Number(weight.value));
+      close(el);
+    } catch (e) {
+      said.textContent = e.message;
+      state.busy = null;
+      render();
+    } finally {
+      go.disabled = false;
+    }
+  });
+  const el = sheet(
+    "Character from a save",
+    null,
+    [all.length > 8 && h("label.search", { html: GLASS }, input), rows, h("label.field.weight", null, h("span", null, "Weight"), h("div.row", null, weight, shownWeight))],
+    [said, h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"), go],
+  );
+  fill("");
+  if (all.length > 8) input.focus();
+}
+
+/** Run `work` on each of `items`, `many` at a time, in order of the answers. */
+async function inTurns(items, many, work) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(many, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await work(items[i]);
+      }
+    }),
+  );
+  return out;
+}
+
+/**
+ * A save's character as the project: the save read, then the pieces of the
+ * plugins its records are in, then the meshes and morph files its parts
+ * name, each asked for as the module says it needs them.
+ */
+async function openCharacter(sv, weight) {
+  busy("Reading the save");
+  const bytes = await host.request("saves.read", { name: sv.name });
+  let [step] = core.ask({ op: "characterSave" }, new Uint8Array(bytes));
+  // The plugins, a group of records at a time, until nothing more is asked for.
+  while (step.pieces.length) {
+    busy("Reading plugins");
+    const got = await inTurns(step.pieces, 8, (p) =>
+      host.request("files.part", { path: `Data/${p.plugin}`, at: p.at, length: p.length }).catch(() => null),
+    );
+    const total = got.reduce((n, r) => n + (r ? r.bytes.byteLength : 0), 0);
+    const all = new Uint8Array(total);
+    let at = 0;
+    const pieces = step.pieces.map((p, i) => {
+      const r = got[i];
+      if (!r) return { plugin: p.plugin, at: p.at, length: null };
+      all.set(new Uint8Array(r.bytes), at);
+      at += r.bytes.byteLength;
+      return { plugin: p.plugin, at: p.at, length: r.bytes.byteLength, size: r.size };
+    });
+    [step] = core.ask({ op: "characterPieces", pieces }, all);
+  }
+  // Then each file its parts are made of; one the mods and the game have not got leaves its part out.
+  busy("Reading meshes");
+  await inTurns(step.files, 8, async (path) => {
+    const file = await host.request("files.read", { path: `Data/${path}` }).catch(() => null);
+    if (file) core.ask({ op: "characterFile", path }, new Uint8Array(file));
+  });
+  const [work] = core.ask({ op: "character", weight });
+  state.work = work;
+  state.at = [];
+  state.editing = -1;
+  state.picked = 0;
+  state.shapes = [];
+  const missing = [...(step.missingPlugins || []).map((m) => m.plugin), ...(work.missing || [])];
+  state.problem = missing.length ? `Not found: ${missing.map((m) => m.split("/").pop()).join(", ")}` : null;
+  state.saved = null;
+  state.exported = null;
+  state.busy = null;
+  showShapes(true);
+  render();
 }
 
 /** Ask before letting go of changes that are not saved, then do `then`. */
