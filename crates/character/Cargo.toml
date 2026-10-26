@@ -1,0 +1,13 @@
+[package]
+name = "apoc-character"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "A character's look (race, sex, head parts, face morphs, colours, weight) turned into one mesh of every shape, shaped and textured as the game would."
+
+[dependencies]
+apoc-plugin = { path = "../plugin" }
+apoc-nif = { path = "../nif" }
+apoc-bodyslide = { path = "../bodyslide" }
+thiserror = { workspace = true }

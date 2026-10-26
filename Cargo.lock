@@ -28,6 +28,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "apoc-character"
+version = "0.1.0"
+dependencies = [
+ "apoc-bodyslide",
+ "apoc-nif",
+ "apoc-plugin",
+ "thiserror",
+]
+
+[[package]]
 name = "apoc-nif"
 version = "0.1.0"
 dependencies = [
