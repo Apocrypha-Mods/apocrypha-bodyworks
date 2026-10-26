@@ -6,6 +6,7 @@
 //! is made from are read, about 2% of it.
 
 use apoc_character::{Files, Look, Tint};
+use apoc_plugin::records::HeadPartKind;
 use apoc_plugin::walk::Walk;
 use apoc_plugin::{FormRef, LoadOrder, Plugin};
 use serde::Deserialize;
@@ -55,7 +56,48 @@ pub struct Made {
     pub mesh: Vec<u8>,
     pub missing: Vec<String>,
     pub notes: Vec<String>,
+    /// What the interface lays the face's tint from ([`FaceTint`]); none
+    /// when the face was left out or has no layers to lay.
+    pub face: Option<FaceTint>,
 }
+
+/// The face's tint as the interface lays it: the race's masks by their
+/// number and the save's layers in its order, laid over the skin tone.
+///
+/// The rule, found from the game's own baked tint textures (all 2,292
+/// Skyrim.esm NPCs with tint layers, `--example tints` and a script
+/// comparing with each `FaceTint` texture): start with the skin tone (an
+/// NPC's `QNAM`) and lay each layer over it in its record's order, a lerp
+/// toward its colour by the mask's red times its strength, with no gamma.
+/// The skin tone layer (`TINP` 6) is left out, as the skin tone already is
+/// it: an NPC's `QNAM` is mid grey (127) laid with that layer. A colour's
+/// alpha is left out: no layer laid on by any of those NPCs has one.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FaceTint {
+    /// The face's shape in the built mesh.
+    pub shape: String,
+    /// The race's mask textures for the sex, by `TINI`, as the race names them.
+    pub masks: Vec<(u16, String)>,
+    /// The layers to lay, with no strength left out.
+    pub layers: Vec<Tint>,
+}
+
+impl FaceTint {
+    pub fn json(&self, skin_tone: [f32; 3]) -> Value {
+        json!({
+            "shape": self.shape,
+            "base": skin_tone,
+            "masks": self.masks.iter().map(|(i, p)| (i.to_string(), json!(p))).collect::<serde_json::Map<_, _>>(),
+            "layers": self.layers.iter().map(|t| {
+                let colour = [0, 1, 2].map(|c| f32::from(t.colour[c]) / 255.0);
+                json!({ "mask": t.mask, "colour": colour, "strength": t.strength })
+            }).collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// `TINP` for the skin tone layer.
+const SKIN_TONE_LAYER: u16 = 6;
 
 /// A piece of a plugin, as the interface hands it back: `length` is how
 /// many of the request's bytes are it, or none when the plugin could not
@@ -217,10 +259,17 @@ impl Making {
         let plan = apoc_character::plan(&look, records).map_err(|e| e.to_string())?;
         let built = apoc_character::build(&plan, &self.files, &apoc_character::Options::default())
             .map_err(|e| e.to_string())?;
+        let face = plan
+            .head
+            .iter()
+            .filter(|p| p.kind == Some(HeadPartKind::Face))
+            .find_map(|p| built.shapes.iter().find(|s| s.piece == p.name))
+            .and_then(|s| face_tint(&look, records, &s.name));
         Ok(Made {
             mesh: built.nif.write(),
             missing: built.missing,
             notes: built.notes,
+            face,
         })
     }
 
@@ -268,6 +317,38 @@ impl Making {
                 .clamp(0.0, 100.0),
         }
     }
+}
+
+/// The tint of the face shape `shape`: the race's masks for the look's sex
+/// and the layers of the look's that one of them paints, the skin tone
+/// layer and those of no strength left out. None when no layer is left.
+fn face_tint(look: &Look, records: &LoadOrder, shape: &str) -> Option<FaceTint> {
+    let race = apoc_character::Records::race(records, look.race.as_ref()?)?;
+    let head = &race.sexes[usize::from(look.female)].head;
+    let mask = |i: u16| head.tints.iter().find(|m| m.index == i);
+    let layers: Vec<Tint> = look
+        .tints
+        .iter()
+        .filter(|t| t.strength > 0.0)
+        .filter(|t| {
+            mask(t.mask).is_some_and(|m| m.mask.is_some() && m.kind != Some(SKIN_TONE_LAYER))
+        })
+        .copied()
+        .collect();
+    if layers.is_empty() {
+        return None;
+    }
+    let masks = head
+        .tints
+        .iter()
+        .filter(|m| layers.iter().any(|t| t.mask == m.index))
+        .filter_map(|m| Some((m.index, m.mask.clone()?)))
+        .collect();
+    Some(FaceTint {
+        shape: shape.to_string(),
+        masks,
+        layers,
+    })
 }
 
 /// A form of the save's as the plugins name it; one made in the game is in no plugin.
