@@ -213,7 +213,8 @@ http
       const file = find(url.searchParams.get("path"));
       if (!file) return send(404, "missing");
       const longest = Number(url.searchParams.get("longest")) || 2048;
-      require("child_process").execFile("magick", [`dds:${file}[0]`, "-alpha", "off", "-resize", `${longest}x${longest}>`, "png:-"], { encoding: "buffer", maxBuffer: 1 << 28 }, (err, out) =>
+      // Alpha kept, as the mod manager keeps it.
+      require("child_process").execFile("magick", [`dds:${file}[0]`, "-resize", `${longest}x${longest}>`, "png:-"], { encoding: "buffer", maxBuffer: 1 << 28 }, (err, out) =>
         err ? send(404, "not readable") : send(200, out, "image/png"),
       );
       return;
