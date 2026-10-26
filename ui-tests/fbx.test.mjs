@@ -148,3 +148,135 @@ test("a bone under an unevenly scaled object still stands as a turn", async () =
   for (const r of [0, 1, 2]) assert.ok(Math.abs(dot(row(r), row(r)) - 1) < 1e-9);
   assert.ok(Math.abs(dot(row(0), row(1))) < 1e-9 && Math.abs(dot(row(0), row(2))) < 1e-9 && Math.abs(dot(row(1), row(2))) < 1e-9);
 });
+
+/** The records of a binary file as written here (7.4, no compressed arrays), every value kept, a picture's bytes too. */
+function tree(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const decode = (a, b) => new TextDecoder().decode(bytes.subarray(a, b));
+  const one = (at) => {
+    const [end, count] = [view.getUint32(at, true), view.getUint32(at + 4, true)];
+    if (end === 0) return [null, at + 13];
+    const n = bytes[at + 12];
+    const name = decode(at + 13, at + 13 + n);
+    let p = at + 13 + n;
+    const values = [];
+    for (let i = 0; i < count; i++) {
+      const kind = String.fromCharCode(bytes[p++]);
+      if (kind === "S") (values.push(decode(p + 4, p + 4 + view.getUint32(p, true))), (p += 4 + view.getUint32(p, true)));
+      else if (kind === "R") (values.push(bytes.slice(p + 4, p + 4 + view.getUint32(p, true))), (p += 4 + view.getUint32(p, true)));
+      else if (kind === "I") (values.push(view.getInt32(p, true)), (p += 4));
+      else if (kind === "L") (values.push(view.getBigInt64(p, true)), (p += 8));
+      else if (kind === "D") (values.push(view.getFloat64(p, true)), (p += 8));
+      else if (kind === "d" || kind === "i") {
+        const [len, packed, size] = [view.getUint32(p, true), view.getUint32(p + 4, true), view.getUint32(p + 8, true)];
+        assert.equal(packed, 0);
+        const raw = bytes.slice(p + 12, p + 12 + size).buffer;
+        values.push(kind === "d" ? new Float64Array(raw, 0, len) : new Int32Array(raw, 0, len));
+        p += 12 + size;
+      } else throw new Error(`kind ${kind}`);
+    }
+    const records = [];
+    while (p < end) {
+      const [r, next] = one(p);
+      p = next;
+      if (!r) break;
+      records.push(r);
+    }
+    return [{ name, values, records }, end];
+  };
+  const out = [];
+  for (let at = 27; ; ) {
+    const [r, next] = one(at);
+    if (!r) break;
+    out.push(r);
+    at = next;
+  }
+  return out;
+}
+
+const kid = (r, name) => r.records.find((c) => c.name === name);
+
+test("pictures are written once each, as a video and a texture, and joined to each shape's material by slot", async () => {
+  const png = (...b) => Uint8Array.of(0x89, 0x50, 0x4e, 0x47, ...b);
+  const [face, normal, other] = [png(1, 2, 3), png(4, 5), png(6)];
+  const shapes = [
+    { ...square, name: "A", pictures: { colour: { name: "textures\\actors\\Face.dds", png: face }, normal: { name: "textures/actors/face_n.dds", png: normal.buffer } } },
+    // The same picture by its path, however it is spelled, and given again.
+    { ...square, name: "B", pictures: { colour: { name: "TEXTURES/ACTORS/FACE.DDS", png: png(9, 9, 9) }, normal: null } },
+    // Another folder's picture of the same file name.
+    { ...square, name: "C", pictures: { colour: { name: "other\\face.dds", png: other }, normal: null } },
+    { ...square, name: "D" },
+    // Nothing to show: no name, or no picture.
+    { ...square, name: "E", pictures: { colour: { name: "", png: face }, normal: { name: "x.dds", png: null } } },
+  ];
+  const bytes = write(shapes);
+  const objects = tree(bytes).find((r) => r.name === "Objects").records;
+  const joins = tree(bytes).find((r) => r.name === "Connections").records.map((c) => c.values);
+  const of = (kind) => objects.filter((o) => o.name === kind);
+  const label = (o) => o.values[1].split("\0")[0];
+
+  const videos = of("Video");
+  assert.deepEqual(videos.map(label), ["face", "face_n", "face 2"]);
+  const contents = videos.map((v) => [...kid(v, "Content").values[0]]);
+  assert.deepEqual(contents, [[...face], [...normal], [...other]]);
+  for (const v of videos) {
+    const file = `${label(v)}.png`;
+    assert.equal(v.values[2], "Clip");
+    assert.equal(kid(v, "Filename").values[0], file);
+    assert.equal(kid(v, "RelativeFilename").values[0], file);
+    assert.deepEqual(kid(kid(v, "Properties70"), "P").values, ["Path", "KString", "Url", "", file]);
+  }
+
+  const textures = of("Texture");
+  assert.deepEqual(textures.map(label), ["face", "face_n", "face 2"]);
+  for (const t of textures) {
+    assert.equal(kid(t, "Media").values[0], `${label(t)}\0\x01Video`);
+    assert.equal(kid(t, "FileName").values[0], `${label(t)}.png`);
+    assert.equal(kid(t, "Type").values[0], "TextureVideoClip");
+  }
+
+  const materials = of("Material");
+  assert.deepEqual(materials.map(label), ["A", "B", "C"]);
+  const id = (list, name) => list.find((o) => label(o) === name).values[0];
+  const models = of("Model").filter((m) => m.values[2] === "Mesh");
+  // Each video into its texture, once.
+  assert.deepEqual(
+    joins.filter((j) => j[0] === "OO" && videos.some((v) => v.values[0] === j[1])).map((j) => [j[1], j[2]]),
+    ["face", "face_n", "face 2"].map((n) => [id(videos, n), id(textures, n)]),
+  );
+  // Each texture into the materials that show it, by slot.
+  const shown = joins.filter((j) => j[0] === "OP").map((j) => [label(textures.find((t) => t.values[0] === j[1])), label(materials.find((m) => m.values[0] === j[2])), j[3]]);
+  assert.deepEqual(shown, [
+    ["face", "A", "DiffuseColor"],
+    ["face_n", "A", "NormalMap"],
+    ["face", "B", "DiffuseColor"],
+    ["face 2", "C", "DiffuseColor"],
+  ]);
+  // Each material onto its shape's model.
+  for (const n of ["A", "B", "C"]) assert.ok(joins.some((j) => j[0] === "OO" && j[1] === id(materials, n) && j[2] === id(models, n)), n);
+  // A shape with a material says so in its layer; one without has none.
+  for (const g of of("Geometry")) {
+    const types = kid(g, "Layer").records.filter((r) => r.name === "LayerElement").map((r) => kid(r, "Type").values[0]);
+    const has = ["A", "B", "C"].includes(label(g));
+    assert.deepEqual(types, has ? ["LayerElementUV", "LayerElementMaterial"] : ["LayerElementUV"], label(g));
+    assert.equal(!!kid(g, "LayerElementMaterial"), has, label(g));
+  }
+  // Every id is one object's.
+  const ids = objects.map((o) => o.values[0]);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const [, from, to] of joins) for (const end of [from, to]) assert.ok(end === 0n || ids.includes(end), `${end}`);
+
+  // The meshes read back as ever.
+  const back = await read(bytes);
+  assert.deepEqual(back.map((m) => m.name), ["A", "B", "C", "D", "E"]);
+  for (const m of back) assert.deepEqual([...m.positions], square.positions);
+});
+
+test("an untextured shape with a picture still gets a layer for its material", () => {
+  const p = { name: "a.dds", png: Uint8Array.of(1) };
+  const objects = tree(write([{ ...square, uvs: null, pictures: { colour: p, normal: null } }])).find((r) => r.name === "Objects").records;
+  const g = objects.find((o) => o.name === "Geometry");
+  const layer = kid(g, "Layer");
+  assert.deepEqual(layer.records.filter((r) => r.name === "LayerElement").map((r) => kid(r, "Type").values[0]), ["LayerElementMaterial"]);
+  assert.equal(objects.filter((o) => o.name === "Video").length, 1);
+});
