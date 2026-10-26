@@ -1434,7 +1434,11 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
             let Some(making) = state.making.as_ref() else {
                 return Answer::failed("No save is being read.");
             };
-            let (mesh, missing) = match making.build(weight) {
+            let crate::character::Made {
+                mesh,
+                missing,
+                notes,
+            } = match making.build(weight) {
                 Ok(built) => built,
                 Err(e) => return Answer::failed(e),
             };
@@ -1456,6 +1460,7 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                     match state.working() {
                         Ok(mut answer) => {
                             answer["missing"] = json!(missing);
+                            answer["notes"] = json!(notes);
                             Answer::ok(answer)
                         }
                         Err(e) => Answer::failed(e),

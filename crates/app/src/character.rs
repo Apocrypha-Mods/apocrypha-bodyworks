@@ -49,6 +49,14 @@ pub struct Making {
     pub files: Files,
 }
 
+/// A character built: its mesh's bytes, the files that were not there,
+/// and what else was left out and why.
+pub struct Made {
+    pub mesh: Vec<u8>,
+    pub missing: Vec<String>,
+    pub notes: Vec<String>,
+}
+
 /// A piece of a plugin, as the interface hands it back: `length` is how
 /// many of the request's bytes are it, or none when the plugin could not
 /// be had; `size` is the whole file's.
@@ -194,9 +202,8 @@ impl Making {
         apoc_character::needed(&self.look(records, None), records).map_err(|e| e.to_string())
     }
 
-    /// The character, built from the files given, as a mesh's bytes, with
-    /// what was not there or left out and why.
-    pub fn build(&self, weight: Option<f32>) -> Result<(Vec<u8>, Vec<String>), String> {
+    /// The character, built from the files given.
+    pub fn build(&self, weight: Option<f32>) -> Result<Made, String> {
         let records = self
             .records
             .as_ref()
@@ -205,9 +212,11 @@ impl Making {
         let plan = apoc_character::plan(&look, records).map_err(|e| e.to_string())?;
         let built = apoc_character::build(&plan, &self.files, &apoc_character::Options::default())
             .map_err(|e| e.to_string())?;
-        let mut left = built.missing.clone();
-        left.extend(built.notes.iter().cloned());
-        Ok((built.nif.write(), left))
+        Ok(Made {
+            mesh: built.nif.write(),
+            missing: built.missing,
+            notes: built.notes,
+        })
     }
 
     /// The save's look as a build takes it. A save keeps no weight (see
