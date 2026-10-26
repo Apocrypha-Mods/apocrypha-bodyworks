@@ -163,6 +163,22 @@ fn truncated_real_plugins_give_errors() {
     }
 }
 
+/// Where the top-level groups of the kinds in [`WANTED`] are, as
+/// (start, length): the bytes a read goes through record by record.
+fn wanted_groups(bytes: &[u8]) -> Vec<(usize, usize)> {
+    let u32_at = |o: usize| u32::from_le_bytes(bytes[o + 4..o + 8].try_into().unwrap()) as usize;
+    let mut at = 24 + u32_at(0);
+    let mut out = Vec::new();
+    while at + 24 <= bytes.len() {
+        let size = u32_at(at);
+        if WANTED.iter().any(|w| bytes[at + 8..at + 12] == *w) {
+            out.push((at, size));
+        }
+        at += size;
+    }
+    out
+}
+
 #[test]
 fn flipped_real_plugins_never_panic() {
     for file in ["ccBGSSSE037-Curios.esl", "HearthFires.esm"] {
@@ -170,12 +186,21 @@ fn flipped_real_plugins_never_panic() {
             continue;
         };
         let bytes = std::fs::read(path).unwrap();
+        // Half the flips land in the groups that are read, where every
+        // record and subrecord header is parsed.
+        let groups = wanted_groups(&bytes);
+        assert!(!groups.is_empty());
         let mut seed = 7;
         let mut errors = 0;
         for i in 0..300 {
             let mut b = bytes.clone();
             for _ in 0..1 + i % 8 {
-                let at = (lcg(&mut seed) as usize) % b.len();
+                let at = if lcg(&mut seed).is_multiple_of(2) {
+                    let (start, len) = groups[(lcg(&mut seed) as usize) % groups.len()];
+                    start + (lcg(&mut seed) as usize) % len
+                } else {
+                    (lcg(&mut seed) as usize) % b.len()
+                };
                 b[at] ^= 1 << (lcg(&mut seed) % 8);
             }
             match read(file, &b, &WANTED) {
