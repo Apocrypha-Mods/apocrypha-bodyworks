@@ -552,9 +552,13 @@ function tintOf(faceTint) {
   return faceTint.composed;
 }
 
-/** The face's colour texture from its head texture's PNG, tinted ([`tint.face`]), as ImageData; null when there is no tint. */
-async function tintedFace(png) {
-  const t = state.face && (await tintOf(state.face));
+/**
+ * The face's colour texture from its head texture's PNG, tinted ([`tint.face`]),
+ * as ImageData; null when there is no tint. `face` is the character's whose it
+ * is, taken when it was asked for: another may have been opened since.
+ */
+async function tintedFace(png, face) {
+  const t = face && (await tintOf(face));
   if (!t) return null;
   const head = await pixelsOf(png);
   const made = tint.face(head, t);
@@ -578,13 +582,14 @@ function paint(set) {
     const path = `Data/${textureFile(s.texture)}`;
     if (tintsFace(s)) {
       // Each character's face is its own picture.
-      const key = `${path} tinted ${state.face.made}`;
+      const face = state.face;
+      const key = `${path} tinted ${face.made}`;
       if (!pictures.has(key)) {
         pictures.set(
           key,
           host
             .request("files.picture", { path, longest: 2048 })
-            .then((png) => tintedFace(png))
+            .then((png) => tintedFace(png, face))
             .catch(() => null),
         );
       }
@@ -2492,11 +2497,12 @@ async function exportObj(sh) {
  * FBX has no way to tell a program, so it is left out.
  */
 async function picturesOf(sh, made = new Map()) {
+  const character = state.face;
   const one = async (texture, dye, tinted = false, opaque = false) => {
     if (!texture) return null;
     const name = textureFile(texture);
     // A picture two shapes show the same way is made once.
-    const key = `${name}|${tinted}|${dye ? dyeName(dye) : ""}|${opaque}`;
+    const key = `${name}|${tinted}|${dye ? dye.join(",") : ""}|${opaque}`;
     if (!made.has(key)) made.set(key, picture(name, dye, tinted, opaque));
     return made.get(key);
   };
@@ -2506,7 +2512,7 @@ async function picturesOf(sh, made = new Map()) {
   const picture = async (name, dye, tinted, opaque) => {
     try {
       const png = await host.request("files.picture", { path: `Data/${name}`, longest: 4096 });
-      const face = tinted ? await tintedFace(png) : null;
+      const face = tinted ? await tintedFace(png, character) : null;
       if (face) return { name: `${name.replace(/\.dds$/i, "")} tinted`, png: await pngOf(opaque ? solid(face) : face) };
       if (!dye && !opaque) return { name, png: new Uint8Array(png) };
       return { name: dye ? `${name.replace(/\.dds$/i, "")} ${dyeName(dye)}` : name, png: await dyed(png, dye, opaque) };
@@ -3434,6 +3440,8 @@ async function openCharacter(sv, weight) {
   });
   const [work] = core.ask({ op: "character", weight });
   // Kept apart from the work, which each change answers anew without it.
+  // The last character's tinted face is let go: it is shown no more.
+  for (const key of pictures.keys()) if (/ tinted \d+$/.test(key)) pictures.delete(key);
   state.face = work.faceTint ? { ...work.faceTint, made: ++tintsMade } : null;
   state.work = work;
   state.at = [];

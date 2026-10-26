@@ -54,7 +54,10 @@ export function compose(base, layers, width, height) {
   const b = new Float32Array(n).fill(base[2] * 255);
   for (const layer of layers) {
     if (!layer.mask || !(layer.strength > 0)) continue;
-    const cover = coverage(layer.mask, width, height);
+    // A mask with no size, or fewer pixels than it says, lays nothing.
+    const m = layer.mask;
+    if (!(m.width > 0 && m.height > 0 && m.data && m.data.length >= m.width * m.height * 4)) continue;
+    const cover = coverage(m, width, height);
     const s = Math.min(1, layer.strength);
     const [cr, cg, cb] = layer.colour.map((c) => c * 255);
     for (let i = 0; i < n; i++) {
