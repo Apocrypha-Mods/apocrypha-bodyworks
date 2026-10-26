@@ -12,7 +12,7 @@ use crate::records::{RaceExtra, Records};
 use crate::{build, files::Files, look::face_source, parts::head_parts, plan, CharacterError};
 use crate::{Look, Options};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Fake {
     kinds: HashMap<u32, [u8; 4]>,
     npcs: HashMap<u32, Npc>,
@@ -363,4 +363,412 @@ fn the_skeleton_is_among_the_files() {
         p.files()[0],
         "meshes/actors/character/character assets/skeleton.nif"
     );
+}
+
+#[test]
+fn an_extra_listed_is_kept_beside_the_race_default_of_its_type() {
+    let mut w = world();
+    w.parts.insert(4, part("Mouth", HeadPartKind::Misc, true));
+    let mut race = w.races[&100].clone();
+    race.sexes[0].head.parts.push((3, f(4)));
+    w.races.insert(100, race);
+    let mut bit = part("Beard_1bit", HeadPartKind::Misc, true);
+    bit.flags = EXTRA_PART;
+    w.parts.insert(40, bit);
+    let race = &w.races[&100];
+    let got = head_parts(&w, race, false, &[f(40)]);
+    assert_eq!(
+        names(&w, &got),
+        ["Beard_1bit", "EyesDefault", "Face", "Mouth", "NoScar"]
+    );
+    // Listed as a part of its own (no extra flag) it stands for the type.
+    w.parts.get_mut(&40).unwrap().flags = 0;
+    let race = &w.races[&100];
+    let got = head_parts(&w, race, false, &[f(40)]);
+    assert_eq!(
+        names(&w, &got),
+        ["Beard_1bit", "EyesDefault", "Face", "NoScar"]
+    );
+}
+
+#[test]
+fn a_part_without_a_model_still_stands_for_its_type() {
+    let mut w = world();
+    w.parts
+        .insert(50, part("NoHair", HeadPartKind::Hair, false));
+    let race = &w.races[&100];
+    // Listed first, it keeps the hair after it (and its hairline) off.
+    let got = head_parts(&w, race, false, &[f(50), f(10)]);
+    assert_eq!(names(&w, &got), ["EyesDefault", "Face", "NoHair", "NoScar"]);
+    let got = head_parts(&w, race, false, &[f(10), f(50)]);
+    assert_eq!(
+        names(&w, &got),
+        ["EyesDefault", "Face", "Hair", "Hairline", "More", "NoScar"]
+    );
+    // A listed face stands in for the race's.
+    w.parts
+        .insert(60, part("OtherFace", HeadPartKind::Face, true));
+    let race = &w.races[&100];
+    let got = head_parts(&w, race, false, &[f(60)]);
+    assert_eq!(names(&w, &got), ["EyesDefault", "NoScar", "OtherFace"]);
+    // The plan draws only those with a model.
+    let look = Look {
+        race: Some(f(100)),
+        head_parts: vec![f(50)],
+        ..Look::default()
+    };
+    let p = plan(&look, &w).unwrap();
+    let drawn: Vec<&str> = p.head.iter().map(|h| h.name.as_str()).collect();
+    assert_eq!(drawn, ["EyesDefault", "Face"]);
+}
+
+#[test]
+fn a_look_follows_its_template_for_its_face() {
+    let mut w = world();
+    w.npcs.insert(
+        1000,
+        Npc {
+            template: Some(f(1001)),
+            template_flags: USE_TRAITS,
+            race: Some(f(101)),
+            weight: Some(10.0),
+            ..Npc::default()
+        },
+    );
+    w.npcs.insert(
+        1001,
+        Npc {
+            race: Some(f(100)),
+            head_parts: vec![f(20)],
+            weight: Some(70.0),
+            ..Npc::default()
+        },
+    );
+    w.kinds.insert(1000, *b"NPC_");
+    w.kinds.insert(1001, *b"NPC_");
+    let l = Look::of_form(&w, &f(1000)).unwrap();
+    assert_eq!(l.race, Some(f(100)));
+    assert_eq!(l.head_parts, [f(20)]);
+    assert_eq!(l.weight, 70.0);
+    // Without the flag, its own.
+    w.npcs.get_mut(&1000).unwrap().template_flags = 0;
+    let l = Look::of_form(&w, &f(1000)).unwrap();
+    assert_eq!((l.race, l.weight), (Some(f(101)), 10.0));
+}
+
+fn set(textures: [Option<&str>; 8], flags: u16) -> TextureSet {
+    TextureSet {
+        textures: textures.map(|t| t.map(str::to_string)),
+        flags,
+        ..TextureSet::default()
+    }
+}
+
+#[test]
+fn a_faces_textures_are_the_looks_over_the_races_over_its_own_but_its_colour() {
+    let mut w = world();
+    let mut face = w.parts[&1].clone();
+    face.texture_set = Some(f(400));
+    w.parts.insert(1, face);
+    // TX02 goes to slot 5, TX03 to 2, TX04 to 3.
+    w.sets.insert(
+        400,
+        set(
+            [
+                Some("PartFace.dds"),
+                Some("Part_msn.dds"),
+                Some("PartEnv.dds"),
+                Some("PartSk.dds"),
+                Some("PartDetail.dds"),
+                None,
+                None,
+                None,
+            ],
+            0,
+        ),
+    );
+    w.sets.insert(
+        401,
+        set(
+            [
+                Some("RaceFace.dds"),
+                Some("Race_msn.dds"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            0,
+        ),
+    );
+    w.sets.insert(
+        402,
+        set(
+            [
+                Some("LookFace.dds"),
+                Some("Look_msn.dds"),
+                None,
+                Some("LookSk.dds"),
+                None,
+                None,
+                None,
+                None,
+            ],
+            0,
+        ),
+    );
+    let mut race = w.races[&100].clone();
+    race.sexes[0].head.default_face_texture = Some(f(401));
+    w.races.insert(100, race);
+    let mut look = Look {
+        race: Some(f(100)),
+        face_texture: Some(f(402)),
+        ..Look::default()
+    };
+    let textures = |w: &Fake, look: &Look| {
+        let p = plan(look, w).unwrap();
+        p.head
+            .iter()
+            .find(|h| h.name == "Face")
+            .unwrap()
+            .textures
+            .clone()
+    };
+    let s = |t: &str| Some(t.to_string());
+    assert_eq!(
+        textures(&w, &look),
+        [
+            s("PartFace.dds"),
+            s("Look_msn.dds"),
+            s("LookSk.dds"),
+            s("PartDetail.dds"),
+            None,
+            None,
+            None,
+            None
+        ]
+    );
+    // Without the look's, the race's normal map over the part's.
+    look.face_texture = None;
+    assert_eq!(
+        textures(&w, &look),
+        [
+            s("PartFace.dds"),
+            s("Race_msn.dds"),
+            s("PartSk.dds"),
+            s("PartDetail.dds"),
+            None,
+            None,
+            None,
+            None
+        ]
+    );
+    // A part with no colour of its own takes the look's, then the race's.
+    w.sets.get_mut(&400).unwrap().textures[0] = None;
+    assert_eq!(textures(&w, &look)[0], s("RaceFace.dds"));
+    look.face_texture = Some(f(402));
+    assert_eq!(textures(&w, &look)[0], s("LookFace.dds"));
+}
+
+#[test]
+fn other_parts_take_colour_and_a_normal_map_not_in_model_space() {
+    let mut w = world();
+    let mut eyes = w.parts[&20].clone();
+    eyes.texture_set = Some(f(410));
+    w.parts.insert(20, eyes);
+    let mut scar = w.parts[&30].clone();
+    scar.texture_set = Some(f(411));
+    w.parts.insert(30, scar);
+    let both = [
+        Some("A.dds"),
+        Some("A_n.dds"),
+        Some("A_env.dds"),
+        Some("A_sk.dds"),
+        None,
+        None,
+        None,
+        None,
+    ];
+    w.sets.insert(410, set(both, 0x4));
+    w.sets.insert(411, set(both, 0x1));
+    let look = Look {
+        race: Some(f(100)),
+        head_parts: vec![f(20), f(30)],
+        ..Look::default()
+    };
+    let p = plan(&look, &w).unwrap();
+    let of = |n: &str| {
+        p.head
+            .iter()
+            .find(|h| h.name == n)
+            .unwrap()
+            .textures
+            .clone()
+    };
+    let s = |t: &str| Some(t.to_string());
+    assert_eq!(
+        of("EyesA"),
+        [s("A.dds"), None, None, None, None, None, None, None]
+    );
+    assert_eq!(
+        of("ScarL"),
+        [s("A.dds"), s("A_n.dds"), None, None, None, None, None, None]
+    );
+    // A part with no set of its own says nothing.
+    assert_eq!(of("Face"), <[Option<String>; 8]>::default());
+}
+
+#[test]
+fn the_hair_colour_is_twice_its_colour_and_else_the_races_and_else_black() {
+    let mut w = world();
+    let colour = |rgba: [u8; 4]| Colour {
+        rgba,
+        ..Colour::default()
+    };
+    w.colours.insert(500, colour([57, 55, 40, 0]));
+    w.colours.insert(501, colour([10, 20, 30, 0]));
+    w.colours.insert(502, colour([200, 0, 100, 0]));
+    let mut race = w.races[&100].clone();
+    race.default_hair_colour = [Some(f(501)), Some(f(502))];
+    w.races.insert(100, race);
+    let tint = |w: &Fake, look: &Look| plan(look, w).unwrap().hair_colour.unwrap();
+    let mut look = Look {
+        race: Some(f(100)),
+        hair_colour: Some(f(500)),
+        ..Look::default()
+    };
+    let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|c| (a[c] - b[c]).abs() < 1e-6);
+    assert!(near(
+        tint(&w, &look),
+        [114.0 / 255.0, 110.0 / 255.0, 80.0 / 255.0]
+    ));
+    look.hair_colour = None;
+    assert!(near(
+        tint(&w, &look),
+        [20.0 / 255.0, 40.0 / 255.0, 60.0 / 255.0]
+    ));
+    look.female = true;
+    assert!(near(tint(&w, &look), [400.0 / 255.0, 0.0, 200.0 / 255.0]));
+    w.races.get_mut(&100).unwrap().default_hair_colour = [None, None];
+    assert_eq!(tint(&w, &look), [0.0; 3]);
+    // A skin tone that is not numbers is none.
+    look.skin_tone = Some([0.5, f32::NAN, 0.5]);
+    assert_eq!(plan(&look, &w).unwrap().skin_tone, None);
+    look.skin_tone = Some([0.5, 0.25, 1.0]);
+    assert_eq!(plan(&look, &w).unwrap().skin_tone, Some([0.5, 0.25, 1.0]));
+}
+
+#[test]
+fn a_womans_body_takes_her_models_and_else_the_mans_and_records_not_there_are_noted() {
+    let mut w = body_world();
+    let mut addon = w.addons[&201].clone();
+    addon.models[1] = Some("Actors\\FemaleBody_1.nif".into());
+    addon.skin_textures[1] = Some(f(301));
+    // Another race's, worn by this one too.
+    addon.additional_races = vec![f(101)];
+    w.addons.insert(201, addon);
+    w.sets.insert(
+        301,
+        set(
+            [Some("Her.dds"), None, None, None, None, None, None, None],
+            0,
+        ),
+    );
+    let look = Look {
+        race: Some(f(100)),
+        female: true,
+        ..Look::default()
+    };
+    let p = plan(&look, &w).unwrap();
+    let body = &p.body[0];
+    assert_eq!(body.model, "meshes/actors/femalebody_1.nif");
+    assert_eq!(
+        body.weights,
+        Some((
+            "meshes/actors/femalebody_0.nif".into(),
+            "meshes/actors/femalebody_1.nif".into()
+        ))
+    );
+    assert_eq!(body.textures[0].as_deref(), Some("Her.dds"));
+    // The tail has no woman's model or textures: the man's.
+    let tail = &p.body[1];
+    assert_eq!(tail.model, "meshes/actors/tail.nif");
+    assert_eq!(tail.weights, None);
+    assert_eq!(tail.textures[0].as_deref(), Some("Body.dds"));
+    // A man never takes a woman's textures.
+    let mut w2 = w.clone();
+    w2.addons.get_mut(&201).unwrap().skin_textures[0] = None;
+    let man = Look {
+        race: Some(f(100)),
+        ..Look::default()
+    };
+    assert_eq!(plan(&man, &w2).unwrap().body[0].textures[0], None);
+
+    // The other race wears the first addon, which names it as well as its own.
+    let mut w3 = w.clone();
+    w3.races.insert(101, w3.races[&100].clone());
+    let other = Look {
+        race: Some(f(101)),
+        ..Look::default()
+    };
+    let names: Vec<String> = plan(&other, &w3)
+        .unwrap()
+        .body
+        .iter()
+        .map(|b| b.name.clone())
+        .collect();
+    assert_eq!(names, ["Body_1.nif", "Hands_1.nif"]);
+
+    // A skin, an addon and a head part that are not there are each noted.
+    let mut w4 = w.clone();
+    w4.addons.remove(&204);
+    let mut look = look.clone();
+    look.head_parts = vec![f(777)];
+    let p = plan(&look, &w4).unwrap();
+    assert!(
+        p.notes.contains(&"No armour addon 000000CC.".to_string()),
+        "{:?}",
+        p.notes
+    );
+    assert!(
+        p.notes.contains(&"No head part 00000309.".to_string()),
+        "{:?}",
+        p.notes
+    );
+    look.skin = Some(f(888));
+    let p = plan(&look, &w4).unwrap();
+    assert!(p.body.is_empty());
+    assert!(
+        p.notes.contains(&"No skin 00000378.".to_string()),
+        "{:?}",
+        p.notes
+    );
+}
+
+#[test]
+fn files_shared_by_two_parts_are_named_once_and_a_body_of_one_model_by_it() {
+    let mut w = body_world();
+    let mut eyes = w.parts[&2].clone();
+    eyes.files = vec![PartFile {
+        kind: PartFileKind::RaceMorph,
+        path: "actors\\FACERACES.tri".into(),
+    }];
+    w.parts.insert(2, eyes);
+    let look = Look {
+        race: Some(f(100)),
+        ..Look::default()
+    };
+    let p = plan(&look, &w).unwrap();
+    let files = p.files();
+    assert_eq!(
+        files
+            .iter()
+            .filter(|k| *k == "meshes/actors/faceraces.tri")
+            .count(),
+        1
+    );
+    assert!(files.contains(&"meshes/actors/tail.nif".to_string()));
+    assert!(!files.iter().any(|k| k.contains("tail_")));
 }

@@ -229,6 +229,196 @@ mod tests {
         assert_eq!(q, vec![[1.0; 3]; 2]);
     }
 
+    /// The pairs written out here rather than taken from [`SLIDERS`], so a
+    /// pair swapped or moved there is caught.
+    #[test]
+    fn each_slider_turns_on_one_of_its_pair_by_its_sign() {
+        let pairs = [
+            ("noseshort", "noselong"),
+            ("nosedown", "noseup"),
+            ("jawup", "jawdown"),
+            ("jawnarrow", "jawwide"),
+            ("jawback", "jawforward"),
+            ("cheeksdown", "cheeksup"),
+            ("cheeksin", "cheeksout"),
+            ("eyesmovedown", "eyesmoveup"),
+            ("eyesmovein", "eyesmoveout"),
+            ("browdown", "browup"),
+            ("browin", "browout"),
+            ("browback", "browforward"),
+            ("lipmovedown", "lipmoveup"),
+            ("lipmovein", "lipmoveout"),
+            ("chinthin", "chinwide"),
+            ("chinmoveup", "chinmovedown"),
+            ("overbite", "underbite"),
+            ("eyesback", "eyesforward"),
+        ];
+        for (i, (neg, pos)) in pairs.iter().enumerate() {
+            for (v, name, amount) in [(-0.25f32, neg, 0.25f32), (0.75, pos, 0.75)] {
+                let mut look = Look {
+                    weight: 100.0,
+                    face_morphs: vec![0.0; 19],
+                    ..Look::default()
+                };
+                look.face_morphs[i] = v;
+                let w = Weights::of(&look, None);
+                assert_eq!(
+                    w.chargen,
+                    HashMap::from([(name.to_string(), amount)]),
+                    "slider {i} at {v}"
+                );
+            }
+        }
+        // Nothing at nought, nor for a value that is not a number.
+        let look = Look {
+            weight: 100.0,
+            face_morphs: vec![0.0, f32::NAN, f32::INFINITY],
+            ..Look::default()
+        };
+        assert!(Weights::of(&look, None).chargen.is_empty());
+    }
+
+    #[test]
+    fn presets_are_nose_eyes_and_lips_and_the_second_is_unused() {
+        let look = Look {
+            weight: 100.0,
+            face_parts: vec![3, 7, 5, 11],
+            ..Look::default()
+        };
+        let w = Weights::of(&look, None);
+        assert_eq!(
+            w.chargen,
+            HashMap::from([
+                ("nosetype3".to_string(), 1.0),
+                ("eyestype5".to_string(), 1.0),
+                ("liptype11".to_string(), 1.0),
+            ])
+        );
+        // Each one alone, so none is taken from another's place.
+        for (at, name) in [(0, "nosetype4"), (2, "eyestype4"), (3, "liptype4")] {
+            let mut parts = vec![-1; 4];
+            parts[at] = 4;
+            let look = Look {
+                weight: 100.0,
+                face_parts: parts,
+                ..Look::default()
+            };
+            let w = Weights::of(&look, None);
+            assert_eq!(w.chargen.keys().collect::<Vec<_>>(), [name], "{at}");
+        }
+    }
+
+    #[test]
+    fn the_skinny_morph_is_what_the_weight_leaves() {
+        for (weight, skinny) in [
+            (0.0, Some(1.0)),
+            (25.0, Some(0.75)),
+            (70.0, Some(0.3)),
+            (100.0, None),
+            (150.0, None),
+            (-20.0, Some(1.0)),
+            (f32::NAN, Some(1.0)),
+            (f32::INFINITY, Some(1.0)),
+        ] {
+            let look = Look {
+                weight,
+                ..Look::default()
+            };
+            let w = Weights::of(&look, None);
+            let got = w.own.get("skinnymorph").copied();
+            assert_eq!(got.is_some(), skinny.is_some(), "weight {weight}");
+            if let (Some(g), Some(s)) = (got, skinny) {
+                assert!((g - s).abs() < 1e-6, "weight {weight}: {g}");
+            }
+            assert!(w.own.len() <= 1);
+        }
+        // It moves the part's own tri, and no other kind.
+        let look = Look {
+            weight: 70.0,
+            ..Look::default()
+        };
+        let w = Weights::of(&look, None);
+        let t = tri(vec![morph("SkinnyMorph", 10)]);
+        let mut p = vec![[0.0; 3]; 2];
+        assert_eq!(
+            apply(&mut p, &t, PartFileKind::Tri, &w).unwrap(),
+            ["SkinnyMorph"]
+        );
+        assert!((p[0][0] - 1.5).abs() < 1e-5 && (p[1][1] - 1.5).abs() < 1e-5);
+        for kind in [
+            PartFileKind::RaceMorph,
+            PartFileKind::ChargenMorph,
+            PartFileKind::Other(7),
+            PartFileKind::Unstated,
+        ] {
+            let mut q = vec![[0.0; 3]; 2];
+            assert!(apply(&mut q, &t, kind, &w).unwrap().is_empty());
+            assert_eq!(q, vec![[0.0; 3]; 2]);
+        }
+    }
+
+    #[test]
+    fn a_tri_of_another_kind_shapes_nothing() {
+        let look = Look {
+            weight: 0.0,
+            face_morphs: vec![0.5],
+            ..Look::default()
+        };
+        let w = Weights::of(&look, Some("NordRace"));
+        let t = tri(vec![
+            morph("NoseLong", 2),
+            morph("SkinnyMorph", 2),
+            morph("NordRace", 2),
+        ]);
+        for kind in [PartFileKind::Other(7), PartFileKind::Unstated] {
+            let mut p = vec![[0.0; 3]; 2];
+            assert!(apply(&mut p, &t, kind, &w).unwrap().is_empty());
+            assert_eq!(p, vec![[0.0; 3]; 2]);
+        }
+        // Each of the three takes its own one.
+        for (kind, name) in [
+            (PartFileKind::RaceMorph, "NordRace"),
+            (PartFileKind::Tri, "SkinnyMorph"),
+            (PartFileKind::ChargenMorph, "NoseLong"),
+        ] {
+            let mut p = vec![[0.0; 3]; 2];
+            assert_eq!(apply(&mut p, &t, kind, &w).unwrap(), [name]);
+        }
+    }
+
+    #[test]
+    fn the_race_morph_is_the_race_named_at_one_without_case() {
+        let w = Weights::of(&Look::default(), Some("NordRace"));
+        assert_eq!(w.race, HashMap::from([("nordrace".to_string(), 1.0)]));
+        assert!(Weights::of(&Look::default(), None).race.is_empty());
+        let t = tri(vec![morph("ImperialRace", 6), morph("NORDRACE", 4)]);
+        let mut p = vec![[0.0; 3]; 2];
+        assert_eq!(
+            apply(&mut p, &t, PartFileKind::RaceMorph, &w).unwrap(),
+            ["NORDRACE"]
+        );
+        assert_eq!(p, vec![[2.0, 0.0, 0.0], [0.0, 2.0, 0.0]]);
+    }
+
+    #[test]
+    fn of_two_morphs_of_one_name_only_the_first_counts() {
+        let look = Look {
+            face_morphs: vec![0.5],
+            weight: 100.0,
+            ..Look::default()
+        };
+        let w = Weights::of(&look, None);
+        let t = tri(vec![
+            morph("NoseLong", 2),
+            morph("noselong", 8),
+            morph("NoseLong", 8),
+        ]);
+        let mut p = vec![[0.0; 3]; 2];
+        let names = apply(&mut p, &t, PartFileKind::ChargenMorph, &w).unwrap();
+        assert_eq!(names, ["NoseLong"]);
+        assert_eq!(p, vec![[0.5, 0.0, 0.0], [0.0, 0.5, 0.0]]);
+    }
+
     #[test]
     fn a_tri_of_another_size_is_refused() {
         let t = tri(vec![morph("SkinnyMorph", 1)]);

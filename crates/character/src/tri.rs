@@ -163,6 +163,58 @@ mod tests {
         assert_eq!(t.morphs, sample().morphs);
     }
 
+    /// Two morphs and two modifiers: the modifiers' positions, after the
+    /// shape's own vertices, are not taken for vertices, and each morph is
+    /// read from where it is.
+    #[test]
+    fn morphs_around_modifiers_read_whole() {
+        let mut two = sample();
+        two.morphs.push(HeadMorph {
+            name: "Blush".into(),
+            scale: 2.0,
+            offsets: vec![[-5, 6, -7], [8, -9, 10]],
+        });
+        let mut bytes = headtri::write(&two);
+        // Two modifiers naming three vertices between them.
+        bytes[40..44].copy_from_slice(&2u32.to_le_bytes());
+        bytes[44..48].copy_from_slice(&3u32.to_le_bytes());
+        for (name, vertices) in [
+            (&b"BlinkL\0"[..], &[0u32][..]),
+            (&b"BlinkR\0"[..], &[1u32, 0][..]),
+        ] {
+            bytes.extend((name.len() as u32).to_le_bytes());
+            bytes.extend(name);
+            bytes.extend((vertices.len() as u32).to_le_bytes());
+            for v in vertices {
+                bytes.extend(v.to_le_bytes());
+            }
+        }
+        let at = 64 + 2 * 12;
+        let positions: Vec<u8> = (0..9)
+            .flat_map(|i| (100.0f32 + i as f32).to_le_bytes())
+            .collect();
+        bytes.splice(at..at, positions);
+        let t = read(&bytes).unwrap();
+        assert_eq!(t.vertices, two.vertices);
+        assert_eq!(t.morphs, two.morphs);
+        // Said to name four, or two, they are refused.
+        for said in [4u32, 2] {
+            let mut lying = bytes.clone();
+            lying[44..48].copy_from_slice(&said.to_le_bytes());
+            // The positions said are there, so only the count is wrong.
+            if said == 4 {
+                lying.splice(at..at, [0u8; 12]);
+            } else {
+                lying.drain(at..at + 12);
+            }
+            assert_eq!(
+                read(&lying).err().as_deref(),
+                Some("its modifiers name another number of vertices than it says"),
+                "said {said}"
+            );
+        }
+    }
+
     #[test]
     fn cut_or_lying_files_are_refused() {
         let bytes = with_modifier(headtri::write(&sample()));
