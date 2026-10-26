@@ -4,7 +4,8 @@
 //
 //   node tools/dev.cjs <game folder> [port]
 //
-// What the add-on builds lands in `scratch/dev-output/`.
+// What the add-on builds lands in `scratch/dev-output/`. `SAVES=<folder>`
+// names a folder of saves to stand in for the game's.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -14,7 +15,73 @@ const game = path.resolve(process.argv[2] || path.join(root, "scratch/samples/cb
 const port = Number(process.argv[3] || 5290);
 const wasm = path.join(root, "target/wasm32-unknown-unknown/release/apoc_bodyslide_app.wasm");
 const out = path.join(root, "scratch/dev-output");
+const saves = process.env.SAVES ? path.resolve(process.env.SAVES) : null;
 const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".wasm": "application/wasm" };
+
+/** What a save's header says of it, and where its screenshot is, or null. */
+function saveHeader(file) {
+  const fd = fs.openSync(file, "r");
+  const b = Buffer.alloc(64 * 1024);
+  const got = fs.readSync(fd, b, 0, b.length, 0);
+  fs.closeSync(fd);
+  if (got < 30 || b.toString("latin1", 0, 13) !== "TESV_SAVEGAME") return null;
+  let at = 17;
+  const u32 = () => ((at += 4), b.readUInt32LE(at - 4));
+  const str = () => {
+    const n = b.readUInt16LE(at);
+    at += 2 + n;
+    return b.toString("utf8", at - n, at);
+  };
+  const version = u32();
+  u32();
+  const character = str();
+  const level = u32();
+  const location = str();
+  const playtime = str();
+  const race = str();
+  at += 2 + 8;
+  const filetime = b.readBigUInt64LE(at);
+  at += 8;
+  const width = u32();
+  const height = u32();
+  if (version >= 12) at += 2;
+  return { character, level, location, playtime, race, savedAt: Number(filetime / 10000000n - 11644473600n), width, height, depth: version >= 12 ? 4 : 3, shot: at };
+}
+
+/** RGBA or RGB pixels as a PNG. */
+function png(width, height, depth, pixels) {
+  const zlib = require("zlib");
+  const crc = (buf) => {
+    let c = ~0;
+    for (const x of buf) {
+      c ^= x;
+      for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xedb88320 : c >>> 1;
+    }
+    return ~c >>> 0;
+  };
+  const chunk = (kind, data) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(data.length);
+    head.write(kind, 4, "latin1");
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32BE(crc(Buffer.concat([head.subarray(4), data])));
+    return Buffer.concat([head, data, tail]);
+  };
+  const rows = Buffer.alloc((width * depth + 1) * height);
+  for (let y = 0; y < height; y++) pixels.copy(rows, y * (width * depth + 1) + 1, y * width * depth, (y + 1) * width * depth);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr.set([8, depth === 4 ? 6 : 2, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+/** A save in the stand-in's folder by its file name, or null. */
+function saveFile(name) {
+  if (!saves || !name || name.includes("/") || name.includes("\\")) return null;
+  const file = path.join(saves, name);
+  return fs.existsSync(file) ? file : null;
+}
 
 /** The real path for a path in any case, or null. */
 function find(rel) {
@@ -56,6 +123,10 @@ const answers = {
   fonts: async () => [],
   "files.list": async (a) => (await fetch("/list?folder=" + encodeURIComponent(a.folder))).json(),
   "files.picture": async (a) => { const r = await fetch("/picture?longest=" + (a.longest || 2048) + "&path=" + encodeURIComponent(a.path)); if (!r.ok) throw new Error("No such texture."); return r.arrayBuffer(); },
+  "files.part": async (a) => { const r = await fetch("/part?at=" + a.at + "&length=" + a.length + "&path=" + encodeURIComponent(a.path)); if (!r.ok) throw new Error("No such file."); const all = await r.arrayBuffer(); return { size: Number(new DataView(all).getBigUint64(0, true)), bytes: all.slice(8) }; },
+  "saves.list": async () => (await fetch("/saves")).json(),
+  "saves.picture": async (a) => { const r = await fetch("/save-picture?name=" + encodeURIComponent(a.name)); if (!r.ok) throw new Error("That save has no picture."); return r.arrayBuffer(); },
+  "saves.read": async (a) => { const r = await fetch("/save?name=" + encodeURIComponent(a.name)); if (!r.ok) throw new Error("There is no such save."); return r.arrayBuffer(); },
   "files.read": async (a) => { const r = await fetch("/read?path=" + encodeURIComponent(a.path)); if (!r.ok) throw new Error("No such file."); return r.arrayBuffer(); },
   "output.write": async (a) => { window.into = a.into || null; for (const f of a.files) await fetch("/write?path=" + encodeURIComponent(f.path), { method: "POST", body: f.bytes }); window.written = (window.written || []).concat(a.files.map((f) => f.path)); return { files: a.files.length }; },
   // No dialogs here: a save lands under the output folder, and an open hands back what a test put in window.toOpen.
@@ -72,7 +143,7 @@ addEventListener("message", async (e) => {
   if (e.source !== frame.contentWindow || !m || m.apocAddon !== 1) return;
   try {
     const ok = await answers[m.op](m.args);
-    frame.contentWindow.postMessage({ apocAddon: 1, id: m.id, ok }, "*", ok instanceof ArrayBuffer ? [ok] : []);
+    frame.contentWindow.postMessage({ apocAddon: 1, id: m.id, ok }, "*", ok instanceof ArrayBuffer ? [ok] : ok && ok.bytes instanceof ArrayBuffer ? [ok.bytes] : []);
   } catch (err) {
     frame.contentWindow.postMessage({ apocAddon: 1, id: m.id, error: String(err.message || err) }, "*");
   }
@@ -97,6 +168,45 @@ http
     if (url.pathname === "/read") {
       const file = find(url.searchParams.get("path"));
       return file ? send(200, fs.readFileSync(file), "application/octet-stream") : send(404, "missing");
+    }
+    if (url.pathname === "/part") {
+      const file = find(url.searchParams.get("path"));
+      if (!file) return send(404, "missing");
+      const at = Number(url.searchParams.get("at"));
+      const length = Math.min(Number(url.searchParams.get("length")), 64 * 1024 * 1024);
+      const size = fs.statSync(file).size;
+      const piece = Buffer.alloc(Math.max(0, Math.min(length, size - at)));
+      if (piece.length) {
+        const fd = fs.openSync(file, "r");
+        fs.readSync(fd, piece, 0, piece.length, at);
+        fs.closeSync(fd);
+      }
+      const head = Buffer.alloc(8);
+      head.writeBigUInt64LE(BigInt(size));
+      return send(200, Buffer.concat([head, piece]), "application/octet-stream");
+    }
+    if (url.pathname === "/saves") {
+      const list = (saves ? fs.readdirSync(saves) : [])
+        .filter((n) => /\.ess$/i.test(n))
+        .map((name) => {
+          const h = saveHeader(path.join(saves, name));
+          return h && { name, character: h.character, level: h.level, location: h.location, race: h.race, playtime: h.playtime, savedAt: h.savedAt, screenshot: h.width > 0 };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.savedAt - a.savedAt || a.name.localeCompare(b.name));
+      return send(200, JSON.stringify(list), "application/json");
+    }
+    if (url.pathname === "/save" || url.pathname === "/save-picture") {
+      const file = saveFile(url.searchParams.get("name"));
+      if (!file) return send(404, "missing");
+      if (url.pathname === "/save") return send(200, fs.readFileSync(file), "application/octet-stream");
+      const h = saveHeader(file);
+      if (!h || !h.width) return send(404, "no picture");
+      const pixels = Buffer.alloc(h.width * h.height * h.depth);
+      const fd = fs.openSync(file, "r");
+      fs.readSync(fd, pixels, 0, pixels.length, h.shot);
+      fs.closeSync(fd);
+      return send(200, png(h.width, h.height, h.depth, pixels), "image/png");
     }
     if (url.pathname === "/picture") {
       // The mod manager decodes textures itself; here ImageMagick stands in.

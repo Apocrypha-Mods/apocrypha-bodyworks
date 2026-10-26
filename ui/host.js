@@ -6,6 +6,10 @@
 //   files.list  { folder }         [{ path, size }]   files the enabled mods put under it
 //   files.read  { path }           ArrayBuffer
 //   files.picture { path, longest } ArrayBuffer       a texture, as a PNG no longer than `longest` a side
+//   files.part  { path, at, length } { size, bytes }  a piece of a file, the game's own plugins too (newer mod managers)
+//   saves.list                     [{ name, character, level, location, race, playtime, savedAt, screenshot }]
+//   saves.picture { name }         ArrayBuffer        a save's screenshot, as a PNG
+//   saves.read  { name }           ArrayBuffer        a save, whole
 //   output.write { name, files }   { files }          files: [{ path, bytes }], into the mod `name`
 //   output.remove { name, paths }  { removed }        files this add-on built into the mod `name`, taken out again
 //   disk.save   { name, bytes }    { saved }          a file, where the person says; false if they close the dialog
