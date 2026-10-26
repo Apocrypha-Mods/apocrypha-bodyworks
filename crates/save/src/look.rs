@@ -487,4 +487,231 @@ mod tests {
         assert!(find_player_block(&[0x41, 0x93], RefId(0x412233)).is_none());
         assert!(find_player_block(&[], RefId(0x412233)).is_none());
     }
+
+    /// The change flags are UESP's bits, each skipping its own part: the
+    /// bits are written out here rather than taken from the constants, so a
+    /// wrong constant is caught.
+    #[test]
+    fn each_npc_change_flag_skips_its_own_part() {
+        let race = [0x40, 0x13, 0x74, 0x40, 0x13, 0x75];
+        // In the order they are written, which is not the bits' order.
+        let parts: [(u32, Vec<u8>); 8] = [
+            (1 << 0, vec![0xEE; 6]),
+            (1 << 1, vec![0xEE; 24]),
+            // Two factions of four bytes, the count a vsval.
+            (1 << 6, [&[2 << 2][..], &[0xEE; 8]].concat()),
+            // Three lists of three-byte entries: two, none, one.
+            (
+                1 << 4,
+                [&[2 << 2][..], &[0xEE; 6], &[0], &[1 << 2], &[0xEE; 3]].concat(),
+            ),
+            (1 << 3, vec![0xEE; 20]),
+            (1 << 5, vec![3, 0, 0xEE, 0xEE, 0xEE]),
+            (1 << 9, vec![0xEE; 52]),
+            (1 << 10, vec![0xEE; 3]),
+        ];
+        for (bit, part) in &parts {
+            let b = [&part[..], &race].concat();
+            let n = read_npc(&b, bit | 1 << 25).unwrap();
+            assert_eq!(
+                n.race,
+                Some((RefId(0x401374), RefId(0x401375))),
+                "flag {bit:#x}"
+            );
+            assert!(read_npc(&b[..b.len() - 1], bit | 1 << 25).is_err());
+        }
+        // All of them, in UESP's order.
+        let all: u32 = parts.iter().map(|p| p.0).sum();
+        let b = [
+            parts.iter().flat_map(|p| p.1.clone()).collect(),
+            race.to_vec(),
+        ]
+        .concat();
+        assert_eq!(
+            read_npc(&b, all | 1 << 25).unwrap().race,
+            Some((RefId(0x401374), RefId(0x401375)))
+        );
+        // The face is bit 11 and the sex bit 24, after the race.
+        let b = [&race[..], &face_bytes(), &[1]].concat();
+        let n = read_npc(&b, 1 << 25 | 1 << 11 | 1 << 24).unwrap();
+        assert_eq!(n.face.unwrap().head_parts.len(), 2);
+        assert_eq!(n.sex, Some(1));
+        // Bits that are not parts before the sex skip nothing.
+        let n = read_npc(&race, 1 << 25 | 0xF184 | 1 << 26).unwrap();
+        assert_eq!(n.race, Some((RefId(0x401374), RefId(0x401375))));
+        assert_eq!((n.face, n.sex), (None, None));
+        // A list whose count the bytes cannot hold is refused.
+        assert_eq!(
+            read_npc(&[0xFE, 0xFF, 0xFF, 0, 0], 1 << 6).err(),
+            Some(SaveError::Truncated)
+        );
+    }
+
+    #[test]
+    fn the_player_block_may_start_its_data() {
+        let t = [(0x18, [0x12, 0x34, 0x56, 0], 1.0)];
+        let b = block(&t, 0);
+        let p = find_player_block(&b[40..], RefId(0x412233)).unwrap();
+        assert_eq!(p.offset, 0);
+        assert_eq!(p.races, [RefId(0x413746), RefId(0x413742), RefId(0x413742)]);
+        assert_eq!(p.tints.len(), 1);
+        // One byte too few before the count is not a block.
+        assert!(find_player_block(&b[41..], RefId(0x412233)).is_none());
+    }
+
+    #[test]
+    fn the_texture_set_refid_elsewhere_does_not_hide_the_block() {
+        let t = [(3, [1, 2, 3, 0], 0.5)];
+        let mut b = block(&t, 1);
+        // The refId again near the end, in bytes that are no block.
+        let n = b.len();
+        b[n - 30..].fill(0xAA);
+        b[n - 10..n - 7].copy_from_slice(&[0x41, 0x22, 0x33]);
+        let p = find_player_block(&b, RefId(0x412233)).unwrap();
+        assert_eq!((p.offset, p.sex, p.tints.len()), (40, 1, 1));
+    }
+
+    /// The search tries counts up to [`MAX_TINTS`], 1,024 layers.
+    #[test]
+    fn a_block_of_up_to_1024_layers_is_found() {
+        for (n, found) in [(108, true), (1024, true), (1025, false)] {
+            let t: Vec<_> = (0..n).map(|i| (i as u16, [9, 9, 9, 255], 0.25)).collect();
+            let p = find_player_block(&block(&t, 0), RefId(0x412233));
+            assert_eq!(p.map(|p| p.tints.len()), found.then_some(n), "{n}");
+        }
+    }
+
+    use crate::tests::{FormSpec, Spec};
+    use crate::FormRef;
+
+    fn sky(id: u32) -> Form {
+        Form::Plugin(FormRef {
+            plugin: "Skyrim.esm".into(),
+            id,
+        })
+    }
+
+    /// The player's two change forms: the NPC's (its flags and data) and,
+    /// when given, the placed actor's data.
+    fn player_save(npc_flags: u32, npc: Vec<u8>, achr: Option<Vec<u8>>, sex: u16) -> Save {
+        let mut forms = vec![FormSpec {
+            r: [0x40, 0, 7],
+            flags: npc_flags,
+            ty: 0x40 | KIND_NPC,
+            data: npc,
+            zlib: false,
+        }];
+        if let Some(data) = achr {
+            forms.push(FormSpec {
+                r: [0x40, 0, 0x14],
+                flags: 0x20,
+                ty: 0x40 | KIND_ACHR,
+                data,
+                zlib: true,
+            });
+        }
+        let spec = Spec {
+            form_ids: vec![0x0100_0ABC, 0x0001_3742],
+            forms,
+            sex,
+            ..Spec::default()
+        };
+        Save::read(&spec.bytes()).unwrap()
+    }
+
+    /// A face whose hair colour and first head part go through the form id
+    /// array (Mod.esp's 0xABC) and whose texture set is Skyrim.esm's.
+    fn player_face() -> Vec<u8> {
+        let mut b = vec![1, 0, 0, 1]; // present, hair colour: form id 1
+        b.extend([10, 20, 30, 0]);
+        b.extend([0x40, 0x22, 0x33]); // texture set
+        b.push(2 << 2);
+        b.extend([0, 0, 1, 0x40, 0, 6]);
+        b.push(1);
+        b.extend(1u32.to_le_bytes());
+        b.extend(0.5f32.to_le_bytes());
+        b.extend(1u32.to_le_bytes());
+        b.extend(3u32.to_le_bytes());
+        b
+    }
+
+    /// A placed actor's data with the block: starting race NordRace by its
+    /// own refId, the race now through the form id array (index 2).
+    fn player_achr(sex: u32) -> Vec<u8> {
+        let mut b = vec![0xAA; 50];
+        b.extend([0x41, 0x37, 0x46, 0, 0, 2, 0, 0, 2]);
+        b.extend(sex.to_le_bytes());
+        b.extend(1u32.to_le_bytes());
+        b.extend(5u16.to_le_bytes());
+        b.extend([10, 20, 30, 255]);
+        b.extend(0.5f32.to_le_bytes());
+        b.extend(0u32.to_le_bytes());
+        b.extend([0x40, 0x22, 0x33]);
+        b.extend([0; 20]);
+        b
+    }
+
+    #[test]
+    fn the_players_look_comes_from_its_two_change_forms() {
+        let s = player_save(FACE, player_face(), Some(player_achr(0)), 1);
+        let l = s.player().unwrap();
+        let modesp = Form::Plugin(FormRef {
+            plugin: "Mod.esp".into(),
+            id: 0xABC,
+        });
+        assert_eq!(l.hair_colour, modesp);
+        assert_eq!(l.face_texture_set, sky(0x2233));
+        assert_eq!(l.skin_tone, [10, 20, 30, 0]);
+        assert_eq!(l.head_parts, [modesp, sky(6)]);
+        assert_eq!((l.morphs, l.presets), (vec![0.5], vec![3]));
+        // Without the NPC's race and sex, the block's: the race now (not
+        // the one the record starts with) and its sex over the header's.
+        assert_eq!(l.race, Some(sky(0x13742)));
+        assert_eq!(l.sex, 0);
+        assert_eq!(
+            l.tints,
+            [Tint {
+                mask: 5,
+                colour: [10, 20, 30, 255],
+                strength: 0.5
+            }]
+        );
+        assert_eq!(l.weight, None);
+    }
+
+    #[test]
+    fn the_npc_change_forms_race_and_sex_come_first_and_the_header_last() {
+        let mut npc = vec![0x40, 0x11, 0x11, 0x40, 0x22, 0x22];
+        npc.extend(player_face());
+        npc.push(1);
+        let s = player_save(RACE | FACE | GENDER, npc, Some(player_achr(0)), 0);
+        let l = s.player().unwrap();
+        assert_eq!((l.race, l.sex), (Some(sky(0x1111)), 1));
+        assert_eq!(l.tints.len(), 1);
+        // No placed actor: the header's sex, no race, no tints.
+        for header_sex in [0, 1] {
+            let s = player_save(FACE, player_face(), None, header_sex);
+            let l = s.player().unwrap();
+            assert_eq!((l.race, l.sex), (None, header_sex as u8));
+            assert!(l.tints.is_empty());
+        }
+        // A placed actor without the block is the same.
+        let s = player_save(FACE, player_face(), Some(vec![0; 64]), 1);
+        let l = s.player().unwrap();
+        assert_eq!((l.race, l.sex, l.tints.len()), (None, 1, 0));
+    }
+
+    #[test]
+    fn a_player_without_a_face_is_an_error() {
+        let ok = player_save(FACE, player_face(), None, 1);
+        assert!(ok.player().is_ok());
+        for (flags, data) in [(FACE, vec![0]), (0, player_face()), (FACE, vec![])] {
+            let s = player_save(flags, data, None, 1);
+            assert!(s.player().is_err(), "{flags:#x}");
+        }
+        // No change form for the player's NPC at all.
+        let spec = Spec::default();
+        let s = Save::read(&spec.bytes()).unwrap();
+        assert!(matches!(s.player(), Err(SaveError::Corrupt(_))));
+    }
 }

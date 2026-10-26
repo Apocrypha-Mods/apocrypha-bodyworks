@@ -126,4 +126,42 @@ mod tests {
         assert!(decode_block(&[0xF0, 255, 255], 5).is_err());
         assert!(decode_block(&[0x10, 1, 1], 5).is_err());
     }
+
+    /// A length byte of 255 means another follows; the first that is not
+    /// ends it.
+    #[test]
+    fn length_bytes_of_255_run_on() {
+        // 15 + 255 + 3 = 273 literals, then a match of 4 + 15 + 255 + 0 =
+        // 274 at distance 1, then two literals.
+        let mut block = vec![0xFF, 255, 3];
+        block.extend(std::iter::repeat_n(b'x', 272));
+        block.push(b'y');
+        block.extend([1, 0, 255, 0, 0x20, b'a', b'b']);
+        let out = decode_block(&block, 273 + 274 + 2).unwrap();
+        assert_eq!(&out[..272], &[b'x'; 272][..]);
+        assert!(out[272..547].iter().all(|&b| b == b'y'));
+        assert_eq!(&out[547..], b"ab");
+        // Cut in the run of length bytes.
+        assert_eq!(
+            decode_block(&block[..2], 273).err(),
+            Some(SaveError::Truncated)
+        );
+    }
+
+    #[test]
+    fn an_empty_block_is_one_token() {
+        assert_eq!(decode_block(&[0x00], 0).unwrap(), b"");
+        assert!(decode_block(&[0x00], 1).is_err());
+    }
+
+    /// A match may reach back to the very first byte, and end exactly at the
+    /// stated length.
+    #[test]
+    fn a_match_from_the_first_byte_to_the_last() {
+        let block = [0x40, 1, 2, 3, 4, 4, 0, 0x00];
+        assert_eq!(decode_block(&block, 8).unwrap(), [1, 2, 3, 4, 1, 2, 3, 4]);
+        assert!(decode_block(&block, 7).is_err());
+        // The literals after a match must not run past the length either.
+        assert!(decode_block(&[0x40, 1, 2, 3, 4, 4, 0, 0x10, 9], 8).is_err());
+    }
 }

@@ -597,73 +597,212 @@ mod tests {
         out.extend(s.as_bytes());
     }
 
+    /// One change form for [`Spec`]: its refId bytes, flags, type byte and
+    /// data, and whether the data is stored zlib-compressed.
+    #[derive(Clone)]
+    pub(crate) struct FormSpec {
+        pub r: [u8; 3],
+        pub flags: u32,
+        pub ty: u8,
+        pub data: Vec<u8>,
+        pub zlib: bool,
+    }
+
+    /// A save, built byte by byte: the header (version 12 unless said),
+    /// a 2 by 1 screenshot, and a body of the plugin block, the location
+    /// table, the change forms and the form id array, stored as the
+    /// compression says. The location table's offsets count from the start
+    /// of the file as if the body were stored as it is.
+    #[derive(Clone)]
+    pub(crate) struct Spec {
+        pub version: u32,
+        pub compression: u16,
+        pub form_version: u8,
+        pub plugins: Vec<String>,
+        /// `None` writes no light plugin list at all.
+        pub light: Option<Vec<String>>,
+        /// Bytes after the lists, still inside the plugin block.
+        pub plugin_tail: Vec<u8>,
+        pub sex: u16,
+        pub form_ids: Vec<u32>,
+        pub forms: Vec<FormSpec>,
+    }
+
+    impl Default for Spec {
+        fn default() -> Self {
+            Spec {
+                version: 12,
+                compression: 0,
+                form_version: 78,
+                plugins: vec!["Skyrim.esm".into(), "Mod.esp".into()],
+                light: Some(vec!["Light.esl".into()]),
+                plugin_tail: Vec::new(),
+                sex: 1,
+                form_ids: Vec::new(),
+                forms: Vec::new(),
+            }
+        }
+    }
+
+    /// Literals only, as one LZ4 sequence: a valid block of any length.
+    pub(crate) fn lz4_literals(data: &[u8]) -> Vec<u8> {
+        let n = data.len();
+        let mut out = vec![(n.min(15) as u8) << 4];
+        if n >= 15 {
+            let mut rest = n - 15;
+            while rest >= 255 {
+                out.push(255);
+                rest -= 255;
+            }
+            out.push(rest as u8);
+        }
+        out.extend(data);
+        out
+    }
+
+    pub(crate) fn zlib(data: &[u8]) -> Vec<u8> {
+        miniz_oxide::deflate::compress_to_vec_zlib(data, 6)
+    }
+
+    impl Spec {
+        /// Where the body starts: what the location table counts from.
+        pub fn base(&self) -> usize {
+            self.header().len() + MAGIC.len() + 4 + self.shot_len()
+        }
+
+        fn shot_len(&self) -> usize {
+            if self.version >= 12 {
+                8
+            } else {
+                6
+            }
+        }
+
+        fn header(&self) -> Vec<u8> {
+            let mut head = Vec::new();
+            head.extend(self.version.to_le_bytes());
+            head.extend(7u32.to_le_bytes());
+            wstr(&mut head, "Someone");
+            head.extend(3u32.to_le_bytes());
+            wstr(&mut head, "Somewhere");
+            wstr(&mut head, "000.01.02");
+            wstr(&mut head, "NordRace");
+            head.extend(self.sex.to_le_bytes());
+            head.extend(0f32.to_le_bytes());
+            head.extend(100f32.to_le_bytes());
+            head.extend(0u64.to_le_bytes());
+            head.extend(2u32.to_le_bytes());
+            head.extend(1u32.to_le_bytes());
+            if self.version >= 12 {
+                head.extend(self.compression.to_le_bytes());
+            }
+            head
+        }
+
+        /// The body as it is once decompressed, and where its location
+        /// table is in it.
+        pub fn body(&self) -> (Vec<u8>, usize) {
+            let base = self.base();
+            let mut body = vec![self.form_version];
+            let mut pl = vec![self.plugins.len() as u8];
+            for p in &self.plugins {
+                wstr(&mut pl, p);
+            }
+            if let Some(light) = &self.light {
+                pl.extend((light.len() as u16).to_le_bytes());
+                for p in light {
+                    wstr(&mut pl, p);
+                }
+            }
+            pl.extend(&self.plugin_tail);
+            body.extend((pl.len() as u32).to_le_bytes());
+            body.extend(pl);
+            let table_at = body.len();
+            body.extend([0u8; 100]);
+            let forms_at = body.len();
+            for f in &self.forms {
+                let stored = if f.zlib {
+                    zlib(&f.data)
+                } else {
+                    f.data.clone()
+                };
+                let raw = if f.zlib { f.data.len() } else { 0 };
+                body.extend(f.r);
+                body.extend(f.flags.to_le_bytes());
+                body.push(f.ty);
+                body.push(78);
+                match f.ty >> 6 {
+                    0 => body.extend([stored.len() as u8, raw as u8]),
+                    1 => {
+                        body.extend((stored.len() as u16).to_le_bytes());
+                        body.extend((raw as u16).to_le_bytes());
+                    }
+                    _ => {
+                        body.extend((stored.len() as u32).to_le_bytes());
+                        body.extend((raw as u32).to_le_bytes());
+                    }
+                }
+                body.extend(stored);
+            }
+            let ids_at = body.len();
+            body.extend((self.form_ids.len() as u32).to_le_bytes());
+            for f in &self.form_ids {
+                body.extend(f.to_le_bytes());
+            }
+            let put = |body: &mut Vec<u8>, i: usize, v: u32| {
+                body[table_at + 4 * i..table_at + 4 * i + 4].copy_from_slice(&v.to_le_bytes())
+            };
+            put(&mut body, 0, (base + ids_at) as u32);
+            put(&mut body, 4, (base + forms_at) as u32);
+            put(&mut body, 9, self.forms.len() as u32);
+            (body, table_at)
+        }
+
+        /// The whole file, with this body stored as the compression says.
+        pub fn with_body(&self, body: &[u8]) -> Vec<u8> {
+            let head = self.header();
+            let mut out = MAGIC.to_vec();
+            out.extend((head.len() as u32).to_le_bytes());
+            out.extend(head);
+            out.extend(&[1, 2, 3, 4, 5, 6, 7, 8][..self.shot_len()]);
+            let packed = match self.compression {
+                0 => {
+                    out.extend(body);
+                    return out;
+                }
+                1 => zlib(body),
+                _ => lz4_literals(body),
+            };
+            out.extend((body.len() as u32).to_le_bytes());
+            out.extend((packed.len() as u32).to_le_bytes());
+            out.extend(packed);
+            out
+        }
+
+        pub fn bytes(&self) -> Vec<u8> {
+            self.with_body(&self.body().0)
+        }
+    }
+
     /// A Special Edition save with no compression, two plugins, one light
     /// plugin, the given form ids and change forms (each its refId bytes,
     /// flags, type byte and data).
     pub(crate) fn build(form_ids: &[u32], forms: &[([u8; 3], u32, u8, Vec<u8>)]) -> Vec<u8> {
-        let mut head = Vec::new();
-        head.extend(12u32.to_le_bytes());
-        head.extend(7u32.to_le_bytes());
-        wstr(&mut head, "Someone");
-        head.extend(3u32.to_le_bytes());
-        wstr(&mut head, "Somewhere");
-        wstr(&mut head, "000.01.02");
-        wstr(&mut head, "NordRace");
-        head.extend(1u16.to_le_bytes());
-        head.extend(0f32.to_le_bytes());
-        head.extend(100f32.to_le_bytes());
-        head.extend(0u64.to_le_bytes());
-        head.extend(2u32.to_le_bytes());
-        head.extend(1u32.to_le_bytes());
-        head.extend(0u16.to_le_bytes());
-        let mut out = MAGIC.to_vec();
-        out.extend((head.len() as u32).to_le_bytes());
-        out.extend(head);
-        out.extend([1, 2, 3, 4, 5, 6, 7, 8]);
-        let base = out.len();
-
-        let mut body = vec![78u8];
-        let mut pl = vec![2u8];
-        wstr(&mut pl, "Skyrim.esm");
-        wstr(&mut pl, "Mod.esp");
-        pl.extend(1u16.to_le_bytes());
-        wstr(&mut pl, "Light.esl");
-        body.extend((pl.len() as u32).to_le_bytes());
-        body.extend(pl);
-        let table_at = body.len();
-        body.extend([0u8; 100]);
-        let forms_at = body.len();
-        for (r, flags, ty, data) in forms {
-            body.extend(r);
-            body.extend(flags.to_le_bytes());
-            body.push(*ty);
-            body.push(78);
-            match ty >> 6 {
-                0 => body.extend([data.len() as u8, 0]),
-                1 => {
-                    body.extend((data.len() as u16).to_le_bytes());
-                    body.extend(0u16.to_le_bytes());
-                }
-                _ => {
-                    body.extend((data.len() as u32).to_le_bytes());
-                    body.extend(0u32.to_le_bytes());
-                }
-            }
-            body.extend(data);
+        Spec {
+            form_ids: form_ids.to_vec(),
+            forms: forms
+                .iter()
+                .map(|(r, flags, ty, data)| FormSpec {
+                    r: *r,
+                    flags: *flags,
+                    ty: *ty,
+                    data: data.clone(),
+                    zlib: false,
+                })
+                .collect(),
+            ..Spec::default()
         }
-        let ids_at = body.len();
-        body.extend((form_ids.len() as u32).to_le_bytes());
-        for f in form_ids {
-            body.extend(f.to_le_bytes());
-        }
-        let put = |body: &mut Vec<u8>, i: usize, v: u32| {
-            body[table_at + 4 * i..table_at + 4 * i + 4].copy_from_slice(&v.to_le_bytes())
-        };
-        put(&mut body, 0, (base + ids_at) as u32);
-        put(&mut body, 4, (base + forms_at) as u32);
-        put(&mut body, 9, forms.len() as u32);
-        out.extend(body);
-        out
+        .bytes()
     }
 
     #[test]
@@ -852,5 +991,470 @@ mod tests {
         let mut r = Reader::new(&[2, 0, b'h', 0xE9]);
         assert_eq!(r.wstring().unwrap(), "h\u{e9}");
         assert!(Reader::new(&[5, 0, b'h']).wstring().is_err());
+    }
+
+    fn form(r: [u8; 3], ty: u8, data: Vec<u8>) -> FormSpec {
+        FormSpec {
+            r,
+            flags: 0x20,
+            ty,
+            data,
+            zlib: false,
+        }
+    }
+
+    /// A save with something in each of its tables.
+    fn full_spec() -> Spec {
+        Spec {
+            form_ids: vec![0x0100_0ABC, 0xFE00_0234, 0x0000_0007],
+            forms: vec![
+                form([0x40, 0, 7], KIND_NPC, vec![9; 5]),
+                form([0, 0, 1], 0x40 | KIND_ACHR, (0..=255).collect()),
+                form([0, 0, 2], 0x80, vec![]),
+            ],
+            ..Spec::default()
+        }
+    }
+
+    fn same_save(a: &Save, b: &Save) {
+        assert_eq!(a.form_version(), b.form_version());
+        assert_eq!(a.plugins(), b.plugins());
+        assert_eq!(a.light_plugins(), b.light_plugins());
+        assert_eq!(a.form_ids(), b.form_ids());
+        assert_eq!(a.change_forms(), b.change_forms());
+        assert_eq!(a.body(), b.body());
+        for c in a.change_forms() {
+            assert_eq!(a.data(c).unwrap(), b.data(c).unwrap());
+        }
+    }
+
+    #[test]
+    fn zlib_and_lz4_bodies_read_as_the_body_stored_as_it_is() {
+        let stored = full_spec();
+        let plain = Save::read(&stored.bytes()).unwrap();
+        assert_eq!(plain.form_ids(), [0x0100_0ABC, 0xFE00_0234, 7]);
+        for (c, kind) in [(1, Compression::Zlib), (2, Compression::Lz4)] {
+            let spec = Spec {
+                compression: c,
+                ..stored.clone()
+            };
+            let s = Save::read(&spec.bytes()).unwrap();
+            assert_eq!(s.header().compression, kind);
+            same_save(&s, &plain);
+        }
+    }
+
+    /// The location table's offsets count from where the body starts as if
+    /// it were stored as it is: in a compressed save the eight bytes of
+    /// lengths before it are not counted (found from the real saves).
+    #[test]
+    fn compressed_offsets_do_not_count_the_eight_length_bytes() {
+        for c in [1, 2] {
+            let spec = Spec {
+                compression: c,
+                ..full_spec()
+            };
+            let (mut body, table) = spec.body();
+            assert_eq!(
+                Save::read(&spec.with_body(&body)).unwrap().form_ids(),
+                [0x0100_0ABC, 0xFE00_0234, 7]
+            );
+            // The same body with its offsets counting those eight bytes is
+            // another save: what it points at is eight bytes on.
+            for field in [0, 4] {
+                let at = table + 4 * field;
+                let v = u32::from_le_bytes(body[at..at + 4].try_into().unwrap());
+                body[at..at + 4].copy_from_slice(&(v + 8).to_le_bytes());
+            }
+            let shifted = Save::read(&spec.with_body(&body));
+            assert!(
+                shifted.as_ref().map(|s| s.form_ids().to_vec()).ok()
+                    != Some(vec![0x0100_0ABC, 0xFE00_0234, 7]),
+                "compression {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_compressed_body_must_come_out_at_its_stated_length() {
+        for c in [1u16, 2] {
+            let spec = Spec {
+                compression: c,
+                ..full_spec()
+            };
+            let good = spec.bytes();
+            let at = header_only(&good).unwrap().body_start;
+            let raw = u32::from_le_bytes(good[at..at + 4].try_into().unwrap());
+            for stated in [raw - 1, raw + 1] {
+                let mut b = good.clone();
+                b[at..at + 4].copy_from_slice(&stated.to_le_bytes());
+                assert!(
+                    matches!(Save::read(&b), Err(SaveError::Corrupt(_))),
+                    "compression {c}, {stated} for {raw}"
+                );
+            }
+        }
+    }
+
+    /// The bytes of a compressed save whose body claims `raw` bytes from
+    /// `packed`.
+    fn claiming(compression: u16, raw: u32, packed: &[u8]) -> Vec<u8> {
+        let spec = Spec {
+            compression,
+            ..Spec::default()
+        };
+        let mut b = spec.bytes();
+        b.truncate(spec.base());
+        b.extend(raw.to_le_bytes());
+        b.extend((packed.len() as u32).to_le_bytes());
+        b.extend(packed);
+        b
+    }
+
+    /// An LZ4 block grows at most 255 times: a claim of more is refused
+    /// before decoding, one of exactly that much is decoded (and here fails
+    /// for want of bytes).
+    #[test]
+    fn an_lz4_body_may_claim_255_times_its_input_and_no_more() {
+        for (raw, packed) in [(255, 1), (509, 1), (510, 2)] {
+            let b = claiming(2, raw, &vec![0xF0; packed]);
+            assert_eq!(Save::read(&b).err(), Some(SaveError::Truncated), "{raw}");
+        }
+        for (raw, packed) in [(510, 1), (1_000_000, 2)] {
+            let b = claiming(2, raw, &vec![0xF0; packed]);
+            assert!(
+                matches!(Save::read(&b), Err(SaveError::Corrupt(m)) if m.contains("expand")),
+                "{raw}"
+            );
+        }
+    }
+
+    /// 256 MiB is the most a body may claim; zlib's claims are bounded by
+    /// it alone (its input is garbage here, so a claim within it fails to
+    /// inflate).
+    #[test]
+    fn a_body_may_claim_256_mib_and_no_more() {
+        let cap = 256u32 << 20;
+        for c in [1, 2] {
+            for raw in [cap + 1, u32::MAX] {
+                assert!(
+                    matches!(
+                        Save::read(&claiming(c, raw, &[0; 4])),
+                        Err(SaveError::Unsupported(_))
+                    ),
+                    "compression {c}, {raw}"
+                );
+            }
+        }
+        assert_eq!(
+            Save::read(&claiming(1, cap, &[0; 4])).err(),
+            Some(SaveError::Corrupt("zlib body".into()))
+        );
+    }
+
+    #[test]
+    fn header_versions_and_compression_types() {
+        for v in [6, 10, 11, 13, 0, u32::MAX] {
+            let b = Spec {
+                version: v,
+                ..Spec::default()
+            }
+            .bytes();
+            assert!(
+                matches!(header_only(&b), Err(SaveError::Unsupported(_))),
+                "version {v}"
+            );
+        }
+        // The original game's saves: three bytes a pixel, no compression
+        // field, the body as it is.
+        for v in [7, 8, 9] {
+            let spec = Spec {
+                version: v,
+                ..full_spec()
+            };
+            let s = Save::read(&spec.bytes()).unwrap();
+            assert_eq!(s.header().compression, Compression::None);
+            assert_eq!(s.screenshot().bytes_per_pixel, 3);
+            assert_eq!(s.screenshot().pixels, [1, 2, 3, 4, 5, 6]);
+            assert_eq!(s.form_ids(), [0x0100_0ABC, 0xFE00_0234, 7]);
+        }
+        let s = Save::read(&full_spec().bytes()).unwrap();
+        assert_eq!(s.screenshot().bytes_per_pixel, 4);
+        assert_eq!(s.screenshot().pixels.len(), 8);
+        for c in [3, 0xFFFF] {
+            let b = Spec {
+                compression: c,
+                ..Spec::default()
+            }
+            .bytes();
+            assert!(
+                matches!(header_only(&b), Err(SaveError::Unsupported(_))),
+                "{c}"
+            );
+        }
+    }
+
+    /// From form version 78 the light plugin list follows the full list
+    /// inside the plugin block's size; a block that ends after the full list
+    /// has none, and nothing may be left over.
+    #[test]
+    fn the_light_plugin_list_is_inside_the_plugin_block_from_form_version_78() {
+        let read = |form_version, light: Option<Vec<String>>, tail: &[u8]| {
+            Save::read(
+                &Spec {
+                    form_version,
+                    light,
+                    plugin_tail: tail.to_vec(),
+                    ..full_spec()
+                }
+                .bytes(),
+            )
+        };
+        let two = Some(vec!["A.esl".to_string(), "B.esl".to_string()]);
+        let s = read(78, two.clone(), &[]).unwrap();
+        assert_eq!(s.plugins(), ["Skyrim.esm", "Mod.esp"]);
+        assert_eq!(s.light_plugins(), ["A.esl", "B.esl"]);
+        assert_eq!(read(79, two.clone(), &[]).unwrap().light_plugins().len(), 2);
+        // The light list comes in from the block, so the table after it
+        // still reads.
+        assert_eq!(s.form_ids().len(), 3);
+        let s = read(78, None, &[]).unwrap();
+        assert!(s.light_plugins().is_empty());
+        assert_eq!(s.form_ids().len(), 3);
+        // Before 78 there is no light list: two bytes more are left over,
+        // not an empty list.
+        let s = read(74, None, &[]).unwrap();
+        assert!(s.light_plugins().is_empty());
+        for tail in [&[0u8, 0][..], &[0], &[0, 0, 0]] {
+            assert!(
+                matches!(read(74, None, tail), Err(SaveError::Corrupt(_))),
+                "{tail:?}"
+            );
+        }
+        // At 78, a byte past the light list, or one byte where a count
+        // would be, is left over.
+        assert!(matches!(read(78, two, &[0]), Err(SaveError::Corrupt(_))));
+        assert!(matches!(read(78, None, &[0]), Err(SaveError::Corrupt(_))));
+        // A light list longer than its block is cut off by the block.
+        let b = Spec {
+            light: Some(vec!["A.esl".into()]),
+            ..full_spec()
+        };
+        let (mut body, _) = b.body();
+        let count_at = 1 + 4 + 1 + (2 + 10) + (2 + 7);
+        body[count_at] = 2;
+        assert_eq!(
+            Save::read(&b.with_body(&body)).err(),
+            Some(SaveError::Truncated)
+        );
+    }
+
+    /// An empty change form table may start where the body ends.
+    #[test]
+    fn a_table_may_start_at_the_very_end_of_the_body() {
+        let spec = Spec {
+            form_ids: vec![1, 2],
+            ..Spec::default()
+        };
+        let (mut body, table) = spec.body();
+        let end = (spec.base() + body.len()) as u32;
+        body[table + 16..table + 20].copy_from_slice(&end.to_le_bytes());
+        let s = Save::read(&spec.with_body(&body)).unwrap();
+        assert!(s.change_forms().is_empty());
+        assert_eq!(s.form_ids(), [1, 2]);
+        // One past it is outside.
+        body[table + 16..table + 20].copy_from_slice(&(end + 1).to_le_bytes());
+        assert!(matches!(
+            Save::read(&spec.with_body(&body)),
+            Err(SaveError::Corrupt(_))
+        ));
+    }
+
+    /// Counts that the bytes left could never hold are refused before
+    /// anything is allocated for them (a panic or an abort otherwise).
+    #[test]
+    fn counts_past_what_is_left_are_refused_before_allocating() {
+        let spec = Spec {
+            form_ids: vec![1],
+            forms: vec![form([0, 0, 1], 0, vec![1, 2])],
+            ..Spec::default()
+        };
+        let (body, table) = spec.body();
+        let ids_at =
+            u32::from_le_bytes(body[table..table + 4].try_into().unwrap()) as usize - spec.base();
+        for n in [u32::MAX, 0x4000_0000, 2] {
+            let mut b = body.clone();
+            b[ids_at..ids_at + 4].copy_from_slice(&n.to_le_bytes());
+            assert_eq!(
+                Save::read(&spec.with_body(&b)).err(),
+                Some(SaveError::Truncated),
+                "{n} form ids"
+            );
+            let mut b = body.clone();
+            b[table + 36..table + 40].copy_from_slice(&n.to_le_bytes());
+            assert_eq!(
+                Save::read(&spec.with_body(&b)).err(),
+                Some(SaveError::Truncated),
+                "{n} change forms"
+            );
+        }
+        // Exactly what is left is read.
+        assert_eq!(Save::read(&spec.bytes()).unwrap().form_ids(), [1]);
+    }
+
+    #[test]
+    fn a_change_form_is_found_by_its_kind_as_well_as_its_form() {
+        let spec = Spec {
+            forms: vec![
+                form([0x40, 0, 0x14], KIND_NPC, vec![1]),
+                form([0x40, 0, 0x14], KIND_ACHR, vec![2]),
+                form([0x40, 0, 0x15], KIND_ACHR, vec![3]),
+            ],
+            ..Spec::default()
+        };
+        let s = Save::read(&spec.bytes()).unwrap();
+        let at = |id| {
+            Form::Plugin(FormRef {
+                plugin: "Skyrim.esm".into(),
+                id,
+            })
+        };
+        let data = |id, kind| s.change_form(&at(id), kind).map(|c| s.data(c).unwrap()[0]);
+        assert_eq!(data(0x14, KIND_NPC), Some(1));
+        assert_eq!(data(0x14, KIND_ACHR), Some(2));
+        assert_eq!(data(0x15, KIND_ACHR), Some(3));
+        assert_eq!(data(0x15, KIND_NPC), None);
+        assert_eq!(data(0x16, KIND_ACHR), None);
+    }
+
+    #[test]
+    fn compressed_change_form_data_is_inflated_to_its_stated_length() {
+        let data: Vec<u8> = (0..300u32).map(|i| (i * 7) as u8).collect();
+        let mut zipped = form([0x40, 0, 7], 0x40 | KIND_NPC, data.clone());
+        zipped.zlib = true;
+        let spec = Spec {
+            forms: vec![zipped, form([0x40, 0, 8], KIND_NPC, vec![5, 6])],
+            ..Spec::default()
+        };
+        let s = Save::read(&spec.bytes()).unwrap();
+        let c = s.change_forms()[0];
+        assert_eq!(c.raw_length, 300);
+        assert!(c.length < 300);
+        let out = s.data(&c).unwrap();
+        assert!(matches!(out, std::borrow::Cow::Owned(_)));
+        assert_eq!(&*out, &data[..]);
+        // Stored as it is, the data is the body's own bytes.
+        let c1 = s.change_forms()[1];
+        assert!(matches!(
+            s.data(&c1).unwrap(),
+            std::borrow::Cow::Borrowed(&[5, 6])
+        ));
+        // A stated length either way of what it inflates to is refused, as
+        // is one over the body's cap.
+        for raw in [299, 301, MAX_BODY + 1] {
+            let wrong = ChangeForm {
+                raw_length: raw,
+                ..c
+            };
+            assert!(
+                matches!(s.data(&wrong), Err(SaveError::Corrupt(_))),
+                "{raw}"
+            );
+        }
+        // Data that runs past the body.
+        let past = ChangeForm {
+            length: s.body().len(),
+            ..c
+        };
+        assert_eq!(s.data(&past).err(), Some(SaveError::Truncated));
+    }
+
+    /// Resolution at the edges: index 0, the last index, one past it; the
+    /// light plugin's twelve bits; forms made in game.
+    #[test]
+    fn ref_ids_at_the_edges() {
+        let plugins: Vec<String> = (0..3).map(|i| format!("P{i}.esp")).collect();
+        let light: Vec<String> = (0..0x1000).map(|i| format!("L{i:03X}.esl")).collect();
+        let ids = [
+            0x0200_0001,
+            0xFEAB_C123,
+            0xFEFF_FFFF,
+            0xFE00_0000,
+            0xFF12_3456,
+            0x0300_0001,
+        ];
+        let r = |v: u32| resolve(RefId(v), &ids, &plugins, &light);
+        let at = |p: &str, id| {
+            Ok(Form::Plugin(FormRef {
+                plugin: p.into(),
+                id,
+            }))
+        };
+        assert_eq!(r(0), Ok(Form::None));
+        assert_eq!(r(1), at("P2.esp", 1));
+        assert_eq!(r(2), at("LABC.esl", 0x123));
+        assert_eq!(r(3), at("LFFF.esl", 0xFFF));
+        assert_eq!(r(4), at("L000.esl", 0));
+        assert_eq!(r(5), Ok(Form::Created(0xFF12_3456)));
+        // The last index names a plugin past the list.
+        assert!(matches!(r(6), Err(SaveError::Corrupt(_))));
+        assert!(matches!(r(7), Err(SaveError::Corrupt(_))));
+        assert!(matches!(r(0x3F_FFFF), Err(SaveError::Corrupt(_))));
+        // With one light plugin fewer, 0xFFF is past the list.
+        assert!(matches!(
+            form_of(0xFEFF_F000, &plugins, &light[..0xFFF]),
+            Err(SaveError::Corrupt(_))
+        ));
+        assert_eq!(
+            form_of(0xFEFF_E000, &plugins, &light[..0xFFF]),
+            at("LFFE.esl", 0)
+        );
+        // Kind 1 is the first plugin's, all 22 bits of it; kind 2 made in
+        // game, under 0xFF.
+        assert_eq!(r(0x7F_FFFF), at("P0.esp", 0x3F_FFFF));
+        assert_eq!(r(0x40_0000), at("P0.esp", 0));
+        assert_eq!(r(0xBF_FFFF), Ok(Form::Created(0xFF3F_FFFF)));
+        assert!(r(0xC0_0000).is_err());
+        assert_eq!(
+            resolve(RefId(0x40_0007), &[], &[], &[]),
+            at("Skyrim.esm", 7)
+        );
+        // An array of one: index 1 is all there is.
+        assert_eq!(resolve(RefId(1), &[7], &plugins, &light), at("P0.esp", 7));
+        assert!(resolve(RefId(2), &[7], &plugins, &light).is_err());
+    }
+
+    #[test]
+    fn vsvals_at_the_edges_of_their_sizes() {
+        let v = |b: &[u8]| {
+            let mut r = Reader::new(b);
+            r.vsval().map(|v| (v, r.left()))
+        };
+        assert_eq!(v(&[0x00]), Ok((0, 0)));
+        assert_eq!(v(&[0xFC, 9]), Ok((63, 1)));
+        assert_eq!(v(&[0x01, 0x01]), Ok((0x40, 0)));
+        assert_eq!(v(&[0xFD, 0xFF]), Ok((0x3FFF, 0)));
+        assert_eq!(v(&[0x02, 0x00, 0x01]), Ok((0x4000, 0)));
+        assert_eq!(v(&[0xFE, 0xFF, 0xFF, 9]), Ok((0x3F_FFFF, 1)));
+        assert!(matches!(
+            v(&[0xFF, 0xFF, 0xFF, 0xFF]),
+            Err(SaveError::Corrupt(_))
+        ));
+        assert_eq!(v(&[]), Err(SaveError::Truncated));
+        assert_eq!(v(&[0x01]), Err(SaveError::Truncated));
+        assert_eq!(v(&[0x02, 0]), Err(SaveError::Truncated));
+    }
+
+    #[test]
+    fn a_reader_may_start_at_the_end_but_not_past_it() {
+        let b = [1, 2, 3];
+        assert_eq!(Reader::at(&b, 3).unwrap().left(), 0);
+        assert!(Reader::at(&b, 4).is_err());
+        let mut r = Reader::new(&b);
+        assert!(r.take(usize::MAX).is_err());
+        assert_eq!(r.check_count(3, 1), Ok(3));
+        assert!(r.check_count(4, 1).is_err());
+        assert!(r.check_count(usize::MAX, 2).is_err());
+        assert_eq!(r.check_count(1, 3), Ok(1));
     }
 }
