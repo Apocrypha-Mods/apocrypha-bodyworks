@@ -126,6 +126,25 @@ pub(crate) fn shader_of(nif: &Nif, block: usize) -> Option<usize> {
     block_of(nif, shader, &["BSLightingShaderProperty"])
 }
 
+/// Whether the shape at `block` is drawn see-through where its texture's
+/// alpha says so: it links an alpha property (hair, hairlines, brows,
+/// lashes).
+pub fn see_through(nif: &Nif, block: usize) -> bool {
+    let stream = nif.header.stream.version;
+    let alpha = if nif.kind_of(block) == "NiTriShape" {
+        NiTriShape::read(&nif.blocks[block].data, stream)
+            .ok()
+            .and_then(|s| s.alpha)
+            .unwrap_or(-1)
+    } else {
+        match TriShape::read(&nif.blocks[block].data, stream) {
+            Ok(s) => s.alpha,
+            Err(_) => return false,
+        }
+    };
+    block_of(nif, alpha, &["NiAlphaProperty"]).is_some()
+}
+
 /// The other shapes of the file drawn by the same lighting as the shape at
 /// `block`: a change to how it takes light is a change to theirs.
 pub fn look_shared(nif: &Nif, block: usize) -> Vec<usize> {

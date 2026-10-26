@@ -1280,6 +1280,7 @@ impl State {
                 "triangles": triangles,
                 "uvs": uvs,
                 "textures": m.textures,
+                "seeThrough": mesh::see_through(&nif, m.block),
                 "lookShared": mesh::look_shared(&nif, m.block)
                     .into_iter()
                     .filter_map(|at| mesh::name(&nif, at))
