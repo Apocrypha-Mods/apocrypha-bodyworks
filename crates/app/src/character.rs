@@ -160,6 +160,9 @@ impl Making {
         if self.records.is_some() {
             return Err("The save's plugins have been read already.".into());
         }
+        // Every piece is checked before any is taken, so a batch that is
+        // wrong leaves every plugin where it was.
+        let mut checked = Vec::with_capacity(pieces.len());
         let mut from = 0usize;
         for piece in pieces {
             let Some(at) = self
@@ -172,15 +175,28 @@ impl Making {
                     piece.plugin
                 ));
             };
-            let Some(length) = piece.length else {
+            if checked.iter().any(|(a, _)| *a == at) {
+                return Err(format!("{} came twice in one batch.", piece.plugin));
+            }
+            let bytes = match piece.length {
+                None => None,
+                Some(length) => {
+                    let to = from
+                        .checked_add(length)
+                        .filter(|to| *to <= data.len())
+                        .ok_or("The pieces are longer than what came with them.")?;
+                    let bytes = &data[from..to];
+                    from = to;
+                    Some(bytes)
+                }
+            };
+            checked.push((at, bytes));
+        }
+        for ((at, bytes), piece) in checked.into_iter().zip(pieces) {
+            let Some(bytes) = bytes else {
                 self.readings[at] = Reading::Missing("not installed".into());
                 continue;
             };
-            let bytes = from
-                .checked_add(length)
-                .and_then(|to| data.get(from..to))
-                .ok_or("The pieces are longer than what came with them.")?;
-            from += length;
             let reading = std::mem::replace(&mut self.readings[at], Reading::Asked);
             self.readings[at] = match reading {
                 Reading::Asked => match piece.size {
@@ -282,8 +298,13 @@ impl Making {
     /// `apoc_save::look`): `weight` when given, else the player record's.
     fn look(&self, records: &LoadOrder, weight: Option<f32>) -> Look {
         let l = &self.look;
-        let first = self.order.first().map_or("Skyrim.esm", String::as_str);
-        let player = apoc_character::Records::npc(records, &FormRef::new(first, 7));
+        // The player's own record is Skyrim.esm's, as the save spells it.
+        let game = self
+            .order
+            .iter()
+            .find(|p| p.eq_ignore_ascii_case("Skyrim.esm"))
+            .map_or("Skyrim.esm", String::as_str);
+        let player = apoc_character::Records::npc(records, &FormRef::new(game, 7));
         Look {
             race: l
                 .race

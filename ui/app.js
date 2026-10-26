@@ -373,6 +373,7 @@ function showShapes(frame) {
       uvs: f32.slice(s.uvs[0], s.uvs[0] + s.uvs[1]),
       texture: (s.textures || [])[0] || null,
       textures: s.textures || [],
+      seeThrough: Boolean(s.seeThrough),
       colors: s.colors && s.colors[1] ? new Uint8Array(numbers.slice(s.colors[0] * 4, (s.colors[0] + s.colors[1]) * 4)) : new Uint8Array(0),
       parts: (s.parts || []).map((part) => ({
         part: part.part,
@@ -494,7 +495,8 @@ function dyeOf(s, out = false) {
   const tint = Array.isArray(s.look?.tint) ? s.look.tint : null;
   if (s.look?.kind === 6) return tint;
   if (!out) return null;
-  if (s.look?.kind === 5 && tint) return tint.map((c) => c * 2);
+  // A save's character's skin takes the colour its face's tint starts from, so body and face agree.
+  if (s.look?.kind === 5 && tint) return (Array.isArray(state.face?.base) ? state.face.base : tint).map((c) => c * 2);
   const tone = state.work?.skinTone;
   if (s.look?.kind === 4 && Array.isArray(tone) && !tintsFace(s)) return tone.map((c) => c * 2);
   return null;
@@ -2489,22 +2491,32 @@ async function exportObj(sh) {
  * map whose name ends `_msn` keeps directions in the model's own space, which
  * FBX has no way to tell a program, so it is left out.
  */
-async function picturesOf(sh) {
-  const one = async (texture, dye, tinted = false) => {
+async function picturesOf(sh, made = new Map()) {
+  const one = async (texture, dye, tinted = false, opaque = false) => {
     if (!texture) return null;
     const name = textureFile(texture);
+    // A picture two shapes show the same way is made once.
+    const key = `${name}|${tinted}|${dye ? dyeName(dye) : ""}|${opaque}`;
+    if (!made.has(key)) made.set(key, picture(name, dye, tinted, opaque));
+    return made.get(key);
+  };
+  // A shape the game does not draw see-through is given a picture with no
+  // see-through in it: the games keep other things in a texture's alpha
+  // (how a face shines), which another program would take as see-through.
+  const picture = async (name, dye, tinted, opaque) => {
     try {
       const png = await host.request("files.picture", { path: `Data/${name}`, longest: 4096 });
       const face = tinted ? await tintedFace(png) : null;
-      if (face) return { name: `${name.replace(/\.dds$/i, "")} tinted`, png: await pngOf(face) };
-      return { name: dye ? `${name.replace(/\.dds$/i, "")} ${dyeName(dye)}` : name, png: dye ? await dyed(png, dye) : new Uint8Array(png) };
+      if (face) return { name: `${name.replace(/\.dds$/i, "")} tinted`, png: await pngOf(opaque ? solid(face) : face) };
+      if (!dye && !opaque) return { name, png: new Uint8Array(png) };
+      return { name: dye ? `${name.replace(/\.dds$/i, "")} ${dyeName(dye)}` : name, png: await dyed(png, dye, opaque) };
     } catch {
       return null;
     }
   };
   const [colour, normal] = sh.textures;
   const flat = normal && !/_msn\.dds$/i.test(normal);
-  return { colour: await one(colour, dyeOf(sh, true), tintsFace(sh)), normal: flat ? await one(normal, null) : null };
+  return { colour: await one(colour, dyeOf(sh, true), tintsFace(sh), !sh.seeThrough), normal: flat ? await one(normal, null) : null };
 }
 
 /** A colour as a short name, for telling a picture dyed one way from another: "dyed 72604f". */
@@ -2512,31 +2524,34 @@ function dyeName(dye) {
   return `dyed ${dye.map((c) => Math.round(Math.min(1, c) * 255).toString(16).padStart(2, "0")).join("")}`;
 }
 
-/** A PNG with each pixel's colour times `dye`, as the game draws it, as a PNG again. */
-async function dyed(png, dye) {
-  // As the file has it: no colour space changed, and see-through pixels kept apart from their colour.
-  const picture = await createImageBitmap(new Blob([png], { type: "image/png" }), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
-  const canvas = document.createElement("canvas");
-  [canvas.width, canvas.height] = [picture.width, picture.height];
-  const g = canvas.getContext("2d");
-  g.drawImage(picture, 0, 0);
-  const pixels = g.getImageData(0, 0, canvas.width, canvas.height);
+/** A PNG with each pixel's colour times `dye` (or as it is, for none), as the game draws it, and with `opaque` nothing see-through, as a PNG again. */
+async function dyed(png, dye, opaque = false) {
+  const pixels = await pixelsOf(png);
   const d = pixels.data;
-  for (let i = 0; i < d.length; i += 4) {
-    d[i] = Math.min(255, d[i] * dye[0]);
-    d[i + 1] = Math.min(255, d[i + 1] * dye[1]);
-    d[i + 2] = Math.min(255, d[i + 2] * dye[2]);
+  if (dye) {
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = Math.min(255, d[i] * dye[0]);
+      d[i + 1] = Math.min(255, d[i + 1] * dye[1]);
+      d[i + 2] = Math.min(255, d[i + 2] * dye[2]);
+    }
   }
-  g.putImageData(pixels, 0, 0);
-  const blob = await new Promise((done) => canvas.toBlob(done, "image/png"));
-  return new Uint8Array(await blob.arrayBuffer());
+  return pngOf(opaque ? solid(pixels) : pixels);
+}
+
+/** Pixels with nothing see-through left in them. */
+function solid(pixels) {
+  const d = pixels.data;
+  for (let i = 3; i < d.length; i += 4) d[i] = 255;
+  return pixels;
 }
 
 /** Outfit Studio: shapes as they stand, as one FBX file saved where the person says, their pictures inside it. */
 async function exportFbx(shapes, name) {
   try {
     busy("Exporting");
-    const pictures = await Promise.all(shapes.map((sh) => picturesOf(sh)));
+    // One shape's pictures at a time: a few 4K textures decoded at once is a lot for a frame to hold.
+    const made = new Map();
+    const pictures = await inTurns(shapes, 1, (sh) => picturesOf(sh, made));
     state.busy = null;
     render();
     const bytes = fbx.write(
