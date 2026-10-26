@@ -78,6 +78,41 @@ files a vertex's four-byte number holds something in its upper two bytes
 on a few vertices; the lower two count on as everywhere else, so only
 those are read, and the rest is kept to write back.
 
+### A save's character
+
+The Studio opens the player character of a Skyrim Special Edition save as
+a project (New…, "Character from a save…"), to export as FBX with its
+textures or as a mesh. Not something the original programs do; it is
+made from the save, the plugins it was played with and the game's own
+files, read the way the game reads them.
+
+- Saves (`crates/save`): all 88 samples read, the player's face (head
+  parts, sliders, presets, colours, tint layers, its texture set) out of
+  every one (`--example saves`). A save keeps no body weight that could be
+  found in two searches, so it is asked for (the game's own for the player,
+  100, is where it starts).
+- Plugins (`crates/plugin`): read a group at a time, about 2% of
+  Skyrim.esm (4.9 of 250 MB, 119 reads, 34 ms). Which head parts a face
+  has, from its record, its race's and its template's, gives 2,547 of the
+  game's 2,550 pre-built NPC faces exactly; the other three were built
+  before USSEP changed those NPCs (`--example records`).
+- The face (`crates/character`): each part's chargen morphs, its race's
+  and its weight's, found by fitting the game's 2,550 pre-built faces and
+  checked against them (`--example facegen`). Eyes and mouths come out as
+  the game's to about a millionth; heads, brows, beards and hair within a
+  few hundredths of a unit (about half a millimetre), where the game's own
+  morph files were made from earlier meshes than it ships, which no
+  weighing of them closes. Hair takes its colour and skin its tone as the
+  game's faces carry them.
+- The body: the race's skin, the body a mod has put in its place where
+  one has, blended between its lightest and heaviest at the weight; the
+  head stood on it through the race's skeleton, its binds made again so
+  it still follows its bones. Hands, feet and neck meet the body within
+  0.003 units, the neck of a vanilla head on CBBE's body within 0.82
+  (`--example character`). A character builds in 3 to 12 ms.
+- What a save names from a mod that is no longer installed is named and
+  left out; a hair colour from one becomes the race's own.
+
 ### Fallout 4
 
 Held against CBBE for Fallout 4's own shipped meshes (348 sets, the "Curvy"
@@ -114,6 +149,11 @@ browser for the screen's own script, drawing apart):
   with its morph file in 19 ms.
 - The screen: a slider moved in about 1 ms, a brush moved in under 1 ms, a
   stroke's end in about 15 ms.
+- A save's character: opened in 5 seconds in the stand-in mod manager,
+  4.2 of them reading the plugins, in 119 rounds of pieces (one for each
+  top-level group of Skyrim.esm, whose headers each say where the next
+  is), each a request of its own there; its build in the module takes 3
+  to 12 ms. Not yet measured inside the mod manager.
 - FBX files (in Node, the same script): the body written with its 26
   bones in 3 ms; a project of three shapes read back in 19 ms, and the same
   as Blender writes it (compressed) in 45 ms. Three shapes the body's size
@@ -154,6 +194,9 @@ Outfit Studio:
   binary kind: meshes, their texture places, and the bones they follow
   with their weights, a bone the project has not got being made where the
   file stands it; all checked against Blender's own reading and writing.
+  Each shape's texture and normal map go inside the file, as Blender
+  opens them; a normal map kept in the model's own space (`_msn`), which
+  FBX cannot say, is left out.
   FBX saved as text is read too, from 7.1 on: of 118 files that Maya,
   3ds Max and others saved both ways, the 100 with meshes read as their
   binary twins do but four, three whose two saves place things
