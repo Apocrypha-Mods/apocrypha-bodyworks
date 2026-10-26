@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use apoc_nif::geometry::{is_tri_shape, TriShape};
-use apoc_nif::{Nif, NifError};
+use apoc_nif::Nif;
 use apoc_plugin::native::read_file;
 use apoc_plugin::records::{
     Armor, ArmorAddon, Colour, HeadPart, HeadPartKind, Npc, Race, TextureSet, Typed, EXTRA_PART,
@@ -187,20 +187,7 @@ fn facegen_files(dirs: &[PathBuf]) -> BTreeMap<u32, PathBuf> {
 
 fn shape_names(path: &Path) -> Result<BTreeSet<String>, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    // 23 of the game's own FaceGen files have bytes past the NIF's footer,
-    // which apoc-nif refuses; the NIF before them is read.
-    let nif = match Nif::read(&bytes) {
-        Err(NifError::Corrupt(m)) if m.ends_with("bytes after the end") => {
-            let n: usize = m
-                .split(' ')
-                .next()
-                .and_then(|n| n.parse().ok())
-                .unwrap_or(0);
-            Nif::read(&bytes[..bytes.len().saturating_sub(n)])
-        }
-        r => r,
-    }
-    .map_err(|e| e.to_string())?;
+    let nif = Nif::read(&bytes).map_err(|e| e.to_string())?;
     let stream = nif.header.stream.version;
     let mut out = BTreeSet::new();
     for i in 0..nif.blocks.len() {

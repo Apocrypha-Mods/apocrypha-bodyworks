@@ -95,8 +95,10 @@ pub struct Race {
     /// UESP's RACE page leaves this out; it is eight bytes, two formIDs, in
     /// every playable race.
     pub default_hair_colour: [Option<FormRef>; 2],
-    /// `RNAM`: the race whose head morphs this race uses, when it has one
-    /// (the vampire races name their living race).
+    /// `RNAM`: UESP's "armour race", the race whose armour addons this one
+    /// wears. Not the race whose head morphs it uses: that is `NAM8`, not
+    /// read here (the vampire races have no `RNAM` and name their living
+    /// race in `NAM8`; DLC1NordRace has both).
     pub morph_race: Option<FormRef>,
     /// Male, then female.
     pub sexes: [RaceSex; 2],
