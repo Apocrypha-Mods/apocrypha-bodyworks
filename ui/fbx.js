@@ -65,6 +65,10 @@ function value(v) {
     new DataView(b.buffer).setFloat64(0, v, true);
     out.u8(68); // D
     out.bytes(b);
+  } else if (v instanceof Uint8Array) {
+    out.u8(82); // R: bytes as they are, a picture's file
+    out.u32(v.length);
+    out.bytes(v);
   } else if (v instanceof Float64Array || v instanceof Int32Array) {
     out.u8(v instanceof Float64Array ? 100 : 105); // d, i
     out.u32(v.length);
@@ -134,7 +138,9 @@ function degrees(m) {
  * (`{ bones, slots }`: each bone's `name`, `turn`, `at` and `scale` as it
  * stood when the shape was fitted, and for each vertex four pairs of a
  * bone's number and how much it is followed) is written with its bones and
- * how its vertices follow them.
+ * how its vertices follow them. One with `pictures` (`{ colour, normal }`,
+ * each `{ name, png }` or null) is given a material showing them, the
+ * pictures inside the file: one copy of each, however many shapes show it.
  */
 export function write(shapes) {
   const out = new Out();
@@ -148,6 +154,34 @@ export function write(shapes) {
   const bones = new Map();
   let next = 100_000;
   const three = (name, kind, [x, y, z]) => ["P", [name, name, "", kind, real(x), real(y), real(z)]];
+  // Each picture once, by its path, however many shapes show it; named by its
+  // file's name, and that made unique where two folders hold one name.
+  const videos = new Map();
+  const taken = new Set();
+  const video = ({ name, png }) => {
+    const path = name.replace(/\0/g, "").replace(/\\/g, "/").toLowerCase();
+    if (videos.has(path)) return videos.get(path);
+    const id = BigInt(next++);
+    const plain = path.split("/").pop().replace(/\.[^.]*$/, "") || "picture";
+    let key = plain;
+    for (let n = 2; taken.has(key); n++) key = `${plain} ${n}`;
+    taken.add(key);
+    const file = `${key}.png`;
+    objects.push([
+      "Video",
+      [id, `${key}\0\x01Video`, "Clip"],
+      [
+        ["Type", ["Clip"]],
+        ["Properties70", [], [["P", ["Path", "KString", "Url", "", file]]]],
+        ["UseMipMap", [0]],
+        ["Filename", [file]],
+        ["RelativeFilename", [file]],
+        ["Content", [png instanceof Uint8Array ? png : new Uint8Array(png)]],
+      ],
+    ]);
+    videos.set(path, { id, file, key });
+    return videos.get(path);
+  };
   for (const s of shapes) {
     for (const b of s.rig?.bones || []) {
       if (bones.has(b.name)) continue;
@@ -210,6 +244,58 @@ export function write(shapes) {
     objects.push(["Model", [model, `${name}\0\x01Model`, "Mesh"], [["Version", [232]], ["Properties70", [], []]]]);
     joins.push(["C", ["OO", geometry, model]]);
     joins.push(["C", ["OO", model, 0n]]);
+    const shown = [
+      ["DiffuseColor", s.pictures?.colour],
+      ["NormalMap", s.pictures?.normal],
+    ].filter(([, p]) => p && p.png && p.name);
+    if (shown.length) {
+      const material = BigInt(next++);
+      objects.push([
+        "Material",
+        [material, `${name}\0\x01Material`, ""],
+        [
+          ["Version", [102]],
+          ["ShadingModel", ["Phong"]],
+          ["MultiLayer", [0]],
+          ["Properties70", [], [["P", ["DiffuseColor", "Color", "", "A", real(1), real(1), real(1)]], ["P", ["DiffuseFactor", "Number", "", "A", real(1)]]]],
+        ],
+      ]);
+      joins.push(["C", ["OO", material, model]]);
+      made.push([
+        "LayerElementMaterial",
+        [0],
+        [
+          ["Version", [101]],
+          ["Name", [""]],
+          ["MappingInformationType", ["AllSame"]],
+          ["ReferenceInformationType", ["IndexToDirect"]],
+          ["Materials", [Int32Array.of(0)]],
+        ],
+      ]);
+      const layer = made.find((r) => r[0] === "Layer");
+      const element = ["LayerElement", [], [["Type", ["LayerElementMaterial"]], ["TypedIndex", [0]]]];
+      if (layer) layer[2].push(element);
+      else made.push(["Layer", [0], [["Version", [100]], element]]);
+      for (const [slot, picture] of shown) {
+        const v = video(picture);
+        const texture = BigInt(next++);
+        objects.push([
+          "Texture",
+          [texture, `${v.key}\0\x01Texture`, ""],
+          [
+            ["Type", ["TextureVideoClip"]],
+            ["Version", [202]],
+            ["TextureName", [`${v.key}\0\x01Texture`]],
+            ["Media", [`${v.key}\0\x01Video`]],
+            ["FileName", [v.file]],
+            ["RelativeFilename", [v.file]],
+            ["Properties70", [], [["P", ["UseMaterial", "bool", "", "", 1]]]],
+          ],
+        ]);
+        joins.push(["C", ["OP", texture, material, slot]]);
+        joins.push(["C", ["OO", v.id, texture]]);
+      }
+    }
     if (!s.rig?.bones.length) return;
     // Which vertices follow each bone, and by how much.
     const followers = s.rig.bones.map(() => [[], []]);

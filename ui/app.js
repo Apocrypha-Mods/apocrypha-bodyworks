@@ -2366,11 +2366,37 @@ async function exportObj(sh) {
   }
 }
 
-/** Outfit Studio: shapes as they stand, as one FBX file saved where the person says. */
+/**
+ * A shape's pictures for an FBX file, as `{ colour, normal }`, each `{ name, png }`
+ * or null: its texture, and its normal map where that is one FBX can say. A
+ * map whose name ends `_msn` keeps directions in the model's own space, which
+ * FBX has no way to tell a program, so it is left out.
+ */
+async function picturesOf(sh) {
+  const one = async (texture) => {
+    if (!texture) return null;
+    const name = texture.replace(/\\/g, "/").replace(/^\/+/, "");
+    try {
+      const png = await host.request("files.picture", { path: `Data/${name}`, longest: 4096 });
+      return { name, png: new Uint8Array(png) };
+    } catch {
+      return null;
+    }
+  };
+  const [colour, normal] = sh.textures;
+  const flat = normal && !/_msn\.dds$/i.test(normal);
+  return { colour: await one(colour), normal: flat ? await one(normal) : null };
+}
+
+/** Outfit Studio: shapes as they stand, as one FBX file saved where the person says, their pictures inside it. */
 async function exportFbx(shapes, name) {
   try {
+    busy("Exporting");
+    const pictures = await Promise.all(shapes.map((sh) => picturesOf(sh)));
+    state.busy = null;
+    render();
     const bytes = fbx.write(
-      shapes.map((sh) => {
+      shapes.map((sh, i) => {
         // With its bones, where it has any: a shape of a set only looked at has none to give.
         let rig = null;
         if (state.work) {
@@ -2381,11 +2407,12 @@ async function exportFbx(shapes, name) {
             rig = null;
           }
         }
-        return { name: sh.name, positions: sh.now, uvs: sh.uvs, triangles: sh.shown, rig };
+        return { name: sh.name, positions: sh.now, uvs: sh.uvs, triangles: sh.shown, rig, pictures: pictures[i] };
       }),
     );
     await host.request("disk.save", { name: `${name}.fbx`, bytes: bytes.buffer });
   } catch (e) {
+    state.busy = null;
     state.problem = e.message;
     render();
   }
