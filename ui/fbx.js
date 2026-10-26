@@ -278,22 +278,26 @@ export function write(shapes) {
       else made.push(["Layer", [0], [["Version", [100]], element]]);
       for (const [slot, picture] of shown) {
         const v = video(picture);
-        const texture = BigInt(next++);
-        objects.push([
-          "Texture",
-          [texture, `${v.key}\0\x01Texture`, ""],
-          [
-            ["Type", ["TextureVideoClip"]],
-            ["Version", [202]],
-            ["TextureName", [`${v.key}\0\x01Texture`]],
-            ["Media", [`${v.key}\0\x01Video`]],
-            ["FileName", [v.file]],
-            ["RelativeFilename", [v.file]],
-            ["Properties70", [], [["P", ["UseMaterial", "bool", "", "", 1]]]],
-          ],
-        ]);
-        joins.push(["C", ["OP", texture, material, slot]]);
-        joins.push(["C", ["OO", v.id, texture]]);
+        // One texture for each picture too, shared by every material that
+        // shows it: a program reading the file makes an image of each.
+        if (!v.texture) {
+          v.texture = BigInt(next++);
+          objects.push([
+            "Texture",
+            [v.texture, `${v.key}\0\x01Texture`, ""],
+            [
+              ["Type", ["TextureVideoClip"]],
+              ["Version", [202]],
+              ["TextureName", [`${v.key}\0\x01Texture`]],
+              ["Media", [`${v.key}\0\x01Video`]],
+              ["FileName", [v.file]],
+              ["RelativeFilename", [v.file]],
+              ["Properties70", [], [["P", ["UseMaterial", "bool", "", "", 1]]]],
+            ],
+          ]);
+          joins.push(["C", ["OO", v.id, v.texture]]);
+        }
+        joins.push(["C", ["OP", v.texture, material, slot]]);
       }
     }
     if (!s.rig?.bones.length) return;
