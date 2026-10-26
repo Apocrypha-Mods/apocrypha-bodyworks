@@ -591,6 +591,50 @@ pub fn form_of(full: u32, plugins: &[String], light: &[String]) -> Result<Form, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    /// The test build's allocator, which notes the largest allocation each
+    /// thread asks for, so a test can hold a read to allocating no more than
+    /// its input could hold. (A count left unchecked asks for gigabytes,
+    /// which Linux grants without touching, so only this sees it.)
+    struct Noting;
+
+    thread_local! {
+        static LARGEST: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn note(n: usize) {
+        let _ = LARGEST.try_with(|l| l.set(l.get().max(n)));
+    }
+
+    unsafe impl GlobalAlloc for Noting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            note(layout.size());
+            System.alloc(layout)
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            note(layout.size());
+            System.alloc_zeroed(layout)
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            System.dealloc(ptr, layout)
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            note(new_size);
+            System.realloc(ptr, layout, new_size)
+        }
+    }
+
+    #[global_allocator]
+    static NOTING: Noting = Noting;
+
+    /// The largest single allocation `f` made on this thread.
+    pub(crate) fn largest_allocation<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        LARGEST.with(|l| l.set(0));
+        let r = f();
+        (r, LARGEST.with(|l| l.get()))
+    }
 
     fn wstr(out: &mut Vec<u8>, s: &str) {
         out.extend((s.len() as u16).to_le_bytes());
@@ -1247,6 +1291,12 @@ mod tests {
             Save::read(&b.with_body(&body)).err(),
             Some(SaveError::Truncated)
         );
+        // And one of 65,535 is refused before a place is made for them.
+        body[count_at..count_at + 2].copy_from_slice(&u16::MAX.to_le_bytes());
+        let bytes = b.with_body(&body);
+        let (r, largest) = largest_allocation(|| Save::read(&bytes));
+        assert_eq!(r.err(), Some(SaveError::Truncated));
+        assert!(largest <= 4 * bytes.len(), "{largest}");
     }
 
     /// An empty change form table may start where the body ends.
@@ -1283,20 +1333,14 @@ mod tests {
         let ids_at =
             u32::from_le_bytes(body[table..table + 4].try_into().unwrap()) as usize - spec.base();
         for n in [u32::MAX, 0x4000_0000, 2] {
-            let mut b = body.clone();
-            b[ids_at..ids_at + 4].copy_from_slice(&n.to_le_bytes());
-            assert_eq!(
-                Save::read(&spec.with_body(&b)).err(),
-                Some(SaveError::Truncated),
-                "{n} form ids"
-            );
-            let mut b = body.clone();
-            b[table + 36..table + 40].copy_from_slice(&n.to_le_bytes());
-            assert_eq!(
-                Save::read(&spec.with_body(&b)).err(),
-                Some(SaveError::Truncated),
-                "{n} change forms"
-            );
+            for at in [ids_at, table + 36] {
+                let mut b = body.clone();
+                b[at..at + 4].copy_from_slice(&n.to_le_bytes());
+                let b = spec.with_body(&b);
+                let (r, largest) = largest_allocation(|| Save::read(&b));
+                assert_eq!(r.err(), Some(SaveError::Truncated), "{n} at {at}");
+                assert!(largest <= 4 * b.len(), "{largest} bytes for {n} at {at}");
+            }
         }
         // Exactly what is left is read.
         assert_eq!(Save::read(&spec.bytes()).unwrap().form_ids(), [1]);

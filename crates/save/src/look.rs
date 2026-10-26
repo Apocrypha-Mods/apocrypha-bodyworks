@@ -581,7 +581,40 @@ mod tests {
         }
     }
 
-    use crate::tests::{FormSpec, Spec};
+    use crate::tests::{largest_allocation, FormSpec, Spec};
+
+    /// Counts in the face and the NPC's lists are held to what is left
+    /// before anything is allocated for them.
+    #[test]
+    fn face_and_list_counts_are_refused_before_allocating() {
+        let b = face_bytes();
+        // The head part count, the morph count, the preset count.
+        let mut cases = Vec::new();
+        let mut parts = b[..11].to_vec();
+        parts.extend([0xFE, 0xFF, 0xFF]);
+        parts.extend([0; 16]);
+        cases.push(parts);
+        for at in [19, 31] {
+            let mut c = b[..at].to_vec();
+            c.extend(u32::MAX.to_le_bytes());
+            c.extend([0; 16]);
+            cases.push(c);
+        }
+        for c in &cases {
+            let (r, largest) = largest_allocation(|| read_face(&mut Reader::new(c)));
+            assert_eq!(r.err(), Some(SaveError::Truncated), "{c:?}");
+            assert!(largest <= 64, "{largest} bytes");
+        }
+        // The positive case allocates for what is there.
+        let (r, largest) = largest_allocation(|| read_face(&mut Reader::new(&b)));
+        assert_eq!(r.unwrap().morphs.len(), 2);
+        assert!(largest > 0);
+        for bit in [1 << 6, 1 << 4] {
+            let (r, largest) = largest_allocation(|| read_npc(&[0xFE, 0xFF, 0xFF, 0, 0], bit));
+            assert_eq!(r.err(), Some(SaveError::Truncated));
+            assert!(largest <= 64, "{largest} bytes");
+        }
+    }
     use crate::FormRef;
 
     fn sky(id: u32) -> Form {
