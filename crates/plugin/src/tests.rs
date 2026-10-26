@@ -1149,14 +1149,12 @@ fn npc_tint_fields_need_a_tini_before_them() {
     }
 }
 
-/// The `TES4` record's size is held only to the file's length, not to
-/// [`crate::walk::MAX_GROUP`] as a group's is: a file of a few GiB whose
-/// header claims nearly all of it is asked for whole. On wasm32 it is worse:
-/// `need` turns the claimed size plus 24 into a `usize`, which wraps past
-/// 4 GiB, so a 5 GiB file whose header claims `u32::MAX` bytes is asked for
-/// 23 and then sliced to `u32::MAX`, a panic.
+/// The `TES4` record's size is held to [`crate::walk::MAX_GROUP`] as a
+/// group's is, and not only to the file's length: on wasm32 `need` turns the
+/// claimed size plus 24 into a `usize`, which would wrap past 4 GiB, so a
+/// 5 GiB file whose header claimed `u32::MAX` bytes would be asked for 23
+/// and then sliced to `u32::MAX`, a panic.
 #[test]
-#[ignore = "the TES4 record's size is not bounded like a group's (see the comment)"]
 fn a_header_record_claiming_more_than_a_group_may_hold_is_refused() {
     let head = tes4(0, &[]);
     let mut big = head[..24].to_vec();

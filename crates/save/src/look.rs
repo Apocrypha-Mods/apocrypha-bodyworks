@@ -24,7 +24,8 @@
 //! Found from the files: the sex agrees with the header's in every save;
 //! the race agrees with the header's race editor id (through Skyrim.esm's
 //! race records, `--example saves` checks it); the texture set agrees with
-//! the NPC face's; one tint's colour is the face's skin tone; every mask index
+//! the NPC face's; in all but one character's saves (every save of that
+//! one) a tint's colour is the face's skin tone; every mask index
 //! is one of the race's tint masks in Skyrim.esm; strengths are 0 to 1;
 //! and the layers agree across all of one character's saves. What comes
 //! before the block (the inventory and other data UESP marks incomplete) is

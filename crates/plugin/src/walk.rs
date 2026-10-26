@@ -129,7 +129,15 @@ impl Walk {
                 if &h.kind != b"TES4" {
                     return Err(PluginError::NotPlugin);
                 }
-                if h.size as u64 > self.len - HEADER_LEN as u64 {
+                // Held to what a group may be as well as to the file: on a
+                // 32-bit target a larger claim would not fit in a length.
+                if h.size as u64 > MAX_GROUP {
+                    return Err(PluginError::TooLarge(format!(
+                        "a header of {} bytes",
+                        h.size
+                    )));
+                }
+                if h.size as u64 > self.len.saturating_sub(HEADER_LEN as u64) {
                     return Err(PluginError::Truncated);
                 }
                 self.state = State::Tes4(h);
