@@ -99,11 +99,15 @@ files, read the way the game reads them.
 - The face (`crates/character`): each part's chargen morphs, its race's
   and its weight's, found by fitting the game's 2,550 pre-built faces and
   checked against them (`--example facegen`). Eyes and mouths come out as
-  the game's to about a millionth; heads, brows, beards and hair within a
-  few hundredths of a unit (about half a millimetre), where the game's own
-  morph files were made from earlier meshes than it ships, which no
-  weighing of them closes. Hair takes its colour and skin its tone as the
-  game's faces carry them.
+  the game's to about a millionth. The other parts are further off, where
+  the game's own morph files were made from earlier meshes than it ships,
+  which no weighing of them closes: within 0.05 of a unit (under a
+  millimetre) are 2,470 of 2,550 heads, all 2,115 brows, 2,459 of 2,460
+  hairs and 599 of 1,117 beards; 31 heads and 26 beards are over 0.1. Hair takes its colour and skin its tone as the
+  game's faces carry them, and the face its tint layers, laid as the
+  game's baked tints are to within 1 to 2 of 255 on average over 2,292
+  NPCs (`--example tints`); how the face's texture and its tint are then
+  put together was judged by eye, as nothing to measure it by was found.
 - The body: the race's skin, the body a mod has put in its place where
   one has, blended between its lightest and heaviest at the weight; the
   head stood on it through the race's skeleton, its binds made again so

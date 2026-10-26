@@ -296,9 +296,12 @@ pub struct Look {
 }
 
 pub(crate) fn player(save: &Save) -> Result<Look, SaveError> {
+    // The player's forms are Skyrim.esm's, wherever the save lists it.
     let first = save
         .plugins()
-        .first()
+        .iter()
+        .find(|p| p.eq_ignore_ascii_case("Skyrim.esm"))
+        .or_else(|| save.plugins().first())
         .cloned()
         .ok_or_else(|| SaveError::Corrupt("no plugins".into()))?;
     let me = |id| {
