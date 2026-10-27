@@ -1422,9 +1422,17 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 .into_iter()
                 .map(|(plugin, why)| json!({ "plugin": plugin, "why": why }))
                 .collect();
-            Answer::ok(
-                json!({ "pieces": making.pieces(), "files": files, "missingPlugins": missing }),
-            )
+            let bodies: Vec<Value> = making
+                .bodies()
+                .into_iter()
+                .map(|(name, light, heavy)| json!({ "name": name, "light": light, "heavy": heavy }))
+                .collect();
+            Answer::ok(json!({
+                "pieces": making.pieces(),
+                "files": files,
+                "bodies": bodies,
+                "missingPlugins": missing
+            }))
         }
         Request::CharacterFile { path } => match state.making.as_mut() {
             Some(making) => {
@@ -1461,7 +1469,8 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 Ok(mut work) => {
                     work.changed = true;
                     state.work = Some(work);
-                    state.making = None;
+                    // The save is kept while she is the project: she can be
+                    // made again with another body (`CharacterFile` first).
                     match state.working() {
                         Ok(mut answer) => {
                             answer["missing"] = json!(missing);
@@ -1499,6 +1508,7 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
         Request::Preview { set, work } => state.preview(&set, work).unwrap_or_else(Answer::failed),
         Request::Open { set } => {
             state.work = None;
+            state.making = None;
             let opened = state.set(&set).and_then(|found| {
                 let files = |path: &str| state.file(path);
                 Project::open(found, &files)
@@ -1515,6 +1525,7 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
         }
         Request::New { name, path } => {
             state.work = None;
+            state.making = None;
             match Project::from_mesh(&name, &path, data)
                 .map_err(|e| e.to_string())
                 .and_then(Work::of)

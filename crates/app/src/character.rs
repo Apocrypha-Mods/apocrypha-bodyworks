@@ -265,6 +265,23 @@ impl Making {
         apoc_character::needed(&self.look(records, None), records).map_err(|e| e.to_string())
     }
 
+    /// The character's body parts drawn from a lightest and a heaviest
+    /// model, as `(name, lightest, heaviest)` by key: what a body built
+    /// elsewhere can stand in for. Nothing before every plugin is read.
+    pub fn bodies(&self) -> Vec<(String, String, String)> {
+        let Some(records) = self.records.as_ref() else {
+            return Vec::new();
+        };
+        apoc_character::plan::plan(&self.look(records, None), records)
+            .map(|plan| {
+                plan.body
+                    .into_iter()
+                    .filter_map(|b| b.weights.map(|(light, heavy)| (b.name, light, heavy)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The character's skin tone, red, green and blue from 0 to 1.
     pub fn skin_tone(&self) -> [f32; 3] {
         [0, 1, 2].map(|c| f32::from(self.look.skin_tone[c]) / 255.0)
@@ -481,6 +498,20 @@ mod tests {
     /// 2 the skin tone; a woman's only 1), its colours, a face and a face
     /// texture set; and a group of a kind no character needs.
     fn skyrim() -> Vec<u8> {
+        skyrim_with(false)
+    }
+
+    /// The torso's lightest and heaviest models, and a tail of one model.
+    const TORSO_MODEL: &str = "Actors\\Character\\Character Assets\\MaleBody_1.nif";
+    const TORSO_LIGHT: &str = "meshes/actors/character/character assets/malebody_0.nif";
+    const TORSO_HEAVY: &str = "meshes/actors/character/character assets/malebody_1.nif";
+    const FEET_LIGHT: &str = "meshes/actors/character/character assets/malefeet_0.nif";
+    const FEET_HEAVY: &str = "meshes/actors/character/character assets/malefeet_1.nif";
+    const TAIL_KEY: &str = "meshes/actors/character/character assets/maletailargonian.nif";
+
+    /// [`skyrim`], and with `body` the race wears a skin: a torso and feet
+    /// each from a lightest and a heaviest model, and a tail of one.
+    fn skyrim_with(body: bool) -> Vec<u8> {
         let player = rec(
             b"NPC_",
             7,
@@ -490,11 +521,15 @@ mod tests {
                 sub(b"NAM7", &40f32.to_le_bytes()),
             ],
         );
+        let mut race_top = vec![sub(b"EDID", &zs("TestRace"))];
+        if body {
+            race_top.push(sub(b"WNAM", &u32s(&[0xD00])));
+        }
         let race = rec(
             b"RACE",
             0x13746,
             &[
-                sub(b"EDID", &zs("TestRace")),
+                race_top.concat(),
                 sub(b"HCLF", &u32s(&[0xA00, 0xA01])),
                 sub(b"NAM0", &[]),
                 sub(b"MNAM", &[]),
@@ -529,23 +564,68 @@ mod tests {
                 sub(b"PNAM", &u32s(&[1])),
             ],
         );
-        plugin(
-            &[],
-            &[
-                grup(b"WEAP", &[rec(b"WEAP", 0x99, &[sub(b"EDID", &zs("Axe"))])]),
-                grup(b"RACE", &[race]),
-                grup(b"HDPT", &[face]),
-                grup(
-                    b"CLFM",
-                    &[colour(0xA00, [10, 20, 30]), colour(0xA01, [40, 50, 60])],
-                ),
-                grup(b"NPC_", &[player]),
-                grup(
-                    b"TXST",
-                    &[rec(b"TXST", 0xC00, &[sub(b"EDID", &zs("Skin"))])],
-                ),
-            ],
-        )
+        let mut groups = vec![
+            grup(b"WEAP", &[rec(b"WEAP", 0x99, &[sub(b"EDID", &zs("Axe"))])]),
+            grup(b"RACE", &[race]),
+            grup(b"HDPT", &[face]),
+            grup(
+                b"CLFM",
+                &[colour(0xA00, [10, 20, 30]), colour(0xA01, [40, 50, 60])],
+            ),
+            grup(b"NPC_", &[player]),
+            grup(
+                b"TXST",
+                &[rec(b"TXST", 0xC00, &[sub(b"EDID", &zs("Skin"))])],
+            ),
+        ];
+        if body {
+            let addon = |id: u32, name: &str, slot: u32, model: &str| {
+                let mut slots = (1u32 << slot).to_le_bytes().to_vec();
+                slots.extend([0; 4]);
+                rec(
+                    b"ARMA",
+                    id,
+                    &[
+                        sub(b"EDID", &zs(name)),
+                        sub(b"BOD2", &slots),
+                        sub(b"RNAM", &u32s(&[0x13746])),
+                        sub(b"MOD2", &zs(model)),
+                    ],
+                )
+            };
+            groups.push(grup(
+                b"ARMO",
+                &[rec(
+                    b"ARMO",
+                    0xD00,
+                    &[
+                        sub(b"EDID", &zs("SkinNaked")),
+                        sub(b"MODL", &u32s(&[0xD01])),
+                        sub(b"MODL", &u32s(&[0xD02])),
+                        sub(b"MODL", &u32s(&[0xD03])),
+                    ],
+                )],
+            ));
+            groups.push(grup(
+                b"ARMA",
+                &[
+                    addon(0xD01, "NakedTorso", 2, TORSO_MODEL),
+                    addon(
+                        0xD02,
+                        "NakedTail",
+                        10,
+                        "Actors\\Character\\Character Assets\\MaleTailArgonian.nif",
+                    ),
+                    addon(
+                        0xD03,
+                        "NakedFeet",
+                        7,
+                        "Actors\\Character\\Character Assets\\MaleFeet_0.nif",
+                    ),
+                ],
+            ));
+        }
+        plugin(&[], &groups)
     }
 
     /// Mod.esp: the hair colour and the hair the save names.
@@ -1080,10 +1160,10 @@ mod tests {
             work["faceTint"]["masks"],
             json!({ "1": "Actors\\Mask1.dds" })
         );
-        // The project is open and the save let go.
+        // The project is open and the save kept: she can be made again.
         assert_eq!(
-            refused(&mut state, json!({ "op": "character" }), &[]),
-            "No save is being read."
+            ask(&mut state, json!({ "op": "character" }), &[])["shapes"],
+            json!(["TestFace"])
         );
         assert!(ask(
             &mut state,
@@ -1115,5 +1195,247 @@ mod tests {
             refused(&mut state, json!({ "op": "character" }), &[]),
             "No save is being read."
         );
+    }
+
+    /// The save begun and its pieces answered from `have` until none is
+    /// wanted: every `characterPieces` answer, in order.
+    fn read_through(state: &mut State, have: &[(&str, Vec<u8>)]) -> Vec<Value> {
+        let began = ask(state, json!({ "op": "characterSave" }), &player_save());
+        let mut wanted = began["pieces"].clone();
+        let mut answers = Vec::new();
+        for _ in 0..64 {
+            if wanted.as_array().unwrap().is_empty() {
+                return answers;
+            }
+            let (request, data) = pieces_request(&wanted, have);
+            let a = ask(state, request, &data);
+            wanted = a["pieces"].clone();
+            answers.push(a);
+        }
+        panic!("the walk never ended");
+    }
+
+    /// Every plugin, with a Skyrim.esm whose race wears a skin.
+    fn plugins_with_body() -> Vec<(&'static str, Vec<u8>)> {
+        let mut all = plugins();
+        all[0].1 = skyrim_with(true);
+        all
+    }
+
+    #[test]
+    fn the_bodies_are_named_once_the_plugins_are_read_by_the_keys_the_files_are() {
+        let mut state = State::default();
+        let answers = read_through(&mut state, &plugins_with_body());
+        let (last, before) = answers.split_last().unwrap();
+        // While pieces are still wanted, no body is named, as no file is.
+        assert!(!before.is_empty());
+        for a in before {
+            assert_ne!(a["pieces"], json!([]));
+            assert_eq!(a["bodies"], json!([]), "{a}");
+            assert_eq!(a["files"], json!([]), "{a}");
+        }
+        // Settled: the torso and the feet, each by its lightest and its
+        // heaviest; the tail is of one model and is not a body.
+        assert_eq!(
+            last["bodies"],
+            json!([
+                { "name": "NakedTorso", "light": TORSO_LIGHT, "heavy": TORSO_HEAVY },
+                { "name": "NakedFeet", "light": FEET_LIGHT, "heavy": FEET_HEAVY },
+            ])
+        );
+        // The same keys as the files the interface is to fetch.
+        let files: Vec<&str> = last["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f.as_str().unwrap())
+            .collect();
+        for b in last["bodies"].as_array().unwrap() {
+            for k in ["light", "heavy"] {
+                assert!(files.contains(&b[k].as_str().unwrap()), "{k} of {b}");
+            }
+        }
+        assert!(files.contains(&TAIL_KEY), "{files:?}");
+        assert!(!last["bodies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["name"] == "NakedTail"));
+    }
+
+    /// The shapes of a mesh's bytes, by name with their vertex counts.
+    fn shapes_of(bytes: &[u8]) -> Vec<(String, usize)> {
+        let nif = apoc_nif::Nif::read(bytes).unwrap();
+        apoc_nif::mesh::shapes(&nif)
+            .into_iter()
+            .filter_map(|b| apoc_nif::mesh::read(&nif, b).ok())
+            .map(|m| (m.name, m.positions.len()))
+            .collect()
+    }
+
+    #[test]
+    fn she_is_made_again_with_the_body_files_given_after_she_was_made() {
+        let (Some(face), Some(light), Some(heavy), Some(other_light), Some(other_heavy)) = (
+            sample(FACE_KEY),
+            sample(TORSO_LIGHT),
+            sample(TORSO_HEAVY),
+            sample("meshes/actors/character/character assets/femalebodyastrid_0.nif"),
+            sample("meshes/actors/character/character assets/femalebodyastrid_1.nif"),
+        ) else {
+            return;
+        };
+        let mut state = State::default();
+        read_through(&mut state, &plugins_with_body());
+        let file = |state: &mut State, path: &str, bytes: &[u8]| {
+            ask(state, json!({ "op": "characterFile", "path": path }), bytes);
+        };
+        file(&mut state, FACE_KEY, &face);
+        file(&mut state, TORSO_LIGHT, &light);
+        file(&mut state, TORSO_HEAVY, &heavy);
+        let first = ask(&mut state, json!({ "op": "character" }), &[]);
+        let first_shapes = first["shapes"].clone();
+        for (name, _) in shapes_of(&heavy) {
+            assert!(
+                first_shapes.as_array().unwrap().contains(&json!(name)),
+                "{first}"
+            );
+        }
+
+        // A body built elsewhere, in place of both the torso's models.
+        file(&mut state, TORSO_LIGHT, &other_light);
+        file(&mut state, TORSO_HEAVY, &other_heavy);
+        let again = ask(&mut state, json!({ "op": "character", "weight": 100 }), &[]);
+        let theirs = shapes_of(&other_heavy);
+        let ours = shapes_of(&heavy);
+        assert_ne!(theirs, ours, "the samples differ");
+        let names: Vec<String> = again["shapes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect();
+        for (name, _) in &theirs {
+            assert!(names.contains(name), "{again}");
+        }
+        for (name, _) in &ours {
+            assert!(
+                theirs.iter().any(|(n, _)| n == name) || !names.contains(name),
+                "{name} is still there: {again}"
+            );
+        }
+        assert!(names.iter().any(|n| n == "TestFace"));
+        // Both the new lightest and heaviest were read: the two match, so
+        // no shape fell back to the heaviest alone.
+        assert!(
+            !again["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n.as_str().unwrap().contains("differ in size")),
+            "{again}"
+        );
+        // The project is her new making, by its vertices.
+        let heaviest = positions(&mut state);
+        for (name, count) in &theirs {
+            let p = heaviest
+                .iter()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("{name} not in the preview"));
+            assert_eq!(p.1.len(), count * 3);
+        }
+        // At the lightest she is drawn from the new lightest model: a
+        // lightest left over from before has none of these shapes, and the
+        // heaviest alone would be drawn at any weight.
+        ask(&mut state, json!({ "op": "character", "weight": 0 }), &[]);
+        let lightest = positions(&mut state);
+        let moved = theirs.iter().filter(|(name, _)| {
+            let at = |all: &Vec<(String, Vec<f32>)>| all.iter().find(|(n, _)| n == name).cloned();
+            at(&lightest) != at(&heaviest)
+        });
+        assert!(moved.count() > 0, "no shape moved with the weight");
+    }
+
+    /// The open project's shapes as the preview draws them: each one's
+    /// positions, by name.
+    fn positions(state: &mut State) -> Vec<(String, Vec<f32>)> {
+        let request = json!({ "op": "preview", "set": "", "work": true });
+        let a = handle(state, request.to_string().as_bytes(), &[]);
+        let v: Value = serde_json::from_str(&a.json).unwrap();
+        v["ok"]["shapes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                let (at, n) = (
+                    s["positions"][0].as_u64().unwrap() as usize,
+                    s["positions"][1].as_u64().unwrap() as usize,
+                );
+                let floats = (at..at + n)
+                    .map(|k| f32::from_le_bytes(a.bytes[k * 4..k * 4 + 4].try_into().unwrap()))
+                    .collect();
+                (s["name"].as_str().unwrap().to_string(), floats)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn opening_a_set_or_a_new_mesh_lets_the_save_go() {
+        let Some(face) = sample(FACE_KEY) else { return };
+        let begin = |state: &mut State| {
+            ask(state, json!({ "op": "characterSave" }), &player_save());
+            // The save is being read: `character` gets as far as the plugins.
+            assert_eq!(
+                refused(state, json!({ "op": "character" }), &[]),
+                "The save's plugins have not been read."
+            );
+        };
+        let gone = |state: &mut State| {
+            for op in ["characterPieces", "characterFile", "character"] {
+                let request = json!({ "op": op, "pieces": [], "path": "a" });
+                assert_eq!(
+                    refused(state, request, &[]),
+                    "No save is being read.",
+                    "{op}"
+                );
+            }
+        };
+
+        let mut state = State::default();
+        begin(&mut state);
+        ask(
+            &mut state,
+            json!({ "op": "new", "name": "Head", "path": "meshes/head.nif" }),
+            &face,
+        );
+        gone(&mut state);
+
+        let shape = shapes_of(&face)[0].0.clone();
+        let set = format!(
+            r#"<SliderSetInfo>
+    <SliderSet name="Mine">
+        <SetFolder>Mine</SetFolder>
+        <SourceFile>Mine.nif</SourceFile>
+        <OutputPath>meshes\mine</OutputPath>
+        <OutputFile>Mine</OutputFile>
+        <BaseShapeName target="{shape}">{shape}</BaseShapeName>
+    </SliderSet>
+</SliderSetInfo>
+"#
+        );
+        let mut state = State::default();
+        ask(
+            &mut state,
+            json!({ "op": "put", "path": "SliderSets/Mine.xml" }),
+            set.as_bytes(),
+        );
+        ask(
+            &mut state,
+            json!({ "op": "put", "path": "ShapeData/Mine/Mine.nif" }),
+            &face,
+        );
+        ask(&mut state, json!({ "op": "load" }), &[]);
+        begin(&mut state);
+        ask(&mut state, json!({ "op": "open", "set": "Mine" }), &[]);
+        gone(&mut state);
     }
 }

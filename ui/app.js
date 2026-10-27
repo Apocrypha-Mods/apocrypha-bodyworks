@@ -430,6 +430,7 @@ async function choose(set, presetName) {
   view?.forget();
   state.work = null;
   state.face = null;
+  state.character = null;
   state.editing = -1;
   stroke = null;
   state.exported = null;
@@ -1443,6 +1444,40 @@ function outfitPick(label) {
   // For the keys that open the list from the keyboard.
   b.id = label === "Project" ? "project" : "outfit";
   return b;
+}
+
+/** Studio, for a save's character: the body type she is given, and its preset. */
+function bodyPicks() {
+  const { torso, set, preset } = state.character;
+  // She is made again: only edits made to her since are lost.
+  const unless = (then) => (state.work?.undo ? leaving(then) : then());
+  const sets = bodySets(torso);
+  const own = sets.find((s) => builds(s, torso));
+  const body = pickButton("Body", set?.name || "As installed", (b) =>
+    menu(
+      b,
+      [
+        { name: "As installed", value: null, on: !preset },
+        ...sets.map((s) => ({ name: s.name, note: s.groups[0], value: s, on: Boolean(preset) && s === set })),
+      ],
+      (s) => unless(() => (s ? giveBody(s, presetsFor(s)[0] || null) : giveBody(own || null, null))),
+      "Search bodies",
+    ),
+  );
+  if (!set) return body;
+  const shape = pickButton("Preset", preset?.name || "As installed", (b) =>
+    menu(
+      b,
+      [
+        // Her own body type as the mods have it built.
+        set === own && { name: "As installed", value: null, on: !preset },
+        ...presetsFor(set).map((p) => ({ name: p.name, value: p, on: p === preset })),
+      ].filter(Boolean),
+      (p) => unless(() => giveBody(set, p)),
+      "Search presets",
+    ),
+  );
+  return [body, shape];
 }
 
 /** Skyrim's numbers for the parts of a body an armour covers, as the game's editor names them. */
@@ -3296,6 +3331,7 @@ async function newProject(anchor) {
         const [work] = core.ask({ op: "new", name, path: rel }, new Uint8Array(bytes));
         state.work = work;
         state.face = null;
+        state.character = null;
         state.at = [];
         state.editing = -1;
         state.picked = 0;
@@ -3448,7 +3484,101 @@ async function openCharacter(sv, weight) {
     const file = await host.request("files.read", { path: `Data/${path}` }).catch(() => null);
     if (file) core.ask({ op: "characterFile", path }, new Uint8Array(file));
   });
-  const [work] = core.ask({ op: "character", weight });
+  const torso = torsoOf(step.bodies || []);
+  const character = { weight, step, torso, set: torso && bodySets(torso).find((s) => builds(s, torso)), preset: null };
+  // The body she was last given a preset for, given it again.
+  let last = null;
+  try {
+    last = torso && JSON.parse(remembered.get(`characterBody.${state.game?.id}`) || "null");
+  } catch {
+    // Kept by an older version, or spoilt: her body as the mods have it.
+  }
+  const set = last && bodySets(torso).find((s) => s.name === last.set);
+  const preset = set && presetsFor(set).find((p) => p.name === last.preset);
+  if (preset) {
+    await bodyFiles(character, set, preset).catch(() => null);
+  }
+  madeCharacter(character, core.ask({ op: "character", weight })[0]);
+}
+
+/**
+ * The character's torso of `bodies` (the core's body parts made of a
+ * lightest and a heaviest model): the one that is not hands or feet.
+ */
+function torsoOf(bodies) {
+  const file = (b) => b.light.split("/").pop();
+  return bodies.find((b) => /body/i.test(file(b)) && !/hand|feet|foot|1stperson/i.test(file(b))) || null;
+}
+
+/** The slider sets that build a body of the torso's kind, female or male: the body types she can be given. */
+function bodySets(torso) {
+  const female = /female/i.test(torso.light.split("/").pop());
+  return state.catalog.sets.filter((s) => {
+    const file = s.outputFile || "";
+    return /body/i.test(file) && !/hand|feet|foot|1stperson/i.test(file) && /female/i.test(file) === female;
+  });
+}
+
+/** Whether set `s` builds the very files the torso is drawn from: the body type she wears. */
+function builds(s, torso) {
+  const key = (p) => p.toLowerCase().replace(/\\/g, "/").replace(/^\/+/, "").replace(/^meshes\//, "");
+  const out = key(s.output);
+  return [`${out}_0.nif`, `${out}.nif`].includes(key(torso.light));
+}
+
+/**
+ * Hand the core set `set` built at `preset` in place of the torso's own
+ * files (or, with no preset, the files the mods have again).
+ */
+async function bodyFiles(character, set, preset, current = () => true) {
+  const { torso } = character;
+  let files;
+  if (preset) {
+    await prepare(set);
+    const { small, big } = presetValues(set, preset);
+    const [built, bytes] = core.ask({ op: "build", set: set.name, small, big, morphs: false });
+    const meshes = built.outputs.filter((o) => /\.nif$/i.test(o.path));
+    const light = meshes.find((o) => /_0\.nif$/i.test(o.path)) || meshes[0];
+    const heavy = meshes.find((o) => /_1\.nif$/i.test(o.path)) || light;
+    if (!light) throw new Error(`${set.name} builds no mesh.`);
+    const of = (o) => new Uint8Array(bytes.slice(o.at, o.at + o.length));
+    files = [[torso.light, of(light)], [torso.heavy, of(heavy)]];
+  } else {
+    files = await Promise.all([torso.light, torso.heavy].map(async (path) => [path, new Uint8Array(await host.request("files.read", { path: `Data/${path}` }))]));
+  }
+  // A pick made since, or another project opened, has the last word.
+  if (!current()) return false;
+  for (const [path, bytes] of files) core.ask({ op: "characterFile", path }, bytes);
+  character.set = set;
+  character.preset = preset;
+  return true;
+}
+
+/** Counts body picks: only the last one made is given. */
+let bodyTurn = 0;
+
+/** Studio: give the save's character body type `set` at `preset` (null: her body as the mods have it), and show her again. */
+async function giveBody(set, preset) {
+  const character = state.character;
+  if (!character?.torso) return;
+  const turn = ++bodyTurn;
+  busy("Building");
+  try {
+    if (!(await bodyFiles(character, set, preset, () => turn === bodyTurn && state.character === character))) return;
+    remembered.set(`characterBody.${state.game?.id}`, JSON.stringify(preset ? { set: set.name, preset: preset.name } : null));
+    madeCharacter(character, core.ask({ op: "character", weight: character.weight })[0]);
+  } catch (e) {
+    if (turn !== bodyTurn) return;
+    state.problem = e.message;
+    state.busy = null;
+    render();
+  }
+}
+
+/** The character `work` the core made, as the project. */
+function madeCharacter(character, work) {
+  const { step } = character;
+  state.character = character;
   // Kept apart from the work, which each change answers anew without it.
   // The last character's tinted face is let go: it is shown no more.
   for (const key of pictures.keys()) if (/ tinted \d+$/.test(key)) pictures.delete(key);
@@ -4014,6 +4144,7 @@ function renderStudio() {
       null,
       modes(),
       outfitPick("Project"),
+      state.character?.torso && bodyPicks(),
       h("button.btn.ghost", { type: "button", id: "new", onclick: (e) => leaving(() => newProject(e.currentTarget)) }, "New…"),
       h("span.grow"),
       state.work && h("button.btn.ghost", { type: "button", disabled: !state.work.undo, onclick: () => undo(false) }, "Undo"),
