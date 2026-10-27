@@ -1281,6 +1281,8 @@ impl State {
                 "uvs": uvs,
                 "textures": m.textures,
                 "seeThrough": mesh::see_through(&nif, m.block),
+                "alpha": mesh::alpha(&nif, m.block)
+                    .map(|a| json!({ "blend": a.blend, "test": a.test, "threshold": a.threshold })),
                 "lookShared": mesh::look_shared(&nif, m.block)
                     .into_iter()
                     .filter_map(|at| mesh::name(&nif, at))

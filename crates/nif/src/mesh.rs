@@ -130,6 +130,10 @@ pub(crate) fn shader_of(nif: &Nif, block: usize) -> Option<usize> {
 /// alpha says so: it links an alpha property (hair, hairlines, brows,
 /// lashes).
 pub fn see_through(nif: &Nif, block: usize) -> bool {
+    alpha_property(nif, block).is_some()
+}
+
+fn alpha_property(nif: &Nif, block: usize) -> Option<usize> {
     let stream = nif.header.stream.version;
     let alpha = if nif.kind_of(block) == "NiTriShape" {
         NiTriShape::read(&nif.blocks[block].data, stream)
@@ -137,12 +141,37 @@ pub fn see_through(nif: &Nif, block: usize) -> bool {
             .and_then(|s| s.alpha)
             .unwrap_or(-1)
     } else {
-        match TriShape::read(&nif.blocks[block].data, stream) {
-            Ok(s) => s.alpha,
-            Err(_) => return false,
-        }
+        TriShape::read(&nif.blocks[block].data, stream).ok()?.alpha
     };
-    block_of(nif, alpha, &["NiAlphaProperty"]).is_some()
+    block_of(nif, alpha, &["NiAlphaProperty"])
+}
+
+/// How a see-through shape lets its texture's alpha through, as its alpha
+/// property says: laid over what is behind it (`blend`), cut away where the
+/// alpha is under `threshold` (`test`, 0 to 255), or both.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Alpha {
+    pub blend: bool,
+    pub test: bool,
+    pub threshold: u8,
+}
+
+/// The alpha of the shape at `block`; nothing for a shape drawn solid.
+pub fn alpha(nif: &Nif, block: usize) -> Option<Alpha> {
+    let at = alpha_property(nif, block)?;
+    // Begun as every named object is (name, extra data, controller), then
+    // its switches and the threshold.
+    let mut r = crate::io::Reader::new(&nif.blocks[at].data);
+    r.i32().ok()?;
+    crate::node::read_refs(&mut r).ok()?;
+    r.i32().ok()?;
+    let flags = r.u16().ok()?;
+    let threshold = r.u8().ok()?;
+    Some(Alpha {
+        blend: flags & 1 != 0,
+        test: flags & (1 << 9) != 0,
+        threshold,
+    })
 }
 
 /// The other shapes of the file drawn by the same lighting as the shape at

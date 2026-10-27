@@ -374,6 +374,7 @@ function showShapes(frame) {
       texture: (s.textures || [])[0] || null,
       textures: s.textures || [],
       seeThrough: Boolean(s.seeThrough),
+      alpha: s.alpha || null,
       colors: s.colors && s.colors[1] ? new Uint8Array(numbers.slice(s.colors[0] * 4, (s.colors[0] + s.colors[1]) * 4)) : new Uint8Array(0),
       parts: (s.parts || []).map((part) => ({
         part: part.part,
@@ -407,7 +408,7 @@ function showShapes(frame) {
     return made;
   });
   if (!view) return;
-  view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs, mask: s.mask, colors: s.colors })));
+  view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs, mask: s.mask, colors: s.colors, alpha: s.alpha })));
   state.shapes.forEach((sh, i) => {
     if (sh.hidden) view.hide(i, true);
     if (sh.ghost) view.ghost(i, true);
@@ -603,7 +604,8 @@ function paint(set) {
         path,
         host
           .request("files.picture", { path, longest: 2048 })
-          .then((png) => createImageBitmap(new Blob([png], { type: "image/png" })))
+          // As the file has it: a see-through shape blends by its alpha, not by colours made darker.
+          .then((png) => createImageBitmap(new Blob([png], { type: "image/png" }), { premultiplyAlpha: "none" }))
           .catch(() => null),
       );
     }
