@@ -171,17 +171,23 @@ fn hair_brows_and_lashes_carry_the_switches_and_threshold_their_alpha_property_h
     let Some(hair) = read(&assets.join("hair/femaledarkelfhair01.nif")) else {
         return;
     };
-    // The game's hair is cut away under 100 and laid over nothing.
+    // The game's hair is cut away under 100 and laid over nothing. Every
+    // one of these weighs its colour by its alpha and what is behind by one
+    // less that (6 and 7), blended or not.
     let alpha = |n: &Nif| mesh::alpha(n, mesh::shapes(n)[0]);
     let cut = |threshold| mesh::Alpha {
         blend: false,
         test: true,
         threshold,
+        source: 6,
+        behind: 7,
     };
     let laid = |threshold| mesh::Alpha {
         blend: true,
         test: false,
         threshold,
+        source: 6,
+        behind: 7,
     };
     assert_eq!(alpha(&hair), Some(cut(100)));
     // Its hairlines and the mouth are cut at 128; brows and eyes are laid
@@ -212,8 +218,38 @@ fn hair_brows_and_lashes_carry_the_switches_and_threshold_their_alpha_property_h
             blend: true,
             test: true,
             threshold: 0,
+            source: 6,
+            behind: 7,
         };
         assert_eq!(alpha(&n), Some(want));
+    }
+    // A glow laid on adds its colour by its alpha and keeps all that is
+    // behind it (6 and 0); a dagger's other part weighs by zero and its own
+    // colour (1 and 2).
+    let effect =
+        samples().join("cbbe/@conditional-3/Data/Meshes/dlc02/effects/dragonbornfxf01.nif");
+    if let Some(n) = read(&effect) {
+        let want = mesh::Alpha {
+            blend: true,
+            test: false,
+            threshold: 128,
+            source: 6,
+            behind: 0,
+        };
+        assert_eq!(mesh::alpha(&n, 42), Some(want));
+    }
+    let dagger = samples().join("statics/meshes/weapons/iron/irondagger.nif");
+    if let Some(n) = read(&dagger) {
+        let weighed = |source, behind| mesh::Alpha {
+            blend: true,
+            test: true,
+            threshold: 0,
+            source,
+            behind,
+        };
+        assert_eq!(mesh::alpha(&n, 13), Some(weighed(6, 0)));
+        assert_eq!(mesh::alpha(&n, 17), Some(weighed(1, 2)));
+        assert_eq!(mesh::alpha(&n, 20), None);
     }
     // Skin is drawn solid and has none.
     for f in [
@@ -246,6 +282,8 @@ fn a_shape_has_an_alpha_exactly_when_it_is_see_through_and_it_is_the_one_its_byt
                 blend: flags & 1 != 0,
                 test: flags & 0x200 != 0,
                 threshold,
+                source: (flags >> 1 & 0xf) as u8,
+                behind: (flags >> 5 & 0xf) as u8,
             });
             assert_eq!(alpha, want, "{path:?} {b}");
             if let Some(a) = alpha {
@@ -259,7 +297,7 @@ fn a_shape_has_an_alpha_exactly_when_it_is_see_through_and_it_is_the_one_its_byt
 }
 
 #[test]
-fn the_switches_and_threshold_follow_the_bytes_of_the_property() {
+fn the_switches_weights_and_threshold_follow_the_bytes_of_the_property() {
     let assets = samples().join("skyrim/meshes/actors/character/character assets");
     let Some(hair) = read(&assets.join("hair/femaledarkelfhair01.nif")) else {
         return;
@@ -280,22 +318,48 @@ fn the_switches_and_threshold_follow_the_bytes_of_the_property() {
         *d = out;
         mesh::alpha(&n, b).unwrap()
     };
-    let a = |blend, test, threshold| mesh::Alpha {
+    let a = |blend, test, threshold, source, behind| mesh::Alpha {
         blend,
         test,
         threshold,
+        source,
+        behind,
     };
-    // Each switch on its own, both, and neither: the other bits of the
-    // flags (how it blends, which test) change nothing.
-    assert_eq!(edited(0x0001, 7, &[]), a(true, false, 7));
-    assert_eq!(edited(0x0200, 255, &[]), a(false, true, 255));
-    assert_eq!(edited(0x0201, 1, &[]), a(true, true, 1));
-    assert_eq!(edited(0x0000, 0, &[]), a(false, false, 0));
-    assert_eq!(edited(!0x0201, 200, &[]), a(false, false, 200));
-    assert_eq!(edited(0xFFFF, 42, &[]), a(true, true, 42));
+    // Each switch on its own, both, and neither, with the weights at 0.
+    assert_eq!(edited(0x0001, 7, &[]), a(true, false, 7, 0, 0));
+    assert_eq!(edited(0x0200, 255, &[]), a(false, true, 255, 0, 0));
+    assert_eq!(edited(0x0201, 1, &[]), a(true, true, 1, 0, 0));
+    assert_eq!(edited(0x0000, 0, &[]), a(false, false, 0, 0, 0));
+    // Every other bit on, then every bit: both weights at 15.
+    assert_eq!(edited(!0x0201, 200, &[]), a(false, false, 200, 15, 15));
+    assert_eq!(edited(0xFFFF, 42, &[]), a(true, true, 42, 15, 15));
+    // The game's usual weights, and a glow's.
+    assert_eq!(edited(0x00ED, 128, &[]), a(true, false, 128, 6, 7));
+    assert_eq!(edited(0x000D, 128, &[]), a(true, false, 128, 6, 0));
+    // Each weight from 0 to 15 against every other, with either switch on
+    // or off and the bits above them on or off: each weight follows its own
+    // four bits and nothing else does.
+    for source in 0..16u16 {
+        for behind in 0..16u16 {
+            for (blend, test, high) in [
+                (false, false, 0),
+                (true, false, 0),
+                (false, true, 0),
+                (true, true, 0xFC00),
+                (false, false, 0xFC00),
+            ] {
+                let flags = blend as u16 | source << 1 | behind << 5 | (test as u16) << 9 | high;
+                assert_eq!(
+                    edited(flags, 3, &[]),
+                    a(blend, test, 3, source as u8, behind as u8),
+                    "{flags:#06x}"
+                );
+            }
+        }
+    }
     // Extra data before them moves them on, and they are still found.
-    assert_eq!(edited(0x0201, 9, &[3, 4]), a(true, true, 9));
-    assert_eq!(edited(0x0000, 250, &[5]), a(false, false, 250));
+    assert_eq!(edited(0x0201, 9, &[3, 4]), a(true, true, 9, 0, 0));
+    assert_eq!(edited(0x00ED, 250, &[5]), a(true, false, 250, 6, 7));
 }
 
 #[test]

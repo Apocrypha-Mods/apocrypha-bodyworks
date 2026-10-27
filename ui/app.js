@@ -408,7 +408,7 @@ function showShapes(frame) {
     return made;
   });
   if (!view) return;
-  view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs, mask: s.mask, colors: s.colors, alpha: s.alpha })));
+  view.show(state.shapes.map((s) => ({ positions: s.base, triangles: s.triangles, uvs: s.uvs, mask: s.mask, colors: s.colors, alpha: s.alpha, vertexAlpha: vertexAlpha(s) })));
   state.shapes.forEach((sh, i) => {
     if (sh.hidden) view.hide(i, true);
     if (sh.ghost) view.ghost(i, true);
@@ -490,14 +490,17 @@ function textureFile(texture) {
  * which its texture is grey to take, and, for a file, a skin's tone, which
  * its texture is dark to take (twice the tone, as near as was judged; the
  * view lights skin harder instead). A face takes the character's tone until
- * its tint layers are laid on.
+ * its tint layers are laid on. A save's character's skin takes its tone on
+ * screen too, as its face does: else the two meet at the neck in two colours.
  */
 function dyeOf(s, out = false) {
   const tint = Array.isArray(s.look?.tint) ? s.look.tint : null;
   if (s.look?.kind === 6) return tint;
-  if (!out) return null;
+  const skin = s.look?.kind === 5 && tint;
   // A save's character's skin takes the colour its face's tint starts from, so body and face agree.
-  if (s.look?.kind === 5 && tint) return (Array.isArray(state.face?.base) ? state.face.base : tint).map((c) => c * 2);
+  if (skin && Array.isArray(state.face?.base)) return state.face.base.map((c) => c * 2);
+  if (!out) return null;
+  if (skin) return tint.map((c) => c * 2);
   const tone = state.work?.skinTone;
   if (s.look?.kind === 4 && Array.isArray(tone) && !tintsFace(s)) return tone.map((c) => c * 2);
   return null;
@@ -628,6 +631,11 @@ function filesOf(built, bytes) {
 /** Where builds go: the mod kept under the output's name, and the installed mod it is part of when one was picked. */
 function target() {
   return state.into ? { name: state.output, into: state.into.id } : { name: state.output };
+}
+
+/** Whether the game takes shape `s`'s alpha from its vertices' colours too: Skyrim's lighting switch for it (the first set's fourth). */
+function vertexAlpha(s) {
+  return Boolean(s.alpha && s.look && !s.look.smooth && s.look.switches && (s.look.switches[0] >>> 3) & 1);
 }
 
 /** A mod's name as an output can be kept under it. */

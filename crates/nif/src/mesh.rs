@@ -154,6 +154,13 @@ pub struct Alpha {
     pub blend: bool,
     pub test: bool,
     pub threshold: u8,
+    /// How a blended shape's colour and what is behind it are weighed, by
+    /// the numbers the file gives: 0 one, 1 zero, 2 its colour, 3 one less
+    /// its colour, 4 the colour behind, 5 one less that, 6 its alpha, 7 one
+    /// less its alpha, 8 the alpha behind, 9 one less that, 10 its alpha
+    /// as far as it fits. Most shapes are 6 and 7; a shine laid on is 6 and 0.
+    pub source: u8,
+    pub behind: u8,
 }
 
 /// The alpha of the shape at `block`; nothing for a shape drawn solid.
@@ -171,6 +178,8 @@ pub fn alpha(nif: &Nif, block: usize) -> Option<Alpha> {
         blend: flags & 1 != 0,
         test: flags & (1 << 9) != 0,
         threshold,
+        source: (flags >> 1 & 0xf) as u8,
+        behind: (flags >> 5 & 0xf) as u8,
     })
 }
 

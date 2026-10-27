@@ -10,7 +10,7 @@ void main() { vn = nm * n; vt = t; vm = m; vk = k; gl_Position = mvp * vec4(p, 1
 const FS = `#version 300 es
 precision highp float;
 in vec3 vn; in vec2 vt; in float vm; in vec4 vk; out vec4 o;
-uniform vec3 tint; uniform vec3 dye; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha; uniform float cut; uniform float see; uniform float coloured; uniform float bright; uniform float lit;
+uniform vec3 tint; uniform vec3 dye; uniform sampler2D skin; uniform float painted; uniform vec4 line; uniform float heat; uniform float alpha; uniform float cut; uniform float see; uniform float kept; uniform float coloured; uniform float bright; uniform float lit;
 void main() {
   // The lines of a wireframe are one flat colour.
   if (line.a > 0.0) { o = line; return; }
@@ -42,7 +42,7 @@ void main() {
     c *= mix(1.0, 0.3, m);
   }
   // One laid over what is behind it lets that through by its alpha.
-  o = vec4(pow(c, vec3(1.0 / 2.2)), alpha * mix(1.0, t.a, see * painted));
+  o = vec4(pow(c, vec3(1.0 / 2.2)), alpha * mix(1.0, t.a, see * painted) * mix(1.0, vk.a, kept));
 }`;
 
 /** A little to one side of straight on. */
@@ -91,6 +91,7 @@ export class View {
     this.uAlpha = gl.getUniformLocation(prog, "alpha");
     this.uCut = gl.getUniformLocation(prog, "cut");
     this.uSee = gl.getUniformLocation(prog, "see");
+    this.uKept = gl.getUniformLocation(prog, "kept");
     this.uColoured = gl.getUniformLocation(prog, "coloured");
     this.uBright = gl.getUniformLocation(prog, "bright");
     this.uLit = gl.getUniformLocation(prog, "lit");
@@ -269,8 +270,15 @@ export class View {
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, s.triangles, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
-      return { vao, pb, nb, tb, mb, cb, ib, count: s.triangles.length, shown: true, skin: null, kept: s.triangles, edges: 0, eb: null, alpha: s.alpha || null };
+      return { vao, pb, nb, tb, mb, cb, ib, count: s.triangles.length, shown: true, skin: null, kept: s.triangles, edges: 0, eb: null, alpha: s.alpha || null, vertexAlpha: Boolean(s.vertexAlpha) };
     });
+  }
+
+  /** A blend weight by the number an alpha property gives it (see the nif crate's `Alpha`), or `or` for one it does not know. */
+  weigh(n, or) {
+    const gl = this.gl;
+    const by = [gl.ONE, gl.ZERO, gl.SRC_COLOR, gl.ONE_MINUS_SRC_COLOR, gl.DST_COLOR, gl.ONE_MINUS_DST_COLOR, gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.DST_ALPHA, gl.ONE_MINUS_DST_ALPHA, gl.SRC_ALPHA_SATURATE];
+    return by[n] ?? or;
   }
 
   /** Change how shapes are drawn (see `looks`). */
@@ -600,12 +608,14 @@ export class View {
     // below its threshold, and laid over them where it blends. One that
     // only blends keeps the depth of what it lies on.
     const clear = (s, i) => {
-      const { blend, test, threshold } = s.alpha;
+      const { blend, test, threshold, source, behind } = s.alpha;
       gl.uniform1f(this.uCut, test ? Math.max(threshold, 1) / 255 : 1 / 255);
       gl.uniform1f(this.uSee, blend ? 1 : 0);
+      gl.uniform1f(this.uKept, s.vertexAlpha ? 1 : 0);
       if (blend) {
+        // As the file weighs it: most lay over (alpha, one less alpha), a shine adds on (alpha, one).
         gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.blendFunc(this.weigh(source, gl.SRC_ALPHA), this.weigh(behind, gl.ONE_MINUS_SRC_ALPHA));
       }
       if (blend && !test) gl.depthMask(false);
       face(s, i);
@@ -613,12 +623,14 @@ export class View {
       gl.disable(gl.BLEND);
       gl.uniform1f(this.uCut, 0);
       gl.uniform1f(this.uSee, 0);
+      gl.uniform1f(this.uKept, 0);
     };
     gl.uniform1f(this.uAlpha, 1);
     gl.uniform1f(this.uBright, this.bright);
     gl.uniform1f(this.uLit, this.looks.lit ? 1 : 0);
     gl.uniform1f(this.uCut, 0);
     gl.uniform1f(this.uSee, 0);
+    gl.uniform1f(this.uKept, 0);
     this.shapes.forEach((s, i) => s.shown && !s.ghost && !s.alpha && face(s, i));
     this.shapes.forEach((s, i) => s.shown && !s.ghost && s.alpha && clear(s, i));
     // Ghosts after everything solid, seen through and hiding nothing.
