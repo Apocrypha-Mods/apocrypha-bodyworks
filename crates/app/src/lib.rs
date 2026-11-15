@@ -11,6 +11,7 @@
 //! categories read from them.
 
 mod character;
+mod preset;
 mod state;
 
 pub use state::{handle, Answer};

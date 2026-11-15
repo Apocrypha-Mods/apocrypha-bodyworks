@@ -9,6 +9,7 @@ import * as fbx from "./fbx.js";
 import * as obj from "./obj.js";
 import * as keys from "./keys.js";
 import * as tint from "./tint.js";
+import { characterScreen } from "./character.js";
 
 // Where a game's mods keep their slider sets, under the game's folder: Skyrim's
 // in a folder of their own, Fallout 4's one level up.
@@ -91,7 +92,7 @@ const state = {
   connected: remembered.get("brush.connected") === "1",
   /** Whether a build also writes the morph file RaceMenu reads. */
   morphs: remembered.get("morphs") === "1",
-  /** Which of the two tools is showing: "bodyslide" or "studio". */
+  /** Which tool is showing: "bodyslide", "studio" or "character" (a RaceMenu preset's face, `character.js`). */
   mode: remembered.get("mode") === "studio" ? "studio" : "bodyslide",
   /** Outfit Studio: where each slider stands while the outfit is looked at. */
   at: [],
@@ -143,6 +144,39 @@ const state = {
 
 let view = null;
 const root = document.getElementById("app");
+
+/** The character screen (`character.js`), given what it shares with the others. */
+const character = characterScreen({
+  h,
+  state,
+  remembered,
+  host,
+  core,
+  view: () => view,
+  canvas: () => canvas,
+  modes,
+  menu,
+  sheet,
+  close,
+  rename,
+  pickButton,
+  splits,
+  busy,
+  render,
+  leaving,
+  showShapes,
+  chooseTarget,
+  write,
+  fromSave,
+  readSave,
+  inTurns,
+  forgetTints: () => {
+    for (const key of pictures.keys()) if (/ tinted \d+$/.test(key)) pictures.delete(key);
+  },
+  tintsMade: () => ++tintsMade,
+  GLASS,
+  CHEVRON,
+});
 
 // ── Files ──────────────────────────────────────────────────────────────────
 
@@ -341,12 +375,14 @@ async function prepare(set) {
 /** Read the shapes of what is on screen, and put them in the view. */
 function showShapes(frame) {
   const studio = state.mode === "studio" && Boolean(state.work);
+  // The character screen shows the project too: the preset's character.
+  const work = studio || (state.mode === "character" && Boolean(state.work));
   const hidden = new Set(studio ? state.shapes.filter((sh) => sh.hidden).map((sh) => sh.name) : []);
   const masks = new Map(studio ? state.shapes.map((sh) => [sh.name, sh.mask]) : []);
   const ghosts = new Set(studio ? state.shapes.filter((sh) => sh.ghost).map((sh) => sh.name) : []);
   const pickedName = state.shapes[state.picked]?.name;
   state.part = null;
-  const [preview, numbers] = core.ask({ op: "preview", set: state.set.name, work: studio });
+  const [preview, numbers] = core.ask({ op: "preview", set: state.set.name, work });
   const f32 = new Float32Array(numbers);
   const u32 = new Uint32Array(numbers);
   state.bones = preview.bones || [];
@@ -672,6 +708,8 @@ async function chooseTarget(anchor) {
         remembered.set("output", name);
         remembered.set("into", mod ? JSON.stringify(mod) : "");
         state.built = null;
+        // A preset saved into the last mod is saved again into this one.
+        character.unsaved();
         foot();
       };
       if (picked === "keep") return;
@@ -1317,6 +1355,7 @@ function setWeight(heavy) {
 }
 
 function foot() {
+  if (state.mode === "character") return character.foot();
   const el = document.getElementById("foot");
   if (!el) return;
   const working = Boolean(state.busy);
@@ -1397,7 +1436,7 @@ function foot() {
 
 let canvas = null;
 
-/** The switch between the two tools, at the start of either's top row. */
+/** The switch between the tools, at the start of each one's top row. */
 function modes() {
   const go = (mode) => () => setMode(mode);
   return h(
@@ -1405,12 +1444,16 @@ function modes() {
     { role: "group", "aria-label": "Tool" },
     h("button" + (state.mode === "bodyslide" ? ".on" : ""), { type: "button", onclick: go("bodyslide") }, "Build"),
     h("button" + (state.mode === "studio" ? ".on" : ""), { type: "button", onclick: go("studio") }, "Studio"),
+    h("button" + (state.mode === "character" ? ".on" : ""), { type: "button", onclick: go("character") }, "Character"),
   );
 }
 
-/** Show one of the two tools: "bodyslide" or "studio". */
-function setMode(mode) {
+/** Show one of the tools: "bodyslide", "studio" or "character". */
+function setMode(mode, asked = false) {
   if (state.mode === mode) return;
+  // The character screen makes its preset's character the project: one
+  // with changes not saved is asked about first.
+  if (mode === "character" && !asked && character.replaces()) return leaving(() => (character.letGo(), setMode(mode, true)));
   state.mode = mode;
   remembered.set("mode", mode);
   // Each tool draws every shape in its own way to begin with, and the
@@ -3359,8 +3402,15 @@ function saveDate(seconds) {
   return new Date(seconds * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
-/** Outfit Studio: pick a save, and its character becomes the project. */
-function fromSave() {
+/**
+ * Pick a save: by default in Outfit Studio, and its character becomes the
+ * project. The character screen asks for one with its own `title`, `note`,
+ * `open` and the `saves` it has just listed, and no weight.
+ */
+async function fromSave({ title = "Character from a save", note = null, weighs = true, open = openCharacter, saves = null } = {}) {
+  // A list just fetched is the one shown, and kept.
+  if (saves) saveList = saves;
+  if (saveList === undefined) saveList = await host.request("saves.list").catch(() => null);
   const all = saveList || [];
   let chosen = all[0] || null;
   const rows = h("div.rows.saves", { role: "listbox", "aria-label": "Saves" });
@@ -3416,7 +3466,7 @@ function fromSave() {
     go.disabled = true;
     said.textContent = "";
     try {
-      await openCharacter(chosen, Number(weight.value));
+      await open(chosen, Number(weight.value));
       close(el);
     } catch (e) {
       said.textContent = e.message;
@@ -3427,9 +3477,14 @@ function fromSave() {
     }
   });
   const el = sheet(
-    "Character from a save",
+    title,
     null,
-    [all.length > 8 && h("label.search", { html: GLASS }, input), rows, h("label.field.weight", null, h("span", null, "Weight"), h("div.row", null, weight, shownWeight))],
+    [
+      note && h("span.sub", null, note),
+      all.length > 8 && h("label.search", { html: GLASS }, input),
+      rows,
+      weighs && h("label.field.weight", null, h("span", null, "Weight"), h("div.row", null, weight, shownWeight)),
+    ],
     [said, h("button.btn.ghost", { type: "button", onclick: () => close(el) }, "Cancel"), go],
   );
   fill("");
@@ -3452,14 +3507,14 @@ async function inTurns(items, many, work) {
 }
 
 /**
- * A save's character as the project: the save read, then the pieces of the
- * plugins its records are in, then the meshes and morph files its parts
- * name, each asked for as the module says it needs them.
+ * A save read as far as its plugins: the save, then the pieces of the
+ * plugins its records are in, until nothing more is asked for. With
+ * `preset`, as the save a RaceMenu preset is read with. The last step's answer.
  */
-async function openCharacter(sv, weight) {
+async function readSave(sv, preset = false) {
   busy("Reading the save");
   const bytes = await host.request("saves.read", { name: sv.name });
-  let [step] = core.ask({ op: "characterSave" }, new Uint8Array(bytes));
+  let [step] = core.ask({ op: "characterSave", preset }, new Uint8Array(bytes));
   // The plugins, a group of records at a time, until nothing more is asked for.
   while (step.pieces.length) {
     busy("Reading plugins");
@@ -3476,8 +3531,18 @@ async function openCharacter(sv, weight) {
       at += r.bytes.byteLength;
       return { plugin: p.plugin, at: p.at, length: r.bytes.byteLength, size: r.size };
     });
-    [step] = core.ask({ op: "characterPieces", pieces }, all);
+    [step] = core.ask({ op: "characterPieces", pieces, preset }, all);
   }
+  return step;
+}
+
+/**
+ * A save's character as the project: the save read, then the pieces of the
+ * plugins its records are in, then the meshes and morph files its parts
+ * name, each asked for as the module says it needs them.
+ */
+async function openCharacter(sv, weight) {
+  const step = await readSave(sv);
   // Then each file its parts are made of; one the mods and the game have not got leaves its part out.
   busy("Reading meshes");
   await inTurns(step.files, 8, async (path) => {
@@ -4264,6 +4329,7 @@ function renderPage() {
     view.pick = pointedAt;
   }
   if (state.mode === "studio") return renderStudio();
+  if (state.mode === "character") return character.render();
   const set = state.set;
   const fits = set ? presetsFor(set) : [];
   const points = state.shapes.reduce((n, s) => n + s.base.length / 3, 0);
@@ -4384,6 +4450,8 @@ async function start() {
     core.onRestart(async () => {
       const said = "That stopped the add-on's engine, which has been started again.";
       const name = state.set?.name;
+      // What the character screen had open went with it, and it says so.
+      character.reset(said);
       try {
         await readCatalog();
         // Once: a set that stops it every time is not opened in a ring.
@@ -4429,7 +4497,7 @@ addEventListener("blur", () => (sHeld = false));
 // is done here. Only a key that did something is kept from the page, so the
 // frame's own (Tab, F5, the arrows) work as ever otherwise.
 addEventListener("keydown", (e) => {
-  if (!view) return;
+  if (!view || state.mode === "character") return;
   if (e.key?.toLowerCase() === "s" && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) sHeld = true;
   const at = {
     work: Boolean(state.work),

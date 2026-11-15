@@ -229,3 +229,17 @@ input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bo
   border: 0;
   border-radius: 5px;
 }
+
+/* The character screen (character.js): Outfit Studio's layout, with a head
+   part picked from a list as the bar's pickers are, and a makeup layer's
+   colour beside its strength. */
+.list .part { padding: 2px 12px; }
+.list .part .pick { width: 100%; max-width: none; }
+.list .part .pick .cut { flex: 1; }
+/* A layer's name over its colour and strength, as the side list is narrow. */
+.sl.tint { grid-template-columns: 44px minmax(0, 1fr); gap: 2px 10px; padding-top: 4px; padding-bottom: 6px; }
+.sl.tint > .cut { grid-column: 1 / -1; }
+.sl .input.swatch { height: 26px; padding: 3px; }
+.note-line { padding: 4px 12px; }
+.list .check > .grow { display: flex; flex-direction: column; padding: 4px 0; }
+.sheet .rows.notes { max-height: 360px; }

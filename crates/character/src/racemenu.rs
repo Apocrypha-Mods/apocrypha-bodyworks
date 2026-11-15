@@ -100,6 +100,26 @@ pub enum SliderKind {
     HeadPart { kind: u32 },
 }
 
+impl SliderKind {
+    /// The morph a `Slider` at `value` turns on, if any, and how strongly:
+    /// below nought its low morph at minus the value, above nought its high
+    /// morph at the value. The one place that sign rule is kept (see the
+    /// module); not checked in game. `None` for any other kind, or at nought.
+    pub fn morph_at(&self, value: f32) -> Option<(Option<&str>, f32)> {
+        let SliderKind::Slider { low, high } = self else {
+            return None;
+        };
+        if value == 0.0 || !value.is_finite() {
+            return None;
+        }
+        Some(if value < 0.0 {
+            (low.as_deref(), -value)
+        } else {
+            (high.as_deref(), value)
+        })
+    }
+}
+
 /// One slider of a slider file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SliderDef {
@@ -788,16 +808,15 @@ pub fn weights(
             continue;
         }
         match &def.kind {
-            SliderKind::Slider { low, high } => {
-                let (morph, amount) = if *v < 0.0 { (low, -v) } else { (high, *v) };
-                match morph {
-                    Some(m) => *out.entry(m.to_ascii_lowercase()).or_default() += amount,
-                    None => notes.push(SliderNote::NoMorphThatWay {
-                        name: name.clone(),
-                        value: *v,
-                    }),
+            SliderKind::Slider { .. } => match def.kind.morph_at(*v) {
+                Some((Some(m), amount)) => {
+                    *out.entry(m.to_ascii_lowercase()).or_default() += amount
                 }
-            }
+                _ => notes.push(SliderNote::NoMorphThatWay {
+                    name: name.clone(),
+                    value: *v,
+                }),
+            },
             SliderKind::Preset { prefix, count } => {
                 let n = v.round();
                 if (v - n).abs() > WHOLE || n < 0.0 || n > *count as f32 {

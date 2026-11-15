@@ -23,6 +23,7 @@ version = "0.2.0"
 dependencies = [
  "apoc-bodyslide",
  "apoc-character",
+ "apoc-jslot",
  "apoc-nif",
  "apoc-plugin",
  "apoc-save",

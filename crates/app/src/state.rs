@@ -24,6 +24,12 @@ pub struct State {
     problems: Vec<String>,
     /// A save's character being read, between its steps.
     making: Option<crate::character::Making>,
+    /// The save whose plugins a RaceMenu preset is read and built with, kept
+    /// apart from `making` so that opening a set or a save's character in
+    /// the Studio leaves the preset as it is.
+    preset_making: Option<crate::character::Making>,
+    /// The RaceMenu preset open on the character screen.
+    preset: Option<crate::preset::Opened>,
 }
 
 /// A project being worked on, with the way back from each change.
@@ -909,16 +915,46 @@ enum Request {
     /// A presets file holding one preset, as text to save.
     PresetFile { preset: PresetIn },
     /// Begin reading a save's character: the request's bytes are the save.
-    /// The answer names the pieces of plugins wanted next.
-    CharacterSave,
+    /// The answer names the pieces of plugins wanted next. With `preset`,
+    /// the save is the one a RaceMenu preset is read and built with, and
+    /// this and the two requests after it work on that save instead.
+    CharacterSave {
+        #[serde(default)]
+        preset: bool,
+    },
     /// The pieces asked for, their bytes one after another in the
     /// request's. The answer names more, or none and the files the
     /// character's parts are made of.
     CharacterPieces {
         pieces: Vec<crate::character::Piece>,
+        #[serde(default)]
+        preset: bool,
     },
     /// One of those files, the request's bytes, at its path under the data folder.
-    CharacterFile { path: String },
+    CharacterFile {
+        path: String,
+        #[serde(default)]
+        preset: bool,
+    },
+    /// Open a RaceMenu preset: the request's bytes. `name` is the file's,
+    /// without `.jslot`. The answer says which sections are kept as read.
+    PresetOpen { name: String },
+    /// The open preset read as `race` and sex (the preset's save's player's
+    /// to begin with), and what the screen picks from. `files` in the
+    /// answer are wanted first (`CharacterFile` with `preset`), and the
+    /// request made again, until none is.
+    PresetLook {
+        #[serde(default)]
+        race: Option<crate::preset::FormIn>,
+        #[serde(default)]
+        female: Option<bool>,
+    },
+    /// The preset's character with the screen's edits, as the project.
+    /// When files are wanted first, the answer is only `{ files }`.
+    PresetCharacter { look: crate::preset::LookIn },
+    /// The preset with the screen's edits, as a file after the answer, and
+    /// `notes`: what was changed, added and not written.
+    PresetWrite { look: crate::preset::LookIn },
     /// The character, built from the files given, as the project. Any open
     /// project is let go. `weight` (0 to 100) is the body's, which a save
     /// does not keep.
@@ -1002,6 +1038,38 @@ impl State {
                 .unwrap_or(&slider.name),
             found.map(|f| f.1),
         )
+    }
+
+    /// A built character as the project, any open project let go: the
+    /// project's answer with what was not found, what was left out, the
+    /// skin tone and the face's tint. `changed` is whether it counts as
+    /// work not saved: a save's character does, a preset's preview doesn't.
+    fn character_project(
+        &mut self,
+        name: &str,
+        made: crate::character::Made,
+        skin: [f32; 3],
+        changed: bool,
+    ) -> Result<Value, String> {
+        let crate::character::Made {
+            mesh,
+            missing,
+            notes,
+            face,
+        } = made;
+        let name = if name.is_empty() { "Character" } else { name };
+        self.work = None;
+        let mut work = Project::from_mesh(name, "meshes/character.nif", &mesh)
+            .map_err(|e| e.to_string())
+            .and_then(Work::of)?;
+        work.changed = changed;
+        self.work = Some(work);
+        let mut answer = self.working()?;
+        answer["missing"] = json!(missing);
+        answer["notes"] = json!(notes);
+        answer["skinTone"] = json!(skin);
+        answer["faceTint"] = face.map_or(Value::Null, |f| f.json());
+        Ok(answer)
     }
 
     fn load(&mut self) -> Value {
@@ -1395,19 +1463,36 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
             state.files.insert(key(&path), data.to_vec());
             Answer::ok(json!(null))
         }
-        Request::CharacterSave => match crate::character::Making::new(data) {
+        Request::CharacterSave { preset } => match crate::character::Making::new(data) {
             Ok(making) => {
                 let answer = json!({ "name": making.name, "pieces": making.pieces(), "files": [] });
-                state.making = Some(making);
+                if preset {
+                    // What was read with the last save's plugins goes with it.
+                    if let Some(p) = state.preset.as_mut() {
+                        p.forget();
+                    }
+                    state.preset_making = Some(making);
+                } else {
+                    state.making = Some(making);
+                }
                 Answer::ok(answer)
             }
+            // A save that can't be read leaves a preset's save as it was;
+            // the Studio's is let go, as before.
             Err(e) => {
-                state.making = None;
+                if !preset {
+                    state.making = None;
+                }
                 Answer::failed(e)
             }
         },
-        Request::CharacterPieces { pieces } => {
-            let Some(making) = state.making.as_mut() else {
+        Request::CharacterPieces { pieces, preset } => {
+            let making = if preset {
+                state.preset_making.as_mut()
+            } else {
+                state.making.as_mut()
+            };
+            let Some(making) = making else {
                 return Answer::failed("No save is being read.");
             };
             if let Err(e) = making.feed(&pieces, data) {
@@ -1434,7 +1519,11 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
                 "missingPlugins": missing
             }))
         }
-        Request::CharacterFile { path } => match state.making.as_mut() {
+        Request::CharacterFile { path, preset } => match if preset {
+            state.preset_making.as_mut()
+        } else {
+            state.making.as_mut()
+        } {
             Some(making) => {
                 making.files.insert(&path, data.to_vec());
                 Answer::ok(json!(null))
@@ -1445,43 +1534,76 @@ pub fn handle(state: &mut State, request: &[u8], data: &[u8]) -> Answer {
             let Some(making) = state.making.as_ref() else {
                 return Answer::failed("No save is being read.");
             };
-            let crate::character::Made {
-                mesh,
-                missing,
-                notes,
-                face,
-            } = match making.build(weight) {
+            let made = match making.build(weight) {
                 Ok(built) => built,
                 Err(e) => return Answer::failed(e),
             };
             let skin = making.skin_tone();
             let name = making.name.trim().to_string();
-            let name = if name.is_empty() {
-                "Character".to_string()
-            } else {
-                name
+            // The save is kept while she is the project: she can be made
+            // again with another body (`CharacterFile` first).
+            state
+                .character_project(&name, made, skin, true)
+                .map_or_else(Answer::failed, Answer::ok)
+        }
+        Request::PresetOpen { name } => match crate::preset::Opened::new(&name, data) {
+            Ok(opened) => {
+                let kept = opened.kept();
+                state.preset = Some(opened);
+                Answer::ok(json!({ "name": name, "kept": kept }))
+            }
+            Err(e) => Answer::failed(e),
+        },
+        Request::PresetLook { race, female } => {
+            let (Some(opened), Some(making)) =
+                (state.preset.as_mut(), state.preset_making.as_ref())
+            else {
+                return Answer::failed("No preset is open with a save's plugins.");
             };
-            state.work = None;
-            match Project::from_mesh(&name, "meshes/character.nif", &mesh)
-                .map_err(|e| e.to_string())
-                .and_then(Work::of)
+            opened
+                .look(making, race.as_ref().map(Into::into), female)
+                .map_or_else(Answer::failed, Answer::ok)
+        }
+        Request::PresetCharacter { look } => {
+            let (Some(opened), Some(making)) =
+                (state.preset.as_mut(), state.preset_making.as_ref())
+            else {
+                return Answer::failed("No preset is open with a save's plugins.");
+            };
+            let look = match opened.edited(&look) {
+                Ok(look) => look,
+                Err(e) => return Answer::failed(e),
+            };
+            match opened.wanted(making, &look) {
+                Ok(files) if !files.is_empty() => return Answer::ok(json!({ "files": files })),
+                Ok(_) => {}
+                Err(e) => return Answer::failed(e),
+            }
+            let made = match making.build_look(&look, opened.racemenu()) {
+                Ok(made) => made,
+                Err(e) => return Answer::failed(e),
+            };
+            let name = opened.name.clone();
+            let skin = look.skin_tone.unwrap_or([1.0; 3]);
+            state
+                .character_project(&name, made, skin, false)
+                .map(|mut answer| {
+                    answer["preset"] = json!(true);
+                    answer
+                })
+                .map_or_else(Answer::failed, Answer::ok)
+        }
+        Request::PresetWrite { look } => {
+            let (Some(opened), Some(making)) =
+                (state.preset.as_ref(), state.preset_making.as_ref())
+            else {
+                return Answer::failed("No preset is open with a save's plugins.");
+            };
+            match opened
+                .edited(&look)
+                .and_then(|look| opened.write(making, &look))
             {
-                Ok(mut work) => {
-                    work.changed = true;
-                    state.work = Some(work);
-                    // The save is kept while she is the project: she can be
-                    // made again with another body (`CharacterFile` first).
-                    match state.working() {
-                        Ok(mut answer) => {
-                            answer["missing"] = json!(missing);
-                            answer["notes"] = json!(notes);
-                            answer["skinTone"] = json!(skin);
-                            answer["faceTint"] = face.map_or(Value::Null, |f| f.json());
-                            Answer::ok(answer)
-                        }
-                        Err(e) => Answer::failed(e),
-                    }
-                }
+                Ok((bytes, notes)) => Answer::with(json!({ "notes": notes }), bytes),
                 Err(e) => Answer::failed(e),
             }
         }

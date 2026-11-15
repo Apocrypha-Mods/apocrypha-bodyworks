@@ -5,7 +5,7 @@
 //! (Skyrim.esm is 250 MB), and only the groups of the records a character
 //! is made from are read, about 2% of it.
 
-use apoc_character::{Files, Look, Tint};
+use apoc_character::{Files, Look, RaceMenuMorphs, Tint};
 use apoc_plugin::records::HeadPartKind;
 use apoc_plugin::walk::Walk;
 use apoc_plugin::{FormRef, LoadOrder, Plugin};
@@ -43,6 +43,8 @@ pub struct Making {
     /// ones. A save does not say where among the full ones each light one
     /// loaded, so a light plugin's records are taken over a full one's.
     order: Vec<String>,
+    /// Where in `order` the light plugins begin.
+    light_from: usize,
     readings: Vec<Reading>,
     /// The plugins read, in load order, once every one is read or given up on.
     records: Option<LoadOrder>,
@@ -133,6 +135,7 @@ impl Making {
         Ok(Making {
             look,
             name: save.header().name.clone(),
+            light_from: save.plugins().len(),
             readings: order.iter().map(|_| Reading::Asked).collect(),
             order,
             records: None,
@@ -287,14 +290,54 @@ impl Making {
         [0, 1, 2].map(|c| f32::from(self.look.skin_tone[c]) / 255.0)
     }
 
+    /// The save's plugins, read, once every one is read or given up on.
+    pub fn records(&self) -> Option<&LoadOrder> {
+        self.records.as_ref()
+    }
+
+    /// The save's plugins as the load order a RaceMenu preset's forms are
+    /// numbered by: its full plugins, then its light ones, as the save
+    /// lists them.
+    pub fn load_order(&self) -> apoc_character::preset::LoadOrder {
+        apoc_character::preset::LoadOrder::new(
+            self.order
+                .iter()
+                .enumerate()
+                .map(|(i, p)| apoc_character::preset::Plugin::new(p, i >= self.light_from))
+                .collect(),
+        )
+    }
+
+    /// The player's race and whether she is a woman, as a build takes
+    /// them. No race before every plugin is read.
+    pub fn player(&self) -> (Option<FormRef>, bool) {
+        match self.records.as_ref() {
+            Some(records) => (self.look(records, None).race, self.look.sex == 1),
+            None => (None, self.look.sex == 1),
+        }
+    }
+
     /// The character, built from the files given.
     pub fn build(&self, weight: Option<f32>) -> Result<Made, String> {
         let records = self
             .records
             .as_ref()
             .ok_or("The save's plugins have not been read.")?;
-        let look = self.look(records, weight);
-        let plan = apoc_character::plan(&look, records).map_err(|e| e.to_string())?;
+        self.build_look(&self.look(records, weight), None)
+    }
+
+    /// `look` built from the save's plugins and the files given, its named
+    /// sliders drawn by `racemenu` when given.
+    pub fn build_look(
+        &self,
+        look: &Look,
+        racemenu: Option<&RaceMenuMorphs>,
+    ) -> Result<Made, String> {
+        let records = self
+            .records
+            .as_ref()
+            .ok_or("The save's plugins have not been read.")?;
+        let plan = apoc_character::plan_with(look, records, racemenu).map_err(|e| e.to_string())?;
         let built = apoc_character::build(&plan, &self.files, &apoc_character::Options::default())
             .map_err(|e| e.to_string())?;
         let face = plan
@@ -302,7 +345,7 @@ impl Making {
             .iter()
             .filter(|p| p.kind == Some(HeadPartKind::Face))
             .find_map(|p| built.shapes.iter().find(|s| s.piece == p.name))
-            .and_then(|s| face_tint(&look, records, &s.name));
+            .and_then(|s| face_tint(look, records, &s.name));
         Ok(Made {
             mesh: built.nif.write(),
             missing: built.missing,
@@ -1378,6 +1421,349 @@ mod tests {
                 (s["name"].as_str().unwrap().to_string(), floats)
             })
             .collect()
+    }
+
+    /// A preset laid out as RaceMenu writes one, made by hand for the test
+    /// plugins with made-up values: Mod.esp's hair, a part from a plugin not
+    /// in the save, the race's skin tone layer and mask 1 in use, mask 3 not
+    /// in use, a layer of no mask of the race, a named slider, and two
+    /// sections kept as read.
+    const PRESET: &str = r#"{
+   "actor" : {
+      "hairColor" : 3355443,
+      "weight" : 37
+   },
+   "bodyMorphs" : [
+      {
+         "keys" : [],
+         "name" : "Made_Morph"
+      }
+   ],
+   "headParts" : [
+      {
+         "formId" : 16779265,
+         "formIdentifier" : "Mod.esp|000801",
+         "type" : 3
+      },
+      {
+         "formId" : 50331939,
+         "formIdentifier" : "Gone.esp|000123",
+         "type" : 9
+      }
+   ],
+   "modNames" : [ "Gone.esp", "Mod.esp" ],
+   "mods" : [
+      {
+         "index" : 1,
+         "name" : "Mod.esp"
+      }
+   ],
+   "morphs" : {
+      "custom" : [
+         {
+            "name" : "Made_Lip_Width",
+            "value" : 0.25
+         }
+      ],
+      "default" : {
+         "morphs" : [ 0, -1, 0.5, 0 ],
+         "presets" : [ 0, 4294967295, 2, 0 ]
+      }
+   },
+   "tintInfo" : [
+      {
+         "color" : 4293844428,
+         "index" : 1,
+         "texture" : "Actors\\SkinTone.dds"
+      },
+      {
+         "color" : 1074864691,
+         "index" : 0,
+         "texture" : "Actors\\Mask1.dds"
+      },
+      {
+         "color" : 11259375,
+         "index" : 2,
+         "texture" : "Actors\\Mask3.dds"
+      },
+      {
+         "color" : 4278190080,
+         "index" : 9,
+         "texture" : "Actors\\Elsewhere.dds"
+      }
+   ],
+   "transforms" : []
+}
+"#;
+
+    /// The save begun as a preset's, and its pieces answered from `have`.
+    fn preset_save(state: &mut State, have: &[(&str, Vec<u8>)]) {
+        let began = ask(
+            state,
+            json!({ "op": "characterSave", "preset": true }),
+            &player_save(),
+        );
+        let mut wanted = began["pieces"].clone();
+        for _ in 0..64 {
+            if wanted.as_array().unwrap().is_empty() {
+                return;
+            }
+            let (mut request, data) = pieces_request(&wanted, have);
+            request["preset"] = json!(true);
+            wanted = ask(state, request, &data)["pieces"].clone();
+        }
+        panic!("the walk never ended");
+    }
+
+    #[test]
+    fn a_preset_is_read_with_a_saves_plugins_and_written_back_as_edited() {
+        let mut state = State::default();
+        assert_eq!(
+            refused(&mut state, json!({ "op": "presetLook" }), &[]),
+            "No preset is open with a save's plugins."
+        );
+        assert!(refused(
+            &mut state,
+            json!({ "op": "presetOpen", "name": "Broken" }),
+            b"{ \"a\" : "
+        )
+        .starts_with("Can't read this preset: "));
+        let opened = ask(
+            &mut state,
+            json!({ "op": "presetOpen", "name": "Mine" }),
+            PRESET.as_bytes(),
+        );
+        assert_eq!(
+            opened["kept"],
+            json!([{ "key": "transforms", "count": 0 }, { "key": "bodyMorphs", "count": 1 }])
+        );
+        preset_save(&mut state, &plugins());
+        // The save's own character is not touched.
+        assert_eq!(
+            refused(&mut state, json!({ "op": "character" }), &[]),
+            "No save is being read."
+        );
+
+        // As the save's player: TestRace, a man. No slider files are there:
+        // they are asked for once, and then the build's files are.
+        let first = ask(&mut state, json!({ "op": "presetLook" }), &[]);
+        assert_eq!(first["race"]["name"], "TestRace");
+        assert_eq!(first["female"], false);
+        assert_eq!(first["save"], "Someone");
+        let inis = first["files"].as_array().unwrap();
+        assert!(
+            inis.iter().all(|f| f.as_str().unwrap().ends_with(".ini")),
+            "{inis:?}"
+        );
+        let look = ask(&mut state, json!({ "op": "presetLook" }), &[]);
+        assert!(look["files"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("meshes/actors/modhair.nif")));
+        // Asked once only.
+        assert_eq!(
+            ask(&mut state, json!({ "op": "presetLook" }), &[])["files"],
+            json!([])
+        );
+        assert_eq!(
+            look["parts"],
+            json!([
+                { "plugin": "Mod.esp", "id": 0x801, "name": "ModHair", "kind": 3, "loaded": true, "installed": true },
+                { "plugin": "Gone.esp", "id": 0x123, "name": null, "kind": null, "loaded": false, "installed": false },
+            ])
+        );
+        // Each mask with the colour the preset keeps for it, in use or not.
+        assert_eq!(
+            look["masks"],
+            json!([
+                { "index": 1, "kind": 1, "texture": "Actors\\Mask1.dds", "place": 0, "stored": [0x11, 0x22, 0x33] },
+                { "index": 2, "kind": 6, "texture": "Actors\\SkinTone.dds", "place": 1, "stored": [0xEE, 0xDD, 0xCC] },
+                { "index": 3, "kind": 2, "texture": "Actors\\Mask3.dds", "place": 2, "stored": [0xAB, 0xCD, 0xEF] },
+            ])
+        );
+        assert_eq!(
+            look["choices"]["3"],
+            json!([]),
+            "ModHair isn't flagged playable"
+        );
+        assert_eq!(look["look"]["weight"], 37.0);
+        assert_eq!(look["look"]["faceParts"], json!([0, -1, 2, 0]));
+        assert_eq!(look["look"]["custom"], json!([["Made_Lip_Width", 0.25]]));
+        // The skin tone layer (mask 2) and mask 1, by their numbers.
+        let masks: Vec<u64> = look["look"]["tints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["mask"].as_u64().unwrap())
+            .collect();
+        assert_eq!(masks, [2, 1]);
+        let notes: Vec<&str> = look["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_str().unwrap())
+            .collect();
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("Gone.esp, which isn't loaded")),
+            "{notes:?}"
+        );
+        assert!(
+            notes.iter().any(|n| n.contains("Elsewhere.dds")),
+            "{notes:?}"
+        );
+
+        // Written back unedited, the preset is as it was read.
+        let mut edits = look["look"].clone();
+        let write = |state: &mut State, edits: &Value| {
+            let a = handle(
+                state,
+                json!({ "op": "presetWrite", "look": edits })
+                    .to_string()
+                    .as_bytes(),
+                &[],
+            );
+            let v: Value = serde_json::from_str(&a.json).unwrap();
+            assert!(v.get("error").is_none(), "{v}");
+            (v["ok"]["notes"].clone(), a.bytes)
+        };
+        let (notes, bytes) = write(&mut state, &edits);
+        assert_eq!(notes, json!([]));
+        assert_eq!(String::from_utf8(bytes).unwrap(), PRESET);
+        // A layer not in use sent at no strength with the colour the preset
+        // keeps for it (a layer taken up and put back) writes nothing either.
+        let mut back = edits.clone();
+        back["tints"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "mask": 3, "colour": [0xAB, 0xCD, 0xEF, 0], "strength": 0.0 }));
+        assert_eq!(
+            String::from_utf8(write(&mut state, &back).1).unwrap(),
+            PRESET
+        );
+
+        // Edited: only what changed is written; the kept sections stay.
+        edits["weight"] = json!(60.0);
+        edits["custom"][0][1] = json!(-0.5);
+        edits["headParts"] = json!([{ "plugin": "Gone.esp", "id": 0x123 }]);
+        let (notes, bytes) = write(&mut state, &edits);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("\"weight\" : 60"), "{text}");
+        assert!(text.contains("\"value\" : -0.5"), "{text}");
+        assert!(!text.contains("Mod.esp|000801"), "{text}");
+        assert!(text.contains("\"name\" : \"Made_Morph\""), "{text}");
+        let notes: Vec<&str> = notes
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_str().unwrap())
+            .collect();
+        assert!(notes.contains(&"Changed actor.weight."), "{notes:?}");
+        // The preset kept is the one read: written again unedited, unchanged.
+        assert_eq!(
+            String::from_utf8(write(&mut state, &look["look"]).1).unwrap(),
+            PRESET
+        );
+
+        // Built, it first wants the files no build was asked for yet; with
+        // no meshes given, nothing can be built.
+        let mut hair = look["look"].clone();
+        hair["headParts"] = json!([]);
+        assert_eq!(
+            refused(
+                &mut state,
+                json!({ "op": "presetCharacter", "look": hair }),
+                &[]
+            ),
+            "none of the character's meshes could be read"
+        );
+
+        // Previewed as a woman, the race's woman's masks, of which she has
+        // one with another texture: none of the preset's layers is hers.
+        let her = ask(
+            &mut state,
+            json!({ "op": "presetLook", "female": true }),
+            &[],
+        );
+        assert_eq!(her["female"], true);
+        assert_eq!(her["look"]["tints"].as_array().unwrap().len(), 0);
+
+        // Previewed as a race by its form; one there is no record of is refused.
+        let raced = ask(
+            &mut state,
+            json!({ "op": "presetLook", "race": { "plugin": "Skyrim.esm", "id": 0x13746 }, "female": false }),
+            &[],
+        );
+        assert_eq!(raced["race"]["name"], "TestRace");
+        assert_eq!(raced["female"], false);
+        assert_eq!(
+            refused(
+                &mut state,
+                json!({ "op": "presetLook", "race": { "plugin": "Skyrim.esm", "id": 0x999 } }),
+                &[]
+            ),
+            "There's no race Skyrim.esm|000999."
+        );
+
+        // A save that can't be read leaves the preset's save as it was.
+        assert!(refused(
+            &mut state,
+            json!({ "op": "characterSave", "preset": true }),
+            b"not a save"
+        )
+        .starts_with("The save could not be read: "));
+        assert_eq!(
+            ask(&mut state, json!({ "op": "presetLook" }), &[])["race"]["name"],
+            "TestRace"
+        );
+
+        // Another save's plugins: what was read with the last is let go.
+        // Mod.esp is in this save but not had: its part is in the save's
+        // plugins (loaded) but not installed, and of no known kind.
+        preset_save(&mut state, &[plugins()[0].clone(), plugins()[2].clone()]);
+        let again = ask(&mut state, json!({ "op": "presetLook" }), &[]);
+        assert_eq!(again["female"], false);
+        assert!(!again["files"].as_array().unwrap().is_empty());
+        assert_eq!(
+            again["parts"][0],
+            json!({ "plugin": "Mod.esp", "id": 0x801, "name": null, "kind": null, "loaded": true, "installed": false })
+        );
+    }
+
+    #[test]
+    fn a_presets_character_is_the_project_and_not_unsaved_work() {
+        let Some(face) = sample(FACE_KEY) else {
+            eprintln!("skipped: no {FACE_KEY} in scratch/samples/skyrim");
+            return;
+        };
+        let mut state = State::default();
+        ask(
+            &mut state,
+            json!({ "op": "presetOpen", "name": "Mine" }),
+            PRESET.as_bytes(),
+        );
+        preset_save(&mut state, &plugins());
+        let mut look = ask(&mut state, json!({ "op": "presetLook" }), &[]);
+        while !look["files"].as_array().unwrap().is_empty() {
+            look = ask(&mut state, json!({ "op": "presetLook" }), &[]);
+        }
+        ask(
+            &mut state,
+            json!({ "op": "characterFile", "path": FACE_KEY, "preset": true }),
+            &face,
+        );
+        let work = ask(
+            &mut state,
+            json!({ "op": "presetCharacter", "look": look["look"] }),
+            &[],
+        );
+        assert_eq!(work["preset"], true);
+        assert_eq!(work["changed"], false);
+        assert_eq!(work["shapes"], json!(["TestFace"]));
+        // Mod.esp's hair has no mesh here, and is said to be missing.
+        assert_eq!(work["missing"], json!(["meshes/actors/modhair.nif"]));
+        assert_eq!(work["faceTint"]["shape"], "TestFace");
     }
 
     #[test]
