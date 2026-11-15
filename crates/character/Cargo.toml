@@ -10,4 +10,5 @@ description = "A character's look (race, sex, head parts, face morphs, colours, 
 apoc-plugin = { path = "../plugin" }
 apoc-nif = { path = "../nif" }
 apoc-bodyslide = { path = "../bodyslide" }
+apoc-jslot = { path = "../jslot" }
 thiserror = { workspace = true }

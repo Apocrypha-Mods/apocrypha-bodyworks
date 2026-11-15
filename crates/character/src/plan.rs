@@ -8,8 +8,9 @@ use apoc_plugin::FormRef;
 use crate::files::{under, weighted};
 use crate::look::Look;
 use crate::morph::Weights;
-use crate::morph::VAMPIRE;
+use crate::morph::{PRESETS, VAMPIRE};
 use crate::parts::{has_model, head_parts};
+use crate::racemenu::{RaceMenuMorphs, SliderKind, SliderNote};
 use crate::records::{vampire_keyword, Records};
 use crate::CharacterError;
 
@@ -24,6 +25,10 @@ pub struct HeadPiece {
     pub model: String,
     /// Its tris, by kind, under `meshes`.
     pub tris: Vec<(PartFileKind, String)>,
+    /// RaceMenu's extra tris for its chargen tri ([`crate::racemenu`]),
+    /// applied after its tris with the chargen weights. Only when the look
+    /// has named sliders that turn something on.
+    pub extras: Vec<String>,
     /// The texture paths the shape is given, by slot, where something says
     /// one: its own `TNAM` set, and for the face the face texture set over
     /// that.
@@ -59,6 +64,12 @@ pub struct Plan {
     pub skeleton: Option<String>,
     /// What was left out, each a sentence: a record that is not there.
     pub notes: Vec<String>,
+    /// Why named sliders of the look shape nothing (the first
+    /// [`MAX_SLIDER_NOTES`] also in [`Plan::notes`]).
+    pub sliders: Vec<SliderNote>,
+    /// The chargen morphs the look's named sliders turn on, lower case,
+    /// sorted: a build notes any no part has.
+    pub custom: Vec<String>,
 }
 
 impl Plan {
@@ -85,6 +96,9 @@ impl Plan {
         for h in &self.head {
             add(&h.model);
             for (_, t) in &h.tris {
+                add(t);
+            }
+            for t in &h.extras {
                 add(t);
             }
         }
@@ -179,8 +193,29 @@ fn hair_tint(c: [u8; 4]) -> [f32; 3] {
     [c[0], c[1], c[2]].map(|v| v as f32 * 2.0 / 255.0)
 }
 
-/// Work out what `look` is made of.
+/// The most notes on named sliders put in [`Plan::notes`]; past it, one
+/// more says how many were left out. [`Plan::sliders`] keeps them all.
+pub const MAX_SLIDER_NOTES: usize = 200;
+
+/// Work out what `look` is made of, without RaceMenu's named sliders.
 pub fn plan(look: &Look, records: &dyn Records) -> Result<Plan, CharacterError> {
+    plan_with(look, records, None)
+}
+
+/// Work out what `look` is made of, with its named sliders
+/// ([`Look::custom_morphs`]) drawn by `racemenu`'s sliders for the look's
+/// race (by its editor id) and sex. Without `racemenu`, or with no named
+/// sliders, the same as [`plan`].
+///
+/// The morphs the sliders turn on are added to the chargen weights, so a
+/// part's own chargen tri takes any it has, and each part whose chargen tri
+/// has RaceMenu extras takes them from those ([`HeadPiece::extras`]).
+/// With named sliders, `racemenu`'s own notes go in [`Plan::notes`] too.
+pub fn plan_with(
+    look: &Look,
+    records: &dyn Records,
+    racemenu: Option<&RaceMenuMorphs>,
+) -> Result<Plan, CharacterError> {
     let race_form = look.race.as_ref().ok_or(CharacterError::NoRace)?;
     let race = records
         .race(race_form)
@@ -212,16 +247,70 @@ pub fn plan(look: &Look, records: &dyn Records) -> Result<Plan, CharacterError> 
     } else {
         0.0
     };
-    // With no colour at all, black: the Dremora have none, and their faces'
-    // hair is tinted 0, 0, 0.
-    plan.hair_colour = Some(
+    // A colour given directly wins, drawn as a `CLFM`'s would be. With no
+    // colour at all, black: the Dremora have none, and their faces' hair is
+    // tinted 0, 0, 0.
+    let direct = look
+        .hair_rgb
+        .filter(|c| c.iter().all(|v| v.is_finite()))
+        .map(|c| c.map(|v| v.clamp(0.0, 1.0) * 2.0));
+    plan.hair_colour = Some(direct.unwrap_or_else(|| {
         look.hair_colour
             .as_ref()
             .or(race.default_hair_colour[sex].as_ref())
             .and_then(|c| records.colour(c))
-            .map_or([0.0; 3], |c| hair_tint(c.rgba)),
-    );
+            .map_or([0.0; 3], |c| hair_tint(c.rgba))
+    }));
     plan.skin_tone = look.skin_tone.filter(|t| t.iter().all(|v| v.is_finite()));
+    if let Some(rm) = racemenu.filter(|_| !look.custom_morphs.is_empty()) {
+        let sliders = race
+            .editor_id
+            .as_deref()
+            .map(|r| rm.sliders_for(r, look.female))
+            .unwrap_or_default();
+        let (on, mut notes) = crate::racemenu::weights(&look.custom_morphs, &sliders);
+        if sliders.is_empty() {
+            // Every name would be unknown; one note says why, and one says
+            // how many were not looked at.
+            notes.retain(|n| matches!(n, SliderNote::TooMany(_)));
+            notes.insert(
+                0,
+                SliderNote::NoSliders {
+                    race: race.editor_id.clone(),
+                },
+            );
+        }
+        // A slider file's preset named as one of the game's own adds to it.
+        // None of the installed slider files has one.
+        for d in &sliders {
+            let SliderKind::Preset { prefix, .. } = &d.kind else {
+                continue;
+            };
+            let on_too = look
+                .custom_morphs
+                .iter()
+                .any(|(n, v)| n.eq_ignore_ascii_case(&d.name) && v.is_finite() && *v != 0.0);
+            if on_too && PRESETS.iter().any(|(_, p)| p.eq_ignore_ascii_case(prefix)) {
+                plan.notes.push(format!(
+                    "The slider {} is a preset of the game's own {prefix}; it is added to the face's own preset.",
+                    d.name
+                ));
+            }
+        }
+        for (name, w) in on {
+            *plan.weights.chargen.entry(name.clone()).or_default() += w;
+            plan.custom.push(name);
+        }
+        plan.custom.sort();
+        plan.notes.extend(rm.notes.iter().cloned());
+        plan.notes
+            .extend(notes.iter().take(MAX_SLIDER_NOTES).map(|n| n.to_string()));
+        if notes.len() > MAX_SLIDER_NOTES {
+            plan.notes
+                .push(format!("And {} more.", notes.len() - MAX_SLIDER_NOTES));
+        }
+        plan.sliders = notes;
+    }
 
     for p in head_parts(records, &race, look.female, &look.head_parts) {
         let Some(h) = records.head_part(&p) else {
@@ -232,6 +321,25 @@ pub fn plan(look: &Look, records: &dyn Records) -> Result<Plan, CharacterError> 
             continue;
         }
         let tex = part_textures(records, look, &race.sexes[sex].head, &h);
+        let tris: Vec<(PartFileKind, String)> = h
+            .files
+            .iter()
+            .filter(|f| !f.path.is_empty())
+            .map(|f| (f.kind, under("meshes", &f.path)))
+            .collect();
+        let mut extras: Vec<String> = Vec::new();
+        if let Some(rm) = racemenu.filter(|_| !plan.custom.is_empty()) {
+            for (_, t) in tris
+                .iter()
+                .filter(|(k, _)| *k == PartFileKind::ChargenMorph)
+            {
+                for e in rm.extras_for(t) {
+                    if !extras.contains(&e) {
+                        extras.push(e);
+                    }
+                }
+            }
+        }
         plan.head.push(HeadPiece {
             name: h
                 .editor_id
@@ -239,12 +347,8 @@ pub fn plan(look: &Look, records: &dyn Records) -> Result<Plan, CharacterError> 
                 .unwrap_or_else(|| format!("{:08X}", p.id)),
             kind: h.kind,
             model: under("meshes", h.model.as_deref().unwrap_or_default()),
-            tris: h
-                .files
-                .iter()
-                .filter(|f| !f.path.is_empty())
-                .map(|f| (f.kind, under("meshes", &f.path)))
-                .collect(),
+            tris,
+            extras,
             textures: tex,
         });
     }

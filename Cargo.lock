@@ -35,8 +35,16 @@ name = "apoc-character"
 version = "0.2.0"
 dependencies = [
  "apoc-bodyslide",
+ "apoc-jslot",
  "apoc-nif",
  "apoc-plugin",
+ "thiserror",
+]
+
+[[package]]
+name = "apoc-jslot"
+version = "0.2.0"
+dependencies = [
  "thiserror",
 ]
 

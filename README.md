@@ -18,6 +18,12 @@ others, and from comparing this project's output with the original's.
 Contributions must keep to that: do not submit code translated from, or
 written while looking at, the original program's source.
 
+The same goes for RaceMenu, whose source is published without a licence:
+its presets (`.jslot`) are read and written from the preset files
+themselves and from the published behaviour of jsoncpp, the MIT-licensed
+library whose layout they follow. Nobody working here reads RaceMenu's
+source.
+
 No bodies, presets or meshes are distributed here. Those are yours.
 
 ## How close it is
@@ -233,6 +239,7 @@ at all, and none has been checked against files the original built.
 | --- | --- |
 | `crates/nif` | Reading and writing NIF mesh files |
 | `crates/bodyslide` | Slider sets, slider data, presets, and building meshes from them |
+| `crates/jslot` | RaceMenu presets (`.jslot`): read and written back byte for byte, with a typed view of a character's face |
 | `crates/app` | The WebAssembly module: what the interface asks of the crates, over one call |
 | `ui` | The interface shown in the mod manager's frame, and `addon.json`, which describes the add-on to it |
 | `tools` | `dev.cjs` runs the add-on outside the mod manager; `pack.sh` builds the file it installs |

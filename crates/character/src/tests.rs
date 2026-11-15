@@ -12,17 +12,18 @@ use crate::records::{RaceExtra, Records};
 use crate::{build, files::Files, look::face_source, parts::head_parts, plan, CharacterError};
 use crate::{Look, Options};
 
+/// Records by id alone: the plugin a form names is not looked at.
 #[derive(Default, Clone)]
-struct Fake {
-    kinds: HashMap<u32, [u8; 4]>,
-    npcs: HashMap<u32, Npc>,
-    races: HashMap<u32, Race>,
-    parts: HashMap<u32, HeadPart>,
-    sets: HashMap<u32, TextureSet>,
-    armors: HashMap<u32, Armor>,
-    addons: HashMap<u32, ArmorAddon>,
-    colours: HashMap<u32, Colour>,
-    extras: HashMap<u32, RaceExtra>,
+pub(crate) struct Fake {
+    pub(crate) kinds: HashMap<u32, [u8; 4]>,
+    pub(crate) npcs: HashMap<u32, Npc>,
+    pub(crate) races: HashMap<u32, Race>,
+    pub(crate) parts: HashMap<u32, HeadPart>,
+    pub(crate) sets: HashMap<u32, TextureSet>,
+    pub(crate) armors: HashMap<u32, Armor>,
+    pub(crate) addons: HashMap<u32, ArmorAddon>,
+    pub(crate) colours: HashMap<u32, Colour>,
+    pub(crate) extras: HashMap<u32, RaceExtra>,
 }
 
 fn f(id: u32) -> FormRef {
@@ -653,6 +654,18 @@ fn the_hair_colour_is_twice_its_colour_and_else_the_races_and_else_black() {
     assert!(near(tint(&w, &look), [400.0 / 255.0, 0.0, 200.0 / 255.0]));
     w.races.get_mut(&100).unwrap().default_hair_colour = [None, None];
     assert_eq!(tint(&w, &look), [0.0; 3]);
+    // A colour given directly wins over the record's, at twice it; one that
+    // is not numbers is not taken.
+    look.hair_colour = Some(f(500));
+    look.hair_rgb = Some([0.1, 0.2, 0.3]);
+    assert!(near(tint(&w, &look), [0.2, 0.4, 0.6]));
+    look.hair_rgb = Some([0.1, f32::NAN, 0.3]);
+    assert!(near(
+        tint(&w, &look),
+        [114.0 / 255.0, 110.0 / 255.0, 80.0 / 255.0]
+    ));
+    look.hair_rgb = None;
+    look.hair_colour = None;
     // A skin tone that is not numbers is none.
     look.skin_tone = Some([0.5, f32::NAN, 0.5]);
     assert_eq!(plan(&look, &w).unwrap().skin_tone, None);
@@ -771,4 +784,180 @@ fn files_shared_by_two_parts_are_named_once_and_a_body_of_one_model_by_it() {
     );
     assert!(files.contains(&"meshes/actors/tail.nif".to_string()));
     assert!(!files.iter().any(|k| k.contains("tail_")));
+}
+
+/// RaceMenu's folder for `Test.esm`: an extension of the face's chargen tri
+/// and sliders for `TestRace`'s men.
+fn racemenu() -> crate::RaceMenuMorphs {
+    let mut files = Files::new();
+    let d = "Meshes\\Actors\\Character\\FaceGenMorphs\\Test.esm";
+    files.insert(
+        &format!("{d}\\morphs.ini"),
+        b"extension = Actors\\FaceChargen.tri, Mine\\Face.tri\r\n\
+          extension = Actors\\Other.tri, Mine\\Other.tri\r\n"
+            .to_vec(),
+    );
+    files.insert(
+        &format!("{d}\\races.ini"),
+        b"TestRace = sliders\\test.ini\r\n".to_vec(),
+    );
+    files.insert(
+        &format!("{d}\\sliders\\test.ini"),
+        b"[Male]\r\nWidth = 16, Slider, Narrow, Wide\r\nMore = 16, Slider, None, NoseLong\r\n\
+          Eyes = 32, Preset, EyeShape, 3\r\nPart = 8, HeadPart, 1\r\n"
+            .to_vec(),
+    );
+    crate::RaceMenuMorphs::read(&["Test.esm"], &files)
+}
+
+#[test]
+fn named_sliders_add_chargen_weights_and_extra_tris() {
+    let w = body_world();
+    let rm = racemenu();
+    assert!(rm.notes.is_empty(), "{:?}", rm.notes);
+    let mut look = Look {
+        race: Some(f(100)),
+        face_morphs: vec![0.5],
+        ..Look::default()
+    };
+    let before = plan(&look, &w).unwrap();
+    // No named sliders: the same plan as without RaceMenu.
+    assert_eq!(crate::plan_with(&look, &w, Some(&rm)).unwrap(), before);
+    look.custom_morphs = vec![
+        ("Width".into(), -0.25),
+        ("More".into(), 0.5),
+        ("Eyes".into(), 2.0),
+        ("Part".into(), 1.0),
+        ("Gone".into(), 0.5),
+    ];
+    // Without RaceMenu they are not drawn.
+    let without = plan(&look, &w).unwrap();
+    assert_eq!(without, before);
+    let p = crate::plan_with(&look, &w, Some(&rm)).unwrap();
+    assert_eq!(p.weights.chargen.get("narrow"), Some(&0.25));
+    assert_eq!(p.weights.chargen.get("eyeshape2"), Some(&1.0));
+    // NoseLong from the game's slider and from the named one, added.
+    assert_eq!(p.weights.chargen.get("noselong"), Some(&1.0));
+    assert_eq!(p.custom, ["eyeshape2", "narrow", "noselong"]);
+    assert_eq!(p.sliders.len(), 2, "{:?}", p.sliders);
+    assert!(p.notes.iter().any(|n| n.contains("Part")));
+    assert!(p.notes.iter().any(|n| n.contains("Gone")));
+    let face = p.head.iter().find(|h| h.name == "Face").unwrap();
+    assert_eq!(
+        face.extras,
+        ["meshes/actors/character/facegenmorphs/morphs/mine/face.tri"]
+    );
+    assert!(p
+        .head
+        .iter()
+        .all(|h| h.name == "Face" || h.extras.is_empty()));
+    let files = p.files();
+    assert_eq!(files.len(), before.files().len() + 1);
+    assert_eq!(files.last(), face.extras.last());
+
+    // A woman of the race has no sliders: one note, nothing turned on.
+    look.female = true;
+    let p = crate::plan_with(&look, &w, Some(&rm)).unwrap();
+    assert_eq!(
+        p.sliders,
+        [crate::racemenu::SliderNote::NoSliders {
+            race: Some("TestRace".into())
+        }]
+    );
+    assert!(p.custom.is_empty());
+    assert!(p.head.iter().all(|h| h.extras.is_empty()));
+}
+
+#[test]
+fn extra_tris_leave_names_already_applied_and_refuse_another_size() {
+    use apoc_bodyslide::headtri::{HeadMorph, HeadTri};
+    let tri = |names: &[(&str, i16)]| HeadTri {
+        vertices: vec![[0.0; 3]; 2],
+        triangles: vec![],
+        uvs: vec![],
+        morphs: names
+            .iter()
+            .map(|(n, x)| HeadMorph {
+                name: n.to_string(),
+                scale: 1.0,
+                offsets: vec![[*x, 0, 0]; 2],
+            })
+            .collect(),
+    };
+    let on = HashMap::from([("a".to_string(), 0.5), ("b".to_string(), 1.0)]);
+    let done = std::collections::HashSet::from(["a".to_string()]);
+    let mut p = vec![[0.0; 3]; 2];
+    let names =
+        crate::morph::apply_extra(&mut p, &tri(&[("A", 4), ("B", 2), ("b", 8)]), &on, &done)
+            .unwrap();
+    assert_eq!(names, ["B"]);
+    assert_eq!(p, vec![[2.0, 0.0, 0.0]; 2]);
+    let mut q = vec![[0.0; 3]; 3];
+    assert!(crate::morph::apply_extra(&mut q, &tri(&[("B", 2)]), &on, &done).is_err());
+    assert_eq!(q, vec![[0.0; 3]; 3]);
+}
+
+#[test]
+fn racemenu_notes_go_in_the_plan_and_slider_notes_are_held_to_their_most() {
+    let w = body_world();
+    let mut files = Files::new();
+    let d = "Meshes\\Actors\\Character\\FaceGenMorphs\\Test.esm";
+    files.insert(
+        &format!("{d}\\races.ini"),
+        b"TestRace = sliders\\test.ini\r\njunk\r\n".to_vec(),
+    );
+    files.insert(
+        &format!("{d}\\sliders\\test.ini"),
+        b"[Male]\r\nNose = 16, Preset, NoseType, 3\r\nWidth = 16, Slider, Narrow, Wide\r\n"
+            .to_vec(),
+    );
+    let rm = crate::RaceMenuMorphs::read(&["Test.esm"], &files);
+    assert_eq!(rm.notes.len(), 1);
+    let mut look = Look {
+        race: Some(f(100)),
+        face_parts: vec![2, -1, -1, -1],
+        ..Look::default()
+    };
+    look.custom_morphs = (0..250).map(|i| (format!("Gone{i}"), 1.0)).collect();
+    look.custom_morphs.push(("Nose".into(), 2.0));
+    let p = crate::plan_with(&look, &w, Some(&rm)).unwrap();
+    // The folder's note, the preset on the game's own, 200 of the 250
+    // unknown sliders and how many more.
+    assert!(p.notes.contains(&rm.notes[0]), "{:?}", p.notes);
+    assert!(p
+        .notes
+        .iter()
+        .any(|n| n.contains("preset of the game's own")));
+    assert_eq!(p.sliders.len(), 250);
+    assert_eq!(
+        p.notes
+            .iter()
+            .filter(|n| n.contains("isn't one the race has"))
+            .count(),
+        crate::plan::MAX_SLIDER_NOTES
+    );
+    assert_eq!(p.notes.last().map(String::as_str), Some("And 50 more."));
+    // The game's preset 2 and the slider's, added.
+    assert_eq!(p.weights.chargen.get("nosetype2"), Some(&2.0));
+    assert_eq!(crate::needed_with(&look, &w, Some(&rm)).unwrap(), p.files());
+    assert_eq!(
+        crate::needed_with(&look, &w, None).unwrap(),
+        crate::needed(&look, &w).unwrap()
+    );
+
+    // A race with no sliders: one note, and the count past the most kept.
+    look.female = true;
+    look.custom_morphs = (0..crate::racemenu::MAX_CUSTOM + 3)
+        .map(|i| (format!("S{i}"), 1.0))
+        .collect();
+    let p = crate::plan_with(&look, &w, Some(&rm)).unwrap();
+    assert_eq!(
+        p.sliders,
+        [
+            crate::racemenu::SliderNote::NoSliders {
+                race: Some("TestRace".into())
+            },
+            crate::racemenu::SliderNote::TooMany(3),
+        ]
+    );
 }

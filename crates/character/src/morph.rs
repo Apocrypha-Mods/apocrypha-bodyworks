@@ -22,7 +22,7 @@
 //!
 //! Morph names are compared without case.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use apoc_bodyslide::headtri::HeadTri;
 use apoc_plugin::records::PartFileKind;
@@ -54,6 +54,10 @@ pub const SLIDERS: [(&str, &str); 18] = [
     ("Overbite", "Underbite"),
     ("EyesBack", "EyesForward"),
 ];
+
+/// The `NAMA` presets that turn on a morph: their place among the four and
+/// the morph's name before the number, in lower case.
+pub const PRESETS: [(usize, &str); 3] = [(0, "nosetype"), (2, "eyestype"), (3, "liptype")];
 
 /// The chargen morph a vampire race's faces take at 1. Found by fitting:
 /// EncVampire03BossDarkElfM's face is `VampireMorph` at 0.998 and the living
@@ -93,7 +97,7 @@ impl Weights {
             let (name, amount) = if *v < 0.0 { (neg, -v) } else { (pos, *v) };
             *w.chargen.entry(name.to_ascii_lowercase()).or_default() += amount;
         }
-        for (i, prefix) in [(0usize, "nosetype"), (2, "eyestype"), (3, "liptype")] {
+        for (i, prefix) in PRESETS {
             if let Some(n) = look.face_parts.get(i).filter(|n| **n >= 0) {
                 w.chargen.insert(format!("{prefix}{n}"), 1.0);
             }
@@ -133,6 +137,37 @@ pub fn apply(
     let Some(on) = weights.of_kind(kind) else {
         return Ok(Vec::new());
     };
+    add(positions, tri, on, &HashSet::new())
+}
+
+/// Add to `positions` the morphs of `tri` that `on` turns on, but for the
+/// names in `done` (lower case). For a RaceMenu extra tri
+/// ([`crate::racemenu`]), which is read as more of the part's chargen tri:
+/// a name the chargen tri or an earlier extra already applied is the
+/// first's, as two morphs of one name in one tri are. Refused, changing
+/// nothing, as [`apply`] is. Returns the names applied.
+pub fn apply_extra(
+    positions: &mut [[f32; 3]],
+    tri: &HeadTri,
+    on: &HashMap<String, f32>,
+    done: &HashSet<String>,
+) -> Result<Vec<String>, String> {
+    if tri.vertices.len() != positions.len() {
+        return Err(format!(
+            "{} vertices in its tri, {} in its model",
+            tri.vertices.len(),
+            positions.len()
+        ));
+    }
+    add(positions, tri, on, done)
+}
+
+fn add(
+    positions: &mut [[f32; 3]],
+    tri: &HeadTri,
+    on: &HashMap<String, f32>,
+    done: &HashSet<String>,
+) -> Result<Vec<String>, String> {
     if let Some(m) = tri
         .morphs
         .iter()
@@ -149,6 +184,9 @@ pub fn apply(
             continue;
         }
         seen.push(name.clone());
+        if done.contains(&name) {
+            continue;
+        }
         let Some(w) = on.get(&name) else {
             continue;
         };

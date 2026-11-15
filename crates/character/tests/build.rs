@@ -86,6 +86,7 @@ fn head(name: &str, kind: HeadPartKind, model: &str) -> HeadPiece {
         kind: Some(kind),
         model: model.into(),
         tris: Vec::new(),
+        extras: Vec::new(),
         textures: Default::default(),
     }
 }
@@ -521,4 +522,83 @@ fn without_the_skeleton_head_parts_stay_about_their_bone_and_it_is_said() {
     // With it, the same hair is moved.
     let built = build(&plan, &files(&root, &[HAIR, SKELETON]), &Options::default()).unwrap();
     assert!(far(&built_shape(&built, "Hair").1.positions, &hair.positions) > 50.0);
+}
+
+/// RaceMenu's extra tris: their morphs by the chargen weights, but for a
+/// name the part's chargen tri already applied; one of another size or
+/// not there leaves the part with its other morphs; a morph no part has is
+/// noted.
+#[test]
+fn extra_tris_shape_their_part_after_its_chargen_tri() {
+    let Some(root) = root() else { return };
+    let face_model = shapes_of(&nif(&root, HEAD)).into_values().next().unwrap();
+    let n = face_model.positions.len();
+    let (chargen, offsets) = tri_for(&face_model);
+    let extra = |name: &str, n: usize| {
+        headtri::write(&HeadTri {
+            vertices: vec![[0.0; 3]; n],
+            triangles: Vec::new(),
+            uvs: vec![[0.0; 2]; n],
+            morphs: vec![
+                // Already applied by the chargen tri: left alone.
+                HeadMorph {
+                    name: "NOSELONG".into(),
+                    scale: 1.0,
+                    offsets: vec![[500, 500, 500]; n],
+                },
+                HeadMorph {
+                    name: name.into(),
+                    scale: 0.1,
+                    offsets: vec![[0, 10, 0]; n],
+                },
+            ],
+        })
+    };
+    let mut face = head("MyFace", HeadPartKind::Face, HEAD);
+    face.tris = vec![(PartFileKind::ChargenMorph, "meshes/test/face.tri".into())];
+    face.extras = vec![
+        "meshes/test/extra.tri".into(),
+        "meshes/test/small.tri".into(),
+        "meshes/test/gone.tri".into(),
+    ];
+    let mut weights = Weights::default();
+    weights.chargen.insert("noselong".into(), 0.5);
+    weights.chargen.insert("lip_wide".into(), 0.5);
+    weights.chargen.insert("nowhere".into(), 1.0);
+    let plan = Plan {
+        head: vec![face],
+        weights,
+        custom: vec!["lip_wide".into(), "nowhere".into()],
+        ..Plan::default()
+    };
+    let mut f = files(&root, &[HEAD]);
+    f.insert("meshes/test/face.tri", chargen);
+    f.insert("meshes/test/extra.tri", extra("LIP_Wide", n));
+    f.insert("meshes/test/small.tri", extra("LIP_Wide", n - 1));
+    let built = build(&plan, &f, &STILL).unwrap();
+    assert_eq!(built.missing, ["meshes/test/gone.tri"]);
+    assert_eq!(built.notes.len(), 2, "{:?}", built.notes);
+    assert!(built.notes[0].contains("meshes/test/small.tri"));
+    assert!(built.notes[1].contains("nowhere") && !built.notes[1].contains("lip_wide"));
+    // Two extras couldn't be used, so it says so rather than that no tri
+    // has the morph.
+    assert!(
+        built.notes[1].contains("2 of RaceMenu's extra tris couldn't be read"),
+        "{}",
+        built.notes[1]
+    );
+    let (_, ours) = built_shape(&built, "MyFace");
+    let shaped: Vec<[f32; 3]> = face_model
+        .positions
+        .iter()
+        .zip(&offsets)
+        .map(|(p, o)| {
+            [
+                p[0] + o[0] as f32 * 0.005,
+                p[1] + o[1] as f32 * 0.005 + 0.5,
+                p[2] + o[2] as f32 * 0.005,
+            ]
+        })
+        .collect();
+    assert!(far(&ours.positions, &shaped) < 1e-4);
 }

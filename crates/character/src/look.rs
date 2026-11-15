@@ -37,15 +37,30 @@ pub struct Look {
     pub face_parts: Vec<i32>,
     /// `CLFM`.
     pub hair_colour: Option<FormRef>,
+    /// A hair colour given directly, red, green and blue from 0 to 1, as a
+    /// RaceMenu preset keeps it (`actor.hairColor`). It stands for the
+    /// colour of a `CLFM`, so the hair is drawn at twice it as with one
+    /// ([`crate::plan::plan`]), and it wins over [`Look::hair_colour`].
+    /// That a preset's colour is drawn as a `CLFM`'s is not yet checked
+    /// against the game. Since it wins, an interface that sets a `CLFM`
+    /// must clear this, or the `CLFM` is neither drawn nor saved.
+    pub hair_rgb: Option<[f32; 3]>,
     /// `TXST`: the face's textures.
     pub face_texture: Option<FormRef>,
     /// `ARMO` worn in place of the race's skin.
     pub skin: Option<FormRef>,
     /// Red, green, blue, 0 to 1.
     pub skin_tone: Option<[f32; 3]>,
+    /// Keyed by the race's `TINI` numbers, so they belong to [`Look::race`]:
+    /// a look read from a preset under one race is read again under another
+    /// ([`crate::preset::look_of_preset`]) rather than given a new race.
     pub tints: Vec<Tint>,
     /// 0 to 100.
     pub weight: f32,
+    /// RaceMenu's named sliders (a preset's `morphs.custom`), by name, in
+    /// the preset's order. Drawn when a plan is given RaceMenu's slider
+    /// files ([`crate::plan::plan_with`]).
+    pub custom_morphs: Vec<(String, f32)>,
 }
 
 /// How far templates are followed before giving up: Skyrim.esm's longest
@@ -99,6 +114,7 @@ impl Look {
                 .map(|p| vec![p.nose, p.unknown, p.eyes, p.mouth])
                 .unwrap_or_default(),
             hair_colour: npc.hair_colour.clone(),
+            hair_rgb: None,
             face_texture: npc.face_texture.clone(),
             skin: npc.skin.clone(),
             skin_tone: npc.skin_tone,
@@ -112,6 +128,7 @@ impl Look {
                 })
                 .collect(),
             weight: npc.weight.unwrap_or(0.0),
+            custom_morphs: Vec::new(),
         }
     }
 

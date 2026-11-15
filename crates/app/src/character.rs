@@ -341,6 +341,7 @@ impl Making {
                         [usize::from(l.sex == 1)]
                     .clone()
                 }),
+            hair_rgb: None,
             face_texture: form(&l.face_texture_set),
             skin: player.as_ref().and_then(|p| p.skin.clone()),
             skin_tone: Some([0, 1, 2].map(|c| f32::from(l.skin_tone[c]) / 255.0)),
@@ -358,6 +359,7 @@ impl Making {
                 .or(player.and_then(|p| p.weight))
                 .unwrap_or(100.0)
                 .clamp(0.0, 100.0),
+            custom_morphs: Vec::new(),
         }
     }
 }

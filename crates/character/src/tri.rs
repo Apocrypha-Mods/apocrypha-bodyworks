@@ -10,6 +10,13 @@
 //! tri in the game's archives (`--example tris`). They are expressions of
 //! a few vertices each (blinks on a child's eyes); a look sets none, so
 //! they are checked and skipped, not kept.
+//!
+//! The places in the texture are counted apart from the vertices: the
+//! game's tris have one for each vertex, but 75 of the 91 tris Expressive
+//! Facegen Morphs installs have fewer (its `FemaleHead.tri` has 996 vertices
+//! and 918 places), and read with the places' own count the layout accounts
+//! for every byte of all 154 RaceMenu extra tris installed here (EFM's, and
+//! UBE's under `John`, `Wick` and `LRO`).
 
 use apoc_bodyslide::headtri::{HeadMorph, HeadTri};
 
@@ -32,7 +39,7 @@ pub fn read(file: &[u8]) -> Result<HeadTri, String> {
         *c = word(file, 8 + i * 4)?;
     }
     let [vertices, triangles, quads, u1, u2, uvs, one, morphs, modifiers, modified] = counts;
-    if quads != 0 || u1 != 0 || u2 != 0 || one != 1 || uvs != vertices {
+    if quads != 0 || u1 != 0 || u2 != 0 || one != 1 {
         return Err("it has parts this does not read".into());
     }
     let fixed = vertices
@@ -153,6 +160,22 @@ mod tests {
         let t = read(&headtri::write(&sample())).unwrap();
         assert_eq!(t.vertices, sample().vertices);
         assert_eq!(t.morphs, sample().morphs);
+    }
+
+    /// Fewer places in the texture than vertices, as Expressive Facegen
+    /// Morphs' tris have: read whole, and cut short still refused.
+    #[test]
+    fn places_in_the_texture_are_counted_apart() {
+        let mut fewer = sample();
+        fewer.uvs.pop();
+        let bytes = headtri::write(&fewer);
+        assert_eq!(&bytes[28..32], &1u32.to_le_bytes());
+        let t = read(&bytes).unwrap();
+        assert_eq!(t.vertices, sample().vertices);
+        assert_eq!(t.morphs, sample().morphs);
+        for cut in 0..bytes.len() {
+            assert!(read(&bytes[..cut]).is_err(), "cut at {cut}");
+        }
     }
 
     #[test]

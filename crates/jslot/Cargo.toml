@@ -1,0 +1,10 @@
+[package]
+name = "apoc-jslot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Reads and writes RaceMenu presets (.jslot) byte for byte, with a typed view of what a character editor needs."
+
+[dependencies]
+thiserror = { workspace = true }

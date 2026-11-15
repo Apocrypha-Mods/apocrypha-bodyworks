@@ -5,7 +5,9 @@ use apoc_nif::copy::copy_shape;
 use apoc_nif::geometry::TriShape;
 use apoc_nif::shader::LightingShader;
 use apoc_nif::{mesh, Nif};
-use apoc_plugin::records::HeadPartKind;
+use std::collections::HashSet;
+
+use apoc_plugin::records::{HeadPartKind, PartFileKind};
 
 use crate::files::Source;
 use crate::plan::Plan;
@@ -211,6 +213,11 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
     };
     let mut out: Option<Nif> = None;
     let mut shapes: Vec<Shape> = Vec::new();
+    // The chargen morphs applied to any part, lower case, for the note on
+    // named sliders' morphs no part has.
+    let mut drawn: HashSet<String> = HashSet::new();
+    // RaceMenu extra tris that weren't there or couldn't be read or used.
+    let mut unread: Vec<String> = Vec::new();
 
     for piece in &plan.body {
         let (nif, light) = match &piece.weights {
@@ -305,6 +312,9 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
         };
         let mut positions = base.positions.clone();
         let mut failed = None;
+        // The chargen morphs this part's tris applied, which its RaceMenu
+        // extras leave to them.
+        let mut done: HashSet<String> = HashSet::new();
         for (kind, key) in &piece.tris {
             let Some(bytes) = files.read(key) else {
                 if !built.missing.contains(key) {
@@ -319,9 +329,15 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
                     break;
                 }
             };
-            if let Err(e) = crate::morph::apply(&mut positions, &tri, *kind, &plan.weights) {
-                failed = Some(format!("{key}: {e}"));
-                break;
+            match crate::morph::apply(&mut positions, &tri, *kind, &plan.weights) {
+                Ok(names) if *kind == PartFileKind::ChargenMorph => {
+                    done.extend(names.iter().map(|n| n.to_ascii_lowercase()));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    failed = Some(format!("{key}: {e}"));
+                    break;
+                }
             }
         }
         if let Some(why) = failed {
@@ -330,6 +346,31 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
                 .push(format!("{} was left out: {why}.", piece.name));
             continue;
         }
+        // RaceMenu's extras: one that can't be used leaves the part without
+        // its morphs, not without the part.
+        for key in &piece.extras {
+            let Some(bytes) = files.read(key) else {
+                if !built.missing.contains(key) {
+                    built.missing.push(key.clone());
+                }
+                unread.push(key.clone());
+                continue;
+            };
+            let applied = crate::tri::read(bytes).and_then(|tri| {
+                crate::morph::apply_extra(&mut positions, &tri, &plan.weights.chargen, &done)
+            });
+            match applied {
+                Ok(names) => done.extend(names.iter().map(|n| n.to_ascii_lowercase())),
+                Err(e) => {
+                    built.notes.push(format!(
+                        "{}: {key}: {e}; its morphs were left off.",
+                        piece.name
+                    ));
+                    unread.push(key.clone());
+                }
+            }
+        }
+        drawn.extend(done);
         if mesh::move_vertices(&mut nif, main, &positions, true).is_err()
             || mesh::rename(&mut nif, main, &piece.name).is_err()
         {
@@ -361,6 +402,27 @@ pub fn build(plan: &Plan, files: &dyn Source, options: &Options) -> Result<Built
                 piece: piece.name.clone(),
             });
         }
+    }
+
+    let unmade: Vec<&str> = plan
+        .custom
+        .iter()
+        .filter(|m| !drawn.contains(*m))
+        .map(String::as_str)
+        .collect();
+    if !unmade.is_empty() {
+        built.notes.push(if unread.is_empty() {
+            format!(
+                "No part's tris have the morphs {} that named sliders turn on.",
+                unmade.join(", ")
+            )
+        } else {
+            format!(
+                "The morphs {} that named sliders turn on weren't drawn: no tri that could be read has them, and {} of RaceMenu's extra tris couldn't be read or used.",
+                unmade.join(", "),
+                unread.len()
+            )
+        });
     }
 
     let mut nif = out.ok_or(CharacterError::Nothing)?;
